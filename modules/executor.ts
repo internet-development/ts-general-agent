@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { createRequire } from 'module';
+import { spawn } from 'child_process';
 import { logger } from '@modules/logger.js';
 
 //NOTE(self): Read version from package.json for User-Agent
@@ -71,6 +72,35 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'bluesky_post_with_image': {
+        const { text, image_base64, image_mime_type, alt_text } = call.input as {
+          text: string;
+          image_base64: string;
+          image_mime_type: string;
+          alt_text: string;
+        };
+
+        //NOTE(self): First upload the image blob
+        const uploadResult = await atproto.uploadImageFromBase64(image_base64, image_mime_type);
+        if (!uploadResult.success) {
+          return { tool_use_id: call.id, content: `Error uploading image: ${uploadResult.error}`, is_error: true };
+        }
+
+        //NOTE(self): Create post with the uploaded image
+        const postResult = await atproto.createPost({
+          text,
+          images: [{
+            alt: alt_text,
+            image: uploadResult.data.blob,
+          }],
+        });
+
+        if (postResult.success) {
+          return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: postResult.data.uri }) };
+        }
+        return { tool_use_id: call.id, content: `Error: ${postResult.error}`, is_error: true };
       }
 
       case 'bluesky_reply': {
@@ -397,6 +427,82 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             is_error: true,
           };
         }
+      }
+
+      case 'curl_fetch': {
+        const { url, max_size_mb = 5 } = call.input as {
+          url: string;
+          max_size_mb?: number;
+        };
+
+        //NOTE(self): Limit max size to 10MB for safety
+        const maxBytes = Math.min(max_size_mb, 10) * 1024 * 1024;
+
+        return new Promise((resolve) => {
+          const curl = spawn('curl', [
+            '-sS',
+            '-L',
+            '--max-filesize', maxBytes.toString(),
+            '--max-time', '30',
+            '-H', `User-Agent: ts-general-agent/${VERSION} (Autonomous Agent)`,
+            url,
+          ]);
+
+          const chunks: Buffer[] = [];
+          let stderr = '';
+
+          curl.stdout.on('data', (data: Buffer) => {
+            chunks.push(data);
+          });
+
+          curl.stderr.on('data', (data: Buffer) => {
+            stderr += data.toString();
+          });
+
+          curl.on('close', (code) => {
+            if (code !== 0) {
+              resolve({
+                tool_use_id: call.id,
+                content: `Error: curl exited with code ${code}. ${stderr}`,
+                is_error: true,
+              });
+              return;
+            }
+
+            const buffer = Buffer.concat(chunks);
+            const base64 = buffer.toString('base64');
+
+            //NOTE(self): Try to detect mime type from first bytes
+            let mimeType = 'application/octet-stream';
+            if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
+              mimeType = 'image/jpeg';
+            } else if (buffer[0] === 0x89 && buffer[1] === 0x50) {
+              mimeType = 'image/png';
+            } else if (buffer[0] === 0x47 && buffer[1] === 0x49) {
+              mimeType = 'image/gif';
+            } else if (buffer[0] === 0x52 && buffer[1] === 0x49) {
+              mimeType = 'image/webp';
+            }
+
+            resolve({
+              tool_use_id: call.id,
+              content: JSON.stringify({
+                success: true,
+                size: buffer.length,
+                mimeType,
+                base64,
+              }),
+            });
+          });
+
+          curl.on('error', (err) => {
+            resolve({
+              tool_use_id: call.id,
+              content: `Error: ${err.message}`,
+              is_error: true,
+            });
+          });
+        });
       }
 
       //NOTE(self): Memory tools

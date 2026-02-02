@@ -1,6 +1,7 @@
 export * from '@adapters/atproto/types.js';
 export * from '@adapters/atproto/authenticate.js';
 export * from '@adapters/atproto/create-post.js';
+export * from '@adapters/atproto/upload-blob.js';
 export * from '@adapters/atproto/like-post.js';
 export * from '@adapters/atproto/repost.js';
 export * from '@adapters/atproto/follow-user.js';

@@ -6,7 +6,7 @@
   This **MUST** refer to this software system. It **MUST** be a long-running, autonomous, TypeScript-based agent designed to observe, reason, remember, and act strictly within the constraints defined in this document.
 
 - **agent**
-  This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (for example: Claude Opus 4.5).
+  This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (for example: Claude Sonnet 4 or Claude Opus 4.5).
   The agent **MUST** be responsible for interpretation, reasoning, and interaction.
   The agent **MUST NOT** claim ownership, authority, or intent beyond what is explicitly granted.
 
@@ -172,7 +172,8 @@ The following environment variables **MUST** be configured in `.env`:
 
 ## Model
 
-- **Model:** Claude Opus 4.5 (`claude-opus-4-5-20251101`)
+- **Default Model:** Claude Opus 4.5 (`claude-opus-4-5-20251101`)
+- **Configurable via:** `ANTHROPIC_MODEL` in `.env`
 - **API Key:** Available in `.env` as `API_KEY_ANTHROPIC`
 
 ---
@@ -220,7 +221,7 @@ ts-general-agent/
 │   ├── config.ts               # Environment and configuration
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
-│   ├── anthropic.ts            # Claude API (raw fetch)
+│   ├── anthropic.ts            # Claude API (SDK + raw fetch fallback)
 │   ├── exec.ts                 # Code execution for .self/
 │   └── loop.ts                 # Main autonomous loop
 │

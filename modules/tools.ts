@@ -37,6 +37,32 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'bluesky_post_with_image',
+    description: 'Create a new post on Bluesky with an image. First use curl_fetch to download the image, then use this tool with the base64 data and mimeType from that response.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The text content of the post (max 300 characters)',
+        },
+        image_base64: {
+          type: 'string',
+          description: 'Base64 encoded image data (from curl_fetch response)',
+        },
+        image_mime_type: {
+          type: 'string',
+          description: 'MIME type of the image (e.g., image/jpeg, image/png)',
+        },
+        alt_text: {
+          type: 'string',
+          description: 'Alt text description of the image for accessibility',
+        },
+      },
+      required: ['text', 'image_base64', 'image_mime_type', 'alt_text'],
+    },
+  },
+  {
     name: 'bluesky_reply',
     description: 'Reply to an existing post on Bluesky.',
     input_schema: {
@@ -435,6 +461,24 @@ export const AGENT_TOOLS: ToolDefinition[] = [
           type: 'string',
           enum: ['text', 'html', 'json'],
           description: 'What to extract: text (readable content), html (raw HTML), or json (parse as JSON). Default: text',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'curl_fetch',
+    description: 'Fetch binary content (images, files) from a URL using curl. Returns base64-encoded data. Use this for downloading images to post on Bluesky or for any binary file fetching.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to fetch',
+        },
+        max_size_mb: {
+          type: 'number',
+          description: 'Maximum file size to download in MB (default: 5, max: 10)',
         },
       },
       required: ['url'],

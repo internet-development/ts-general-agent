@@ -1,7 +1,17 @@
 import { getSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
+import type { BlobRef } from '@adapters/atproto/upload-blob.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
+
+export interface ImageEmbed {
+  alt: string;
+  image: BlobRef;
+  aspectRatio?: {
+    width: number;
+    height: number;
+  };
+}
 
 export interface CreatePostParams {
   text: string;
@@ -11,6 +21,7 @@ export interface CreatePostParams {
     rootUri?: string;
     rootCid?: string;
   };
+  images?: ImageEmbed[];
 }
 
 export interface CreatePostResponse {
@@ -40,6 +51,18 @@ export async function createPost(
           uri: params.replyTo.rootUri || params.replyTo.uri,
           cid: params.replyTo.rootCid || params.replyTo.cid,
         },
+      };
+    }
+
+    //NOTE(self): Add image embeds if provided
+    if (params.images && params.images.length > 0) {
+      record.embed = {
+        $type: 'app.bsky.embed.images',
+        images: params.images.map((img) => ({
+          alt: img.alt,
+          image: img.image,
+          aspectRatio: img.aspectRatio,
+        })),
       };
     }
 
