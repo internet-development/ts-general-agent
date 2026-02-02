@@ -38,7 +38,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'bluesky_post_with_image',
-    description: 'Create a new post on Bluesky with an image. First use curl_fetch to download the image, then use this tool with the base64 data and mimeType from that response.',
+    description: 'Create a new post on Bluesky with an image. First use curl_fetch to download the image to a file, then use this tool with the filePath from that response. The image file is automatically cleaned up after posting.',
     input_schema: {
       type: 'object',
       properties: {
@@ -46,20 +46,16 @@ export const AGENT_TOOLS: ToolDefinition[] = [
           type: 'string',
           description: 'The text content of the post (max 300 characters)',
         },
-        image_base64: {
+        image_path: {
           type: 'string',
-          description: 'Base64 encoded image data (from curl_fetch response)',
-        },
-        image_mime_type: {
-          type: 'string',
-          description: 'MIME type of the image (e.g., image/jpeg, image/png)',
+          description: 'Path to the image file (from curl_fetch response filePath). PREFERRED method.',
         },
         alt_text: {
           type: 'string',
           description: 'Alt text description of the image for accessibility',
         },
       },
-      required: ['text', 'image_base64', 'image_mime_type', 'alt_text'],
+      required: ['text', 'image_path', 'alt_text'],
     },
   },
   {
@@ -445,6 +441,32 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       },
     },
   },
+  {
+    name: 'github_clone_repo',
+    description: 'Clone a GitHub repository to .workrepos/ for analysis or contribution. Use this to explore code, learn patterns, or prepare contributions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner (username or org)',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        branch: {
+          type: 'string',
+          description: 'Branch to clone (default: main/master)',
+        },
+        depth: {
+          type: 'number',
+          description: 'Shallow clone depth (default: full clone)',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
 
   //NOTE(self): Web tools
   {
@@ -468,13 +490,13 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'curl_fetch',
-    description: 'Fetch binary content (images, files) from a URL using curl. Returns base64-encoded data. Use this for downloading images to post on Bluesky or for any binary file fetching.',
+    description: 'Download binary content (images, files) from a URL to a local file. Returns filePath (in .memory/images/), size, and mimeType. Use the filePath directly with bluesky_post_with_image - no need to handle base64 data. Check isImage field to verify the URL points to a valid image. Common errors: HTTP 404/403 (URL not found), HTML response (error page instead of image).',
     input_schema: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'The URL to fetch',
+          description: 'The URL to fetch - must be a direct link to the binary file (not a webpage containing an image)',
         },
         max_size_mb: {
           type: 'number',

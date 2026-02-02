@@ -11,6 +11,7 @@ import {
   chatWithTools,
   createToolResultMessage,
   createAssistantToolUseMessage,
+  compactMessages,
   AGENT_TOOLS,
   type Message,
   type ToolCall,
@@ -542,6 +543,9 @@ async function think(context: LoopContext): Promise<string> {
 
   ui.think('Contemplating');
 
+  //NOTE(self): Compact messages before first API call to remove consumed data
+  context.messages = compactMessages(context.messages);
+
   let response = await chatWithTools({
     system: systemPrompt,
     messages: context.messages,
@@ -575,6 +579,10 @@ async function think(context: LoopContext): Promise<string> {
     if (executed === 0) {
       break;
     }
+
+    //NOTE(self): Compact older messages before next API call to prevent context overflow
+    //NOTE(self): This removes consumed base64 data from previous tool results
+    context.messages = compactMessages(context.messages);
 
     //NOTE(self): Continue the inner dialogue
     ui.startSpinner('Reflecting');

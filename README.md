@@ -1,6 +1,8 @@
 # ts-general-agent
 
-A long-running, autonomous TypeScript agent that exists to learn, connect, and create.
+A long-running, autonomous TypeScript agent that exists to learn, connect, and create. For how it works, read `AGENTS.md`. `AGENTS.md` has the breakdown of how everything works.
+
+This agent will improve once we are able to get a direct model running without having to use a hosted model that tends to throw safeguards beforehand.
 
 ## Quick Start
 

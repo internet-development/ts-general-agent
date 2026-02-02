@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import sharp from 'sharp';
 import { logger } from '@modules/logger.js';
 
@@ -203,6 +204,15 @@ export async function processBase64ImageForUpload(
   options: ProcessImageOptions = {}
 ): Promise<ProcessedImage> {
   const inputBuffer = Buffer.from(base64Data, 'base64');
+  return processImageForUpload(inputBuffer, options);
+}
+
+//NOTE(self): Process image from file path - preferred method to avoid context bloat
+export async function processFileImageForUpload(
+  filePath: string,
+  options: ProcessImageOptions = {}
+): Promise<ProcessedImage> {
+  const inputBuffer = fs.readFileSync(filePath);
   return processImageForUpload(inputBuffer, options);
 }
 

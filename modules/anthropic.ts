@@ -213,13 +213,94 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
   return chatWithToolsSDK(params);
 }
 
+//NOTE(self): Maximum characters for a single tool result to prevent context overflow
+//NOTE(self): 200k tokens ≈ 800k chars, but we need room for system prompt, messages, and multiple tools
+//NOTE(self): Keep individual tool results under 30k chars (~7.5k tokens)
+const MAX_TOOL_RESULT_CHARS = 30000;
+
+function truncateToolResult(content: string): string {
+  //NOTE(self): For regular content, truncate if too long
+  //NOTE(self): Don't truncate base64 here - it needs to be available for the next tool call
+  //NOTE(self): Base64 truncation happens in compactMessages() after it's been consumed
+  if (content.length > MAX_TOOL_RESULT_CHARS) {
+    const truncated = content.slice(0, MAX_TOOL_RESULT_CHARS);
+    return `${truncated}\n\n[TRUNCATED: Result was ${content.length} chars, showing first ${MAX_TOOL_RESULT_CHARS}]`;
+  }
+
+  return content;
+}
+
+//NOTE(self): Compact messages to remove consumed base64 data and reduce context size
+//NOTE(self): Call this before adding new tool results to keep context manageable
+export function compactMessages(messages: Message[]): Message[] {
+  //NOTE(self): Find all base64 data in older tool results and replace with summaries
+  //NOTE(self): "Older" means not the most recent tool_result message
+  let lastToolResultIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'user' && Array.isArray(m.content) &&
+        m.content.some((c: ContentBlock) => c.type === 'tool_result')) {
+      lastToolResultIndex = i;
+      break;
+    }
+  }
+
+  return messages.map((msg, index) => {
+    //NOTE(self): Skip the most recent tool result - it may still be needed
+    if (index >= lastToolResultIndex) {
+      return msg;
+    }
+
+    //NOTE(self): Only process user messages with tool_result content
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) {
+      return msg;
+    }
+
+    const compactedContent = msg.content.map((block) => {
+      const contentBlock = block as ContentBlock;
+      if (contentBlock.type !== 'tool_result' || !contentBlock.content) {
+        return block;
+      }
+
+      //NOTE(self): Check if this tool result contains base64 data
+      if (contentBlock.content.includes('"base64"')) {
+        try {
+          const parsed = JSON.parse(contentBlock.content);
+          if (parsed.base64 && typeof parsed.base64 === 'string' && parsed.base64.length > 1000) {
+            const estimatedBytes = Math.ceil(parsed.base64.length * 0.75);
+            parsed.base64 = `[CONSUMED: ${Math.round(estimatedBytes / 1024)}KB image data was used]`;
+            return {
+              ...contentBlock,
+              content: JSON.stringify(parsed),
+            };
+          }
+        } catch {
+          //NOTE(self): Not valid JSON, leave as is
+        }
+      }
+
+      //NOTE(self): Also truncate any very long tool results from previous turns
+      if (contentBlock.content.length > MAX_TOOL_RESULT_CHARS) {
+        return {
+          ...contentBlock,
+          content: contentBlock.content.slice(0, 5000) + '\n\n[COMPACTED: Older result truncated to save context]',
+        };
+      }
+
+      return block;
+    });
+
+    return { ...msg, content: compactedContent };
+  });
+}
+
 export function createToolResultMessage(results: ToolResult[]): Message {
   return {
     role: 'user',
     content: results.map((r) => ({
       type: 'tool_result' as const,
       tool_use_id: r.tool_use_id,
-      content: r.content,
+      content: truncateToolResult(r.content),
       is_error: r.is_error,
     })),
   };

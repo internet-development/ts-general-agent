@@ -282,7 +282,7 @@ export class TerminalUI {
   printFarewell(): void {
     this.writeOutput('');
     this.writeOutput(`${ANSI.cyan}${BOX.dHorizontal.repeat(getTerminalWidth())}${ANSI.reset}`);
-    this.writeOutput(`${ANSI.cyan}              ${SYM.heartEmpty} Until next time ${SYM.heartEmpty}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.cyan} The obstacle becomes the way ${ANSI.reset}`);
     this.writeOutput(`${ANSI.cyan}${BOX.dHorizontal.repeat(getTerminalWidth())}${ANSI.reset}`);
     this.writeOutput('');
   }

@@ -105,9 +105,9 @@ export async function runClaudeCode(
   const memory = createMemory(memoryPath);
 
   //NOTE(self): Find the claude binary
-  const claudePath = await findClaudeBinary();
+  let finalClaudePath = await findClaudeBinary();
 
-  if (!claudePath) {
+  if (!finalClaudePath) {
     logger.warn('Claude Code not found, attempting installation');
     const installResult = await installClaudeCode(memoryPath);
 
@@ -116,15 +116,10 @@ export async function runClaudeCode(
     }
 
     //NOTE(self): Try to find it again after installation
-    const newPath = await findClaudeBinary();
-    if (!newPath) {
+    finalClaudePath = await findClaudeBinary();
+    if (!finalClaudePath) {
       return { success: false, error: 'Claude Code installed but binary not found in PATH' };
     }
-  }
-
-  const finalClaudePath = claudePath || (await findClaudeBinary());
-  if (!finalClaudePath) {
-    return { success: false, error: 'Could not locate claude binary' };
   }
 
   //NOTE(self): Log the self-improvement attempt
@@ -140,7 +135,7 @@ ${prompt}
 \`\`\`
 `);
 
-  //NOTE(self): Write prompt to a temp file to avoid shell escaping issues
+  //NOTE(self): Write prompt to a temp file to avoid shell escaping issues with complex prompts
   const promptFile = path.join(memoryPath, `.prompt-${execId}.txt`);
   try {
     fs.writeFileSync(promptFile, prompt, 'utf-8');
@@ -151,16 +146,28 @@ ${prompt}
   }
 
   //NOTE(self): Run Claude Code with spawn for long-running tasks
+  //NOTE(self): Wrap in try-catch because spawn() can throw synchronously
   return new Promise((resolve) => {
-    const child = spawn(finalClaudePath, [
-      '--print',
-      '--dangerously-skip-permissions',
-      '-p', prompt,
-    ], {
-      cwd: workingDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env }, //NOTE(self): Inherit environment for PATH etc.
-    });
+    let child;
+    try {
+      child = spawn(finalClaudePath, [
+        '--print',
+        '--dangerously-skip-permissions',
+        '--input-file', promptFile, //NOTE(self): Use file to avoid shell escaping issues
+      ], {
+        cwd: workingDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env }, //NOTE(self): Inherit environment for PATH etc.
+      });
+    } catch (spawnErr) {
+      //NOTE(self): spawn() threw synchronously - clean up and return error
+      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+      const errorMsg = `Spawn failed: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
+      memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
+      logger.error('Claude Code spawn failed synchronously', { error: errorMsg });
+      resolve({ success: false, error: errorMsg });
+      return;
+    }
 
     let stdout = '';
     let stderr = '';

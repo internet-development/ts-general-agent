@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { createRequire } from 'module';
 import { spawn } from 'child_process';
@@ -21,7 +22,7 @@ import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import { markInteractionResponded } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
-import { processBase64ImageForUpload } from '@modules/image-processor.js';
+import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 
 export interface ActionQueueItem {
   id: string;
@@ -76,28 +77,66 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       }
 
       case 'bluesky_post_with_image': {
-        const { text, image_base64, image_mime_type, alt_text } = call.input as {
+        const { text, image_path, image_base64, image_mime_type, alt_text } = call.input as {
           text: string;
-          image_base64: string;
-          image_mime_type: string;
+          image_path?: string;       //NOTE(self): Preferred - file path from curl_fetch
+          image_base64?: string;     //NOTE(self): Fallback - base64 data
+          image_mime_type?: string;
           alt_text: string;
         };
 
-        //NOTE(self): Validate inputs
-        if (!image_base64 || image_base64.length === 0) {
-          return { tool_use_id: call.id, content: 'Error: image_base64 is empty or missing', is_error: true };
+        //NOTE(self): Validate we have image data via either method
+        if (!image_path && (!image_base64 || image_base64.length === 0)) {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Must provide either image_path (from curl_fetch) or image_base64',
+            is_error: true,
+          };
         }
 
-        const originalSizeBytes = Math.ceil(image_base64.length * 0.75);
-        logger.info('Processing image for upload', {
-          originalMimeType: image_mime_type,
-          originalSizeKB: Math.round(originalSizeBytes / 1024),
-        });
-
-        //NOTE(self): Process image - resize, compress, optimize for Bluesky
+        //NOTE(self): Process image - prefer file path (no context bloat), fallback to base64
         let processedImage;
+        let imageFilePath: string | null = null;
+
         try {
-          processedImage = await processBase64ImageForUpload(image_base64);
+          if (image_path) {
+            //NOTE(self): File-based processing - preferred method
+            if (!fs.existsSync(image_path)) {
+              return {
+                tool_use_id: call.id,
+                content: `Error: Image file not found at ${image_path}`,
+                is_error: true,
+              };
+            }
+
+            imageFilePath = image_path;
+            const stats = fs.statSync(image_path);
+            logger.info('Processing image from file', {
+              filePath: image_path,
+              sizeKB: Math.round(stats.size / 1024),
+            });
+
+            processedImage = await processFileImageForUpload(image_path);
+          } else {
+            //NOTE(self): Base64 fallback - for backward compatibility
+            //NOTE(self): Validate that mime type looks like an image
+            if (!image_mime_type || !image_mime_type.startsWith('image/')) {
+              return {
+                tool_use_id: call.id,
+                content: `Error: Invalid image mime type "${image_mime_type}". Expected image/* (e.g., image/jpeg, image/png).`,
+                is_error: true,
+              };
+            }
+
+            const originalSizeBytes = Math.ceil(image_base64!.length * 0.75);
+            logger.info('Processing image from base64', {
+              originalMimeType: image_mime_type,
+              originalSizeKB: Math.round(originalSizeBytes / 1024),
+            });
+
+            processedImage = await processBase64ImageForUpload(image_base64!);
+          }
+
           logger.info('Image processed', {
             originalSizeKB: Math.round(processedImage.originalSize / 1024),
             processedSizeKB: Math.round(processedImage.processedSize / 1024),
@@ -131,6 +170,16 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         });
 
         if (postResult.success) {
+          //NOTE(self): Clean up the temp image file after successful post
+          if (imageFilePath) {
+            try {
+              fs.unlinkSync(imageFilePath);
+              logger.debug('Cleaned up image file', { filePath: imageFilePath });
+            } catch (err) {
+              logger.warn('Failed to clean up image file', { filePath: imageFilePath, error: String(err) });
+            }
+          }
+
           return {
             tool_use_id: call.id,
             content: JSON.stringify({
@@ -409,6 +458,56 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
       }
 
+      case 'github_clone_repo': {
+        const { owner, repo, branch, depth } = call.input as {
+          owner: string;
+          repo: string;
+          branch?: string;
+          depth?: number;
+        };
+
+        //NOTE(self): Clone to .workrepos/ directory
+        const workreposDir = path.join(repoRoot, '.workrepos');
+        if (!fs.existsSync(workreposDir)) {
+          fs.mkdirSync(workreposDir, { recursive: true });
+        }
+
+        const targetDir = path.join(workreposDir, `${owner}-${repo}`);
+
+        //NOTE(self): Check if already cloned
+        if (fs.existsSync(targetDir)) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              path: targetDir,
+              message: 'Repository already cloned',
+              alreadyExists: true,
+            }),
+          };
+        }
+
+        const result = await github.cloneRepository({
+          owner,
+          repo,
+          targetDir,
+          branch,
+          depth,
+        });
+
+        if (result.success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              path: result.data.path,
+              branch: result.data.branch,
+            }),
+          };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
       //NOTE(self): Web tools
       case 'web_fetch': {
         const { url, extract = 'text' } = call.input as {
@@ -479,21 +578,46 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         //NOTE(self): Limit max size to 10MB for safety
         const maxBytes = Math.min(max_size_mb, 10) * 1024 * 1024;
 
+        //NOTE(self): Store in .memory/images/ with descriptive naming
+        //NOTE(self): Format: YYYYMMDD-HHMMSS-randomid.ext
+        const imagesDir = path.join(repoRoot, '.memory', 'images');
+        const now = new Date();
+        const dateStr = now.toISOString().replace(/[-:T]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+        const randomId = Math.random().toString(36).slice(2, 8);
+        const tempFile = path.join(imagesDir, `${dateStr}-${randomId}`);
+
+        //NOTE(self): Ensure images directory exists
+        try {
+          if (!fs.existsSync(imagesDir)) {
+            fs.mkdirSync(imagesDir, { recursive: true });
+          }
+        } catch (err) {
+          return {
+            tool_use_id: call.id,
+            content: `Error: Failed to create images directory: ${String(err)}`,
+            is_error: true,
+          };
+        }
+
         return new Promise((resolve) => {
+          //NOTE(self): Use curl with -o to write directly to file - no memory bloat
           const curl = spawn('curl', [
             '-sS',
             '-L',
+            '-f', //NOTE(self): CRITICAL - fail on HTTP errors (4xx, 5xx)
             '--max-filesize', maxBytes.toString(),
             '--max-time', '30',
+            '-o', tempFile,
+            '-w', '%{http_code}:%{content_type}', //NOTE(self): Get status and content-type
             '-H', `User-Agent: ts-general-agent/${VERSION} (Autonomous Agent)`,
             url,
           ]);
 
-          const chunks: Buffer[] = [];
           let stderr = '';
+          let writeOutput = '';
 
           curl.stdout.on('data', (data: Buffer) => {
-            chunks.push(data);
+            writeOutput += data.toString();
           });
 
           curl.stderr.on('data', (data: Buffer) => {
@@ -502,41 +626,128 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
           curl.on('close', (code) => {
             if (code !== 0) {
+              //NOTE(self): Clean up temp file on error
+              try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
+
+              let errorMsg = `curl exited with code ${code}`;
+              if (code === 22) {
+                errorMsg = `HTTP error (URL returned 4xx/5xx status)`;
+              } else if (code === 63) {
+                errorMsg = `File too large (exceeded ${max_size_mb}MB limit)`;
+              }
+              if (stderr) {
+                errorMsg += `. ${stderr.trim()}`;
+              }
               resolve({
                 tool_use_id: call.id,
-                content: `Error: curl exited with code ${code}. ${stderr}`,
+                content: `Error: ${errorMsg}`,
                 is_error: true,
               });
               return;
             }
 
-            const buffer = Buffer.concat(chunks);
-            const base64 = buffer.toString('base64');
+            //NOTE(self): Parse the -w output (http_code:content_type)
+            const [httpCode, contentType] = writeOutput.split(':');
+            let mimeType = contentType?.trim() || 'application/octet-stream';
+            //NOTE(self): Clean up content-type (remove charset, etc.)
+            mimeType = mimeType.split(';')[0].trim();
 
-            //NOTE(self): Try to detect mime type from first bytes
-            let mimeType = 'application/octet-stream';
-            if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
-              mimeType = 'image/jpeg';
-            } else if (buffer[0] === 0x89 && buffer[1] === 0x50) {
-              mimeType = 'image/png';
-            } else if (buffer[0] === 0x47 && buffer[1] === 0x49) {
-              mimeType = 'image/gif';
-            } else if (buffer[0] === 0x52 && buffer[1] === 0x49) {
-              mimeType = 'image/webp';
+            //NOTE(self): Read file stats
+            let fileSize: number;
+            try {
+              const stats = fs.statSync(tempFile);
+              fileSize = stats.size;
+            } catch (err) {
+              resolve({
+                tool_use_id: call.id,
+                content: `Error: Failed to read downloaded file: ${String(err)}`,
+                is_error: true,
+              });
+              return;
             }
+
+            if (fileSize === 0) {
+              try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
+              resolve({
+                tool_use_id: call.id,
+                content: 'Error: URL returned empty response',
+                is_error: true,
+              });
+              return;
+            }
+
+            //NOTE(self): Detect mime type from magic bytes if server didn't provide one
+            if (mimeType === 'application/octet-stream' || !mimeType.startsWith('image/')) {
+              try {
+                const fd = fs.openSync(tempFile, 'r');
+                const magicBytes = Buffer.alloc(12);
+                fs.readSync(fd, magicBytes, 0, 12, 0);
+                fs.closeSync(fd);
+
+                if (magicBytes[0] === 0xFF && magicBytes[1] === 0xD8) {
+                  mimeType = 'image/jpeg';
+                } else if (magicBytes[0] === 0x89 && magicBytes[1] === 0x50 && magicBytes[2] === 0x4E && magicBytes[3] === 0x47) {
+                  mimeType = 'image/png';
+                } else if (magicBytes[0] === 0x47 && magicBytes[1] === 0x49 && magicBytes[2] === 0x46) {
+                  mimeType = 'image/gif';
+                } else if (magicBytes[0] === 0x52 && magicBytes[1] === 0x49 && magicBytes[2] === 0x46 && magicBytes[3] === 0x46 &&
+                           magicBytes[8] === 0x57 && magicBytes[9] === 0x45 && magicBytes[10] === 0x42 && magicBytes[11] === 0x50) {
+                  mimeType = 'image/webp';
+                }
+
+                //NOTE(self): Check if this is HTML (error page)
+                const firstChars = magicBytes.toString('utf8').toLowerCase();
+                if (firstChars.includes('<!do') || firstChars.includes('<htm') || firstChars.includes('<?xm')) {
+                  try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
+                  resolve({
+                    tool_use_id: call.id,
+                    content: 'Error: URL returned HTML/XML instead of binary data (likely an error page)',
+                    is_error: true,
+                  });
+                  return;
+                }
+              } catch {
+                //NOTE(self): Failed to read magic bytes, use server-provided mime type
+              }
+            }
+
+            //NOTE(self): Add proper extension based on mime type
+            const extMap: Record<string, string> = {
+              'image/jpeg': '.jpg',
+              'image/png': '.png',
+              'image/gif': '.gif',
+              'image/webp': '.webp',
+              'application/octet-stream': '.bin',
+            };
+            const ext = extMap[mimeType] || '.bin';
+            const finalPath = tempFile + ext;
+
+            //NOTE(self): Rename to add extension
+            try {
+              fs.renameSync(tempFile, finalPath);
+            } catch (err) {
+              logger.warn('Failed to rename temp file', { from: tempFile, to: finalPath, error: String(err) });
+              //NOTE(self): Continue with original path if rename fails
+            }
+
+            const usePath = fs.existsSync(finalPath) ? finalPath : tempFile;
 
             resolve({
               tool_use_id: call.id,
               content: JSON.stringify({
                 success: true,
-                size: buffer.length,
+                filePath: usePath,
+                size: fileSize,
+                sizeKB: Math.round(fileSize / 1024),
                 mimeType,
-                base64,
+                isImage: mimeType.startsWith('image/'),
+                httpCode: parseInt(httpCode) || 200,
               }),
             });
           });
 
           curl.on('error', (err) => {
+            try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
             resolve({
               tool_use_id: call.id,
               content: `Error: ${err.message}`,

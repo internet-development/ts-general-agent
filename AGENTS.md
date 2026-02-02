@@ -65,6 +65,22 @@ The following environment variables **MUST** be configured in `.env`:
   - store notes, observations, or relational context per individual.
 - This directory **MUST** be treated as authoritative memory over ephemeral runtime state.
 
+#### `.memory/images/`
+- This subdirectory **MUST** be used for temporary image storage during posting workflows.
+- Image files **MUST** follow the naming convention: `YYYYMMDDHHMMSS-randomid.ext`
+  - Example: `20260202134523-a7b3f2.jpg`
+- The agent **MUST**:
+  - use `curl_fetch` to download images here (not in-memory base64),
+  - pass the `filePath` from curl_fetch to `bluesky_post_with_image`,
+  - allow the system to automatically clean up images after successful posts.
+- This approach **MUST** be preferred to avoid context window bloat from large base64 strings.
+- Images that fail to post **MAY** remain for debugging; periodic cleanup is acceptable.
+
+#### `.memory/social/`
+- This subdirectory **MUST** be used for cached social graph profiles.
+- Profile files are named by handle and contain enriched profile data.
+- The agent **MAY** use this cache to understand relationships without repeated API calls.
+
 ---
 
 ### `.workrepos/`
