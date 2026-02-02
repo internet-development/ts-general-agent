@@ -9,43 +9,42 @@
 import { ui } from '@modules/ui.js';
 import { logger } from '@modules/logger.js';
 
-// ════════════════════════════════════════════════════════════════════════════
-// RATE LIMITS
-// ════════════════════════════════════════════════════════════════════════════
 
+//NOTE(self): Rate Limits
 export interface RateLimits {
-  // NOTE(self): Minimum seconds between posts
+  //NOTE(self): Minimum seconds between original posts
   postCooldown: number;
-  // NOTE(self): Minimum seconds between likes
+  //NOTE(self): Minimum seconds between replies (faster - conversations flow)
+  replyCooldown: number;
+  //NOTE(self): Minimum seconds between likes
   likeCooldown: number;
-  // NOTE(self): Minimum seconds between follows
+  //NOTE(self): Minimum seconds between follows
   followCooldown: number;
-  // NOTE(self): Minimum seconds between any action
+  //NOTE(self): Minimum seconds between any action
   actionCooldown: number;
-  // NOTE(self): Minimum seconds between autonomous ticks
+  //NOTE(self): Minimum seconds between autonomous ticks
   tickInterval: number;
-  // NOTE(self): Maximum actions per tick
+  //NOTE(self): Maximum actions per tick
   maxActionsPerTick: number;
-  // NOTE(self): Reflection pause (seconds) - time to pause and reflect
+  //NOTE(self): Reflection pause (seconds) - time to pause and reflect
   reflectionPause: number;
 }
 
-// NOTE(self): Default limits encourage thoughtful, measured engagement
-// NOTE(self): Fast enough for conversations, slow enough for dignity
+//NOTE(self): Default limits model real human social media behavior
+//NOTE(self): Thoughtful, present, but not obsessively refreshing
 const DEFAULT_LIMITS: RateLimits = {
-  postCooldown: 120,       // 2 minutes between posts - posts should be meaningful
-  likeCooldown: 15,        // 15 seconds between likes - don't spam likes
-  followCooldown: 60,      // 1 minute between follows - following is intentional
-  actionCooldown: 5,       // 5 seconds between any action - responsive but not frantic
-  tickInterval: 15,        // 15 seconds between ticks - responsive to conversations
-  maxActionsPerTick: 3,    // Max 3 actions per tick - focus on quality
-  reflectionPause: 2,      // 2 second pause for reflection - think before acting
+  postCooldown: 1800,      // 30 minutes between original posts - quality over quantity
+  replyCooldown: 60,       // 1 minute between replies - conversations can flow naturally
+  likeCooldown: 45,        // 45 seconds between likes - deliberate appreciation
+  followCooldown: 3600,    // 1 hour between follows - following is meaningful
+  actionCooldown: 10,      // 10 seconds between any action - breathe between actions
+  tickInterval: 120,       // 2 minutes between ticks - like a human checking their phone
+  maxActionsPerTick: 3,    // Max 3 actions per tick - focused engagement
+  reflectionPause: 3,      // 3 second pause for reflection - think before acting
 };
 
-// ════════════════════════════════════════════════════════════════════════════
-// ACTION TRACKING
-// ════════════════════════════════════════════════════════════════════════════
 
+//NOTE(self): Action Tracking
 interface ActionRecord {
   type: string;
   timestamp: number;
@@ -62,9 +61,9 @@ class PacingManager {
     this.limits = limits;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Configuration
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Configuration
+
 
   setLimits(limits: Partial<RateLimits>): void {
     this.limits = { ...this.limits, ...limits };
@@ -74,9 +73,9 @@ class PacingManager {
     return { ...this.limits };
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Tick Management
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Tick Management
+
 
   startTick(): void {
     this.actionsThisTick = 0;
@@ -99,9 +98,9 @@ class PacingManager {
     return this.limits.maxActionsPerTick;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Action Checking - Am I ready to act?
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Action Checking - Am I ready to act?
+
 
   private getLastActionTime(type?: string): number {
     if (!type) {
@@ -120,8 +119,9 @@ class PacingManager {
   private getCooldownForType(type: string): number {
     switch (type) {
       case 'post':
-      case 'reply':
         return this.limits.postCooldown;
+      case 'reply':
+        return this.limits.replyCooldown;
       case 'like':
       case 'repost':
         return this.limits.likeCooldown;
@@ -136,7 +136,7 @@ class PacingManager {
   canDoAction(type: string): { allowed: boolean; waitSeconds: number; reason?: string } {
     const now = Date.now();
 
-    // NOTE(self): Check actions per tick limit
+    //NOTE(self): Check actions per tick limit
     if (!this.canDoMoreActions()) {
       return {
         allowed: false,
@@ -145,7 +145,7 @@ class PacingManager {
       };
     }
 
-    // NOTE(self): Check global action cooldown - breathe between actions
+    //NOTE(self): Check global action cooldown - breathe between actions
     const lastAny = this.getLastActionTime();
     const globalWait = Math.ceil((this.limits.actionCooldown * 1000 - (now - lastAny)) / 1000);
     if (globalWait > 0) {
@@ -156,7 +156,7 @@ class PacingManager {
       };
     }
 
-    // NOTE(self): Check type-specific cooldown
+    //NOTE(self): Check type-specific cooldown
     const lastOfType = this.getLastActionTime(type);
     const cooldown = this.getCooldownForType(type);
     const typeWait = Math.ceil((cooldown * 1000 - (now - lastOfType)) / 1000);
@@ -171,9 +171,9 @@ class PacingManager {
     return { allowed: true, waitSeconds: 0 };
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Action Recording - Remember what we've done
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Action Recording - Remember what we've done
+
 
   recordAction(type: string, detail?: string): void {
     this.actionHistory.push({
@@ -183,7 +183,7 @@ class PacingManager {
     });
     this.actionsThisTick++;
 
-    // NOTE(self): Keep history manageable (last 100 actions)
+    //NOTE(self): Keep history manageable (last 100 actions)
     if (this.actionHistory.length > 100) {
       this.actionHistory = this.actionHistory.slice(-100);
     }
@@ -191,9 +191,9 @@ class PacingManager {
     logger.debug('Action recorded', { type, actionsThisTick: this.actionsThisTick });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Reflection Pause - Take time to think
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Reflection Pause - Take time to think
+
 
   async reflect(reason?: string): Promise<void> {
     if (reason) {
@@ -202,9 +202,9 @@ class PacingManager {
     await this.sleep(this.limits.reflectionPause * 1000);
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Utilities
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Utilities
+
 
   async sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -218,9 +218,9 @@ class PacingManager {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Statistics - Understand our rhythm
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Statistics - Understand our rhythm
+
 
   getStats(): { total: number; recent: Record<string, number>; actionsThisTick: number } {
     const now = Date.now();
@@ -241,16 +241,14 @@ class PacingManager {
   }
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): Singleton export for consistent pacing across the app
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): Singleton export for consistent pacing across the app
+
 
 export const pacing = new PacingManager();
 
-// ════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
-// ════════════════════════════════════════════════════════════════════════════
 
+//NOTE(self): Helper Functions
 /**
  * //NOTE(self): Map tool names to action types for pacing
  */
@@ -263,11 +261,13 @@ export function getActionType(toolName: string): string {
     bluesky_follow: 'follow',
     bluesky_unfollow: 'unfollow',
     github_create_issue_comment: 'comment',
+    github_create_pr_comment: 'comment',
     github_star_repo: 'star',
     github_follow_user: 'follow',
     memory_write: 'memory',
     self_update: 'self',
     queue_add: 'queue',
+    web_fetch: 'fetch',
   };
 
   return mapping[toolName] || 'other';
@@ -285,6 +285,7 @@ export function isSocialAction(toolName: string): boolean {
     'bluesky_follow',
     'bluesky_unfollow',
     'github_create_issue_comment',
+    'github_create_pr_comment',
     'github_star_repo',
     'github_follow_user',
   ];
@@ -303,10 +304,15 @@ export function isReadAction(toolName: string): boolean {
     'bluesky_get_followers',
     'bluesky_get_follows',
     'github_get_repo',
+    'github_get_user',
     'github_list_issues',
+    'github_list_pull_requests',
+    'github_list_org_repos',
+    'github_list_my_orgs',
     'memory_read',
     'memory_list',
     'self_read',
+    'web_fetch',
   ];
 
   return readTools.includes(toolName);

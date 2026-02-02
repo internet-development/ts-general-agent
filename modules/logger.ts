@@ -48,17 +48,17 @@ function shouldLog(level: LogLevel): boolean {
 function writeLog(entry: LogEntry): void {
   const line = JSON.stringify(entry) + '\n';
 
-  // Console output
+  //NOTE(self): Console output
   const prefix = `[${entry.timestamp}] [${entry.level.toUpperCase()}]`;
   const contextStr = entry.context ? ` ${JSON.stringify(entry.context)}` : '';
   console.log(`${prefix} ${entry.message}${contextStr}`);
 
-  // File output
+  //NOTE(self): File output
   if (logDir) {
     try {
       appendFileSync(getLogFile(), line);
     } catch {
-      // Silently fail file logging
+      //NOTE(self): Silently fail file logging
     }
   }
 }

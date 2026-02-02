@@ -21,7 +21,7 @@ export interface ToolResult {
 }
 
 export const AGENT_TOOLS: ToolDefinition[] = [
-  // === BLUESKY/ATPROTO ===
+  //NOTE(self): Bluesky/ATProto tools
   {
     name: 'bluesky_post',
     description: 'Create a new post on Bluesky. Use this to share thoughts, observations, or engage with the community.',
@@ -207,7 +207,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
-  // === GITHUB ===
+  //NOTE(self): GitHub tools
   {
     name: 'github_get_repo',
     description: 'Get information about a GitHub repository.',
@@ -311,8 +311,137 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       required: ['username'],
     },
   },
+  {
+    name: 'github_get_user',
+    description: 'Get information about a GitHub user.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        username: {
+          type: 'string',
+          description: 'GitHub username',
+        },
+      },
+      required: ['username'],
+    },
+  },
+  {
+    name: 'github_list_pull_requests',
+    description: 'List pull requests in a GitHub repository. Great for finding conversations and code reviews to engage with.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        state: {
+          type: 'string',
+          enum: ['open', 'closed', 'all'],
+          description: 'Filter by PR state (default: open)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of PRs to fetch (default: 30)',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'github_create_pr_comment',
+    description: 'Comment on a GitHub pull request. Use this to engage in code review discussions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        pull_number: {
+          type: 'number',
+          description: 'Pull request number',
+        },
+        body: {
+          type: 'string',
+          description: 'Comment text',
+        },
+      },
+      required: ['owner', 'repo', 'pull_number', 'body'],
+    },
+  },
+  {
+    name: 'github_list_org_repos',
+    description: 'List repositories in a GitHub organization. Use this to explore what projects an org is working on.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        org: {
+          type: 'string',
+          description: 'Organization name',
+        },
+        type: {
+          type: 'string',
+          enum: ['all', 'public', 'private', 'forks', 'sources', 'member'],
+          description: 'Filter by repo type (default: all)',
+        },
+        sort: {
+          type: 'string',
+          enum: ['created', 'updated', 'pushed', 'full_name'],
+          description: 'Sort order (default: pushed)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of repos to fetch (default: 30)',
+        },
+      },
+      required: ['org'],
+    },
+  },
+  {
+    name: 'github_list_my_orgs',
+    description: 'List GitHub organizations you belong to. Use this to discover where you can contribute.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of orgs to fetch (default: 30)',
+        },
+      },
+    },
+  },
 
-  // === MEMORY ===
+  //NOTE(self): Web tools
+  {
+    name: 'web_fetch',
+    description: 'Fetch content from a URL. Returns the text content of the page. Use this to read web pages, documentation, or any publicly accessible content.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to fetch',
+        },
+        extract: {
+          type: 'string',
+          enum: ['text', 'html', 'json'],
+          description: 'What to extract: text (readable content), html (raw HTML), or json (parse as JSON). Default: text',
+        },
+      },
+      required: ['url'],
+    },
+  },
+
+  //NOTE(self): Memory tools
   {
     name: 'memory_write',
     description: 'Write content to your persistent memory. Use this to remember important information, observations, or reflections.',
@@ -363,7 +492,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
-  // === SELF ===
+  //NOTE(self): Self tools
   {
     name: 'self_update',
     description: 'Update your SELF.md file to reflect new understanding of yourself.',
@@ -387,7 +516,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
-  // === QUEUE MANAGEMENT ===
+  //NOTE(self): Queue management tools
   {
     name: 'queue_add',
     description: 'Add an action to your planned actions queue. Use this to plan what you want to do next.',
@@ -416,7 +545,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
-  // === SELF-IMPROVEMENT ===
+  //NOTE(self): Self-improvement tools
   {
     name: 'self_improve',
     description: 'Invoke Claude Code to improve yourself. You prompt it like a human would - describe what you want changed and why. Claude Code has full access to modify your codebase. Use this for bugs, new features, enhancements, or any change that would make you better.',

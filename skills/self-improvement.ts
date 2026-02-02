@@ -1,4 +1,7 @@
-// NOTE(SELF): Skill for running Claude Code to make self-improvements
+//NOTE(self): Skill for running Claude Code to make self-improvements
+import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { execCommand } from '@modules/exec.js';
 import { logger } from '@modules/logger.js';
 import { createMemory } from '@modules/memory.js';
@@ -10,60 +13,72 @@ export interface ClaudeCodeResult {
   installed?: boolean;
 }
 
-// NOTE(SELF): Check if Claude Code is available on the system
-export async function checkClaudeCodeInstalled(): Promise<boolean> {
-  const result = await execCommand('which claude');
-  if (result.success && result.stdout?.trim()) {
-    return true;
+//NOTE(self): Find the claude binary, checking common paths
+export async function findClaudeBinary(): Promise<string | null> {
+  //NOTE(self): First try 'which' to find in PATH
+  const whichResult = await execCommand('which claude');
+  if (whichResult.success && whichResult.stdout?.trim()) {
+    return whichResult.stdout.trim();
   }
 
-  // NOTE(SELF): Try common installation paths
+  //NOTE(self): Try common installation paths
   const paths = [
     '/usr/local/bin/claude',
     '/opt/homebrew/bin/claude',
     `${process.env.HOME}/.local/bin/claude`,
     `${process.env.HOME}/.claude/bin/claude`,
+    `${process.env.HOME}/.npm-global/bin/claude`,
   ];
 
-  for (const path of paths) {
-    const check = await execCommand(`test -x "${path}" && echo "found"`);
-    if (check.success && check.stdout?.includes('found')) {
-      return true;
+  for (const claudePath of paths) {
+    try {
+      const check = await execCommand(`test -x "${claudePath}" && echo "found"`);
+      if (check.success && check.stdout?.includes('found')) {
+        return claudePath;
+      }
+    } catch {
+      //NOTE(self): Continue to next path
     }
   }
 
-  return false;
+  return null;
 }
 
-// NOTE(SELF): Attempt to install Claude Code via various methods
+//NOTE(self): Check if Claude Code is available on the system
+export async function checkClaudeCodeInstalled(): Promise<boolean> {
+  const claudePath = await findClaudeBinary();
+  return claudePath !== null;
+}
+
+//NOTE(self): Attempt to install Claude Code via various methods
 export async function installClaudeCode(memoryPath: string): Promise<ClaudeCodeResult> {
   const memory = createMemory(memoryPath);
 
   logger.info('Attempting to install Claude Code');
   memory.append('exec-log.md', `\n## Claude Code Installation Attempt\n**Time:** ${new Date().toISOString()}\n`);
 
-  // NOTE(SELF): Try npm global install first
+  //NOTE(self): Try npm global install first
   const npmResult = await execCommand('npm install -g @anthropic-ai/claude-code');
   if (npmResult.success) {
     memory.append('exec-log.md', '**Method:** npm global install\n**Result:** Success\n\n---\n');
     return { success: true, installed: true, output: 'Installed via npm' };
   }
 
-  // NOTE(SELF): Try brew if npm fails
+  //NOTE(self): Try brew if npm fails
   const brewResult = await execCommand('brew install claude-code');
   if (brewResult.success) {
     memory.append('exec-log.md', '**Method:** Homebrew\n**Result:** Success\n\n---\n');
     return { success: true, installed: true, output: 'Installed via Homebrew' };
   }
 
-  // NOTE(SELF): Try curl installer as fallback
+  //NOTE(self): Try curl installer as fallback
   const curlResult = await execCommand('curl -fsSL https://claude.ai/install.sh | sh');
   if (curlResult.success) {
     memory.append('exec-log.md', '**Method:** curl installer\n**Result:** Success\n\n---\n');
     return { success: true, installed: true, output: 'Installed via curl' };
   }
 
-  // NOTE(SELF): Log failure and provide guidance
+  //NOTE(self): Log failure and provide guidance
   const errorMsg = `
 Failed to install Claude Code automatically.
 
@@ -81,7 +96,7 @@ You may need a Claude Pro subscription for CLI access.
   return { success: false, error: errorMsg };
 }
 
-// NOTE(SELF): Run Claude Code with a prompt for self-improvement
+//NOTE(self): Run Claude Code with a prompt for self-improvement
 export async function runClaudeCode(
   prompt: string,
   workingDir: string,
@@ -89,51 +104,73 @@ export async function runClaudeCode(
 ): Promise<ClaudeCodeResult> {
   const memory = createMemory(memoryPath);
 
-  // NOTE(SELF): Check if Claude Code is installed
-  const isInstalled = await checkClaudeCodeInstalled();
+  //NOTE(self): Find the claude binary
+  const claudePath = await findClaudeBinary();
 
-  if (!isInstalled) {
+  if (!claudePath) {
     logger.warn('Claude Code not found, attempting installation');
     const installResult = await installClaudeCode(memoryPath);
 
     if (!installResult.success) {
       return installResult;
     }
+
+    //NOTE(self): Try to find it again after installation
+    const newPath = await findClaudeBinary();
+    if (!newPath) {
+      return { success: false, error: 'Claude Code installed but binary not found in PATH' };
+    }
   }
 
-  // NOTE(SELF): Log the self-improvement attempt
+  const finalClaudePath = claudePath || (await findClaudeBinary());
+  if (!finalClaudePath) {
+    return { success: false, error: 'Could not locate claude binary' };
+  }
+
+  //NOTE(self): Log the self-improvement attempt
   const execId = Date.now().toString();
   memory.append('exec-log.md', `
 ## Self-Improvement via Claude Code ${execId}
 **Time:** ${new Date().toISOString()}
 **Working Directory:** ${workingDir}
+**Claude Binary:** ${finalClaudePath}
 **Prompt:**
 \`\`\`
 ${prompt}
 \`\`\`
 `);
 
-  // NOTE(SELF): Run Claude Code with spawn for long-running tasks
-  return new Promise((resolve) => {
-    const { spawn } = require('child_process');
-
-    // NOTE(SELF): Write prompt to a temp file to avoid escaping issues
-    const fs = require('fs');
-    const path = require('path');
-    const promptFile = path.join(memoryPath, `.prompt-${execId}.txt`);
+  //NOTE(self): Write prompt to a temp file to avoid shell escaping issues
+  const promptFile = path.join(memoryPath, `.prompt-${execId}.txt`);
+  try {
     fs.writeFileSync(promptFile, prompt, 'utf-8');
+  } catch (writeErr) {
+    const errorMsg = `Failed to write prompt file: ${writeErr}`;
+    memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
+    return { success: false, error: errorMsg };
+  }
 
-    const child = spawn('claude', [
+  //NOTE(self): Run Claude Code with spawn for long-running tasks
+  return new Promise((resolve) => {
+    const child = spawn(finalClaudePath, [
+      '--print',
       '--dangerously-skip-permissions',
       '-p', prompt,
     ], {
       cwd: workingDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 600000, // NOTE(SELF): 10 minute timeout for substantial changes
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env }, //NOTE(self): Inherit environment for PATH etc.
     });
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+
+    //NOTE(self): 10 minute timeout for substantial changes
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, 600000);
 
     child.stdout.on('data', (data: Buffer) => {
       stdout += data.toString();
@@ -143,31 +180,45 @@ ${prompt}
       stderr += data.toString();
     });
 
-    child.on('close', (code: number) => {
-      // NOTE(SELF): Cleanup prompt file
-      try { fs.unlinkSync(promptFile); } catch {}
+    child.on('close', (code: number | null) => {
+      clearTimeout(timeout);
+
+      //NOTE(self): Cleanup prompt file
+      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+
+      if (timedOut) {
+        const errorMsg = 'Claude Code execution timed out after 10 minutes';
+        memory.append('exec-log.md', `**Result:** Timeout\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
+        logger.error('Claude Code execution timed out');
+        resolve({ success: false, error: errorMsg });
+        return;
+      }
 
       if (code === 0) {
         memory.append('exec-log.md', `**Result:** Success\n**Output:**\n\`\`\`\n${stdout}\n\`\`\`\n\n---\n`);
         logger.info('Claude Code executed successfully');
         resolve({ success: true, output: stdout });
       } else {
-        memory.append('exec-log.md', `**Result:** Failed (code ${code})\n**Error:**\n\`\`\`\n${stderr || stdout}\n\`\`\`\n\n---\n`);
+        const errorOutput = stderr || stdout || `Exit code: ${code}`;
+        memory.append('exec-log.md', `**Result:** Failed (code ${code})\n**Error:**\n\`\`\`\n${errorOutput}\n\`\`\`\n\n---\n`);
         logger.error('Claude Code execution failed', { code, stderr });
-        resolve({ success: false, error: stderr || stdout || `Exit code: ${code}` });
+        resolve({ success: false, error: errorOutput });
       }
     });
 
     child.on('error', (err: Error) => {
-      try { fs.unlinkSync(promptFile); } catch {}
-      memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${err.message}\n\`\`\`\n\n---\n`);
+      clearTimeout(timeout);
+      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+
+      const errorMsg = `Spawn error: ${err.message}`;
+      memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
       logger.error('Claude Code spawn error', { error: err.message });
-      resolve({ success: false, error: err.message });
+      resolve({ success: false, error: errorMsg });
     });
   });
 }
 
-// NOTE(SELF): Request a specific self-improvement
+//NOTE(self): Request a specific self-improvement
 export async function requestSelfImprovement(
   description: string,
   targetPath: string,

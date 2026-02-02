@@ -42,7 +42,7 @@ export function addToQueue(action: string, priority: 'high' | 'normal' | 'low' =
     timestamp: Date.now(),
   });
 
-  // Sort by priority (high first)
+  //NOTE(self): Sort by priority (high first)
   const priorityOrder = { high: 0, normal: 1, low: 2 };
   actionQueue.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
 
@@ -57,7 +57,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
   try {
     switch (call.name) {
-      // === BLUESKY ===
+      //NOTE(self): Bluesky tools
       case 'bluesky_post': {
         const text = call.input.text as string;
         const result = await atproto.createPost({ text });
@@ -79,7 +79,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           },
         });
         if (result.success) {
-          // NOTE(self): Mark the interaction as responded in engagement tracking
+          //NOTE(self): Mark the interaction as responded in engagement tracking
           markInteractionResponded(post_uri, result.data.uri);
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }
@@ -193,7 +193,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
       }
 
-      // === GITHUB ===
+      //NOTE(self): GitHub tools
       case 'github_get_repo': {
         const { owner, repo } = call.input as { owner: string; repo: string };
         const result = await github.getRepository(owner, repo);
@@ -249,7 +249,151 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
       }
 
-      // === MEMORY ===
+      case 'github_get_user': {
+        const username = call.input.username as string;
+        const result = await github.getUser(username);
+        if (result.success) {
+          return { tool_use_id: call.id, content: JSON.stringify(result.data) };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'github_list_pull_requests': {
+        const { owner, repo, state = 'open', limit = 30 } = call.input as {
+          owner: string;
+          repo: string;
+          state?: 'open' | 'closed' | 'all';
+          limit?: number;
+        };
+        const result = await github.listPullRequests({ owner, repo, state, per_page: limit });
+        if (result.success) {
+          //NOTE(self): Simplify PR data for easier consumption
+          const simplified = result.data.map((pr) => ({
+            number: pr.number,
+            title: pr.title,
+            state: pr.state,
+            user: pr.user?.login,
+            created_at: pr.created_at,
+            updated_at: pr.updated_at,
+            html_url: pr.html_url,
+            body: pr.body?.slice(0, 500),
+          }));
+          return { tool_use_id: call.id, content: JSON.stringify(simplified) };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'github_create_pr_comment': {
+        const { owner, repo, pull_number, body } = call.input as {
+          owner: string;
+          repo: string;
+          pull_number: number;
+          body: string;
+        };
+        const result = await github.createPullRequestComment({ owner, repo, pull_number, body });
+        if (result.success) {
+          return { tool_use_id: call.id, content: JSON.stringify({ success: true, id: result.data.id }) };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'github_list_org_repos': {
+        const { org, type = 'all', sort = 'pushed', limit = 30 } = call.input as {
+          org: string;
+          type?: 'all' | 'public' | 'private' | 'forks' | 'sources' | 'member';
+          sort?: 'created' | 'updated' | 'pushed' | 'full_name';
+          limit?: number;
+        };
+        const result = await github.listOrgRepos({ org, type, sort, per_page: limit });
+        if (result.success) {
+          //NOTE(self): Simplify repo data
+          const simplified = result.data.map((repo) => ({
+            name: repo.name,
+            full_name: repo.full_name,
+            description: repo.description,
+            html_url: repo.html_url,
+            language: repo.language,
+            stargazers_count: repo.stargazers_count,
+            open_issues_count: repo.open_issues_count,
+            updated_at: repo.updated_at,
+            pushed_at: repo.pushed_at,
+          }));
+          return { tool_use_id: call.id, content: JSON.stringify(simplified) };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'github_list_my_orgs': {
+        const { limit = 30 } = call.input as { limit?: number };
+        const result = await github.listUserOrgs({ per_page: limit });
+        if (result.success) {
+          return { tool_use_id: call.id, content: JSON.stringify(result.data) };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      //NOTE(self): Web tools
+      case 'web_fetch': {
+        const { url, extract = 'text' } = call.input as {
+          url: string;
+          extract?: 'text' | 'html' | 'json';
+        };
+
+        try {
+          const response = await fetch(url, {
+            headers: {
+              'User-Agent': 'ts-general-agent/0.0.2 (Autonomous Agent)',
+              'Accept': extract === 'json' ? 'application/json' : 'text/html,text/plain,*/*',
+            },
+          });
+
+          if (!response.ok) {
+            return {
+              tool_use_id: call.id,
+              content: `Error: HTTP ${response.status} ${response.statusText}`,
+              is_error: true,
+            };
+          }
+
+          if (extract === 'json') {
+            const data = await response.json();
+            return { tool_use_id: call.id, content: JSON.stringify(data) };
+          }
+
+          const html = await response.text();
+
+          if (extract === 'html') {
+            //NOTE(self): Return raw HTML, truncated if too long
+            return { tool_use_id: call.id, content: html.slice(0, 50000) };
+          }
+
+          //NOTE(self): Extract readable text from HTML
+          //NOTE(self): Simple extraction: remove scripts, styles, tags, collapse whitespace
+          const text = html
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 30000);
+
+          return { tool_use_id: call.id, content: text };
+        } catch (error) {
+          return {
+            tool_use_id: call.id,
+            content: `Error: ${String(error)}`,
+            is_error: true,
+          };
+        }
+      }
+
+      //NOTE(self): Memory tools
       case 'memory_write': {
         const { path: relativePath, content, append = false } = call.input as {
           path: string;
@@ -290,7 +434,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: 'Error: Directory not found or not readable', is_error: true };
       }
 
-      // === SELF ===
+      //NOTE(self): Self tools
       case 'self_update': {
         const content = call.input.content as string;
         const fullPath = path.join(repoRoot, 'SELF.md');
@@ -311,7 +455,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: 'Error: Failed to read SELF.md', is_error: true };
       }
 
-      // === QUEUE ===
+      //NOTE(self): Queue tools
       case 'queue_add': {
         const { action, priority = 'normal' } = call.input as {
           action: string;
@@ -326,15 +470,15 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: JSON.stringify({ success: true }) };
       }
 
-      // === SELF-IMPROVEMENT ===
+      //NOTE(self): Self-improvement tools
       case 'self_improve': {
         const { description, reasoning } = call.input as {
           description: string;
           reasoning: string;
         };
 
-        // NOTE(self): The agent prompts Claude Code like a human would
-        // NOTE(self): Full agency to make substantial changes, guided by SOUL
+        //NOTE(self): The agent prompts Claude Code like a human would
+        //NOTE(self): Full agency to make substantial changes, guided by SOUL
         const prompt = `${description}
 
 Context: ${reasoning}

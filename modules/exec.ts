@@ -48,7 +48,7 @@ export async function execGeneratedCode(
 ): Promise<ExecResult> {
   const memory = createMemory(context.memoryPath);
 
-  // Log the execution attempt
+  //NOTE(self): Log the execution attempt
   const execId = Date.now().toString();
   const logEntry = `
 ## Execution ${execId}
@@ -60,7 +60,7 @@ ${code}
 `;
   memory.append('exec-log.md', logEntry);
 
-  // Write code to .self directory
+  //NOTE(self): Write code to .self directory
   if (!existsSync(context.selfPath)) {
     mkdirSync(context.selfPath, { recursive: true });
   }
@@ -75,14 +75,14 @@ ${code}
       timeout: 30000,
     });
 
-    // Log success
+    //NOTE(self): Log success
     memory.append('exec-log.md', `**Result:** Success\n**Output:**\n\`\`\`\n${result.stdout}\n\`\`\`\n\n---\n`);
 
     return { success: true, stdout: result.stdout, stderr: result.stderr };
   } catch (error: unknown) {
     const err = error as { stdout?: string; stderr?: string; message?: string };
 
-    // Log failure
+    //NOTE(self): Log failure
     memory.append('exec-log.md', `**Result:** Failed\n**Error:**\n\`\`\`\n${err.message || error}\n\`\`\`\n\n---\n`);
 
     return {
@@ -92,13 +92,13 @@ ${code}
       error: err.message || String(error),
     };
   } finally {
-    // Cleanup temp file
+    //NOTE(self): Cleanup temp file
     try {
       if (existsSync(tempFile)) {
         unlinkSync(tempFile);
       }
     } catch {
-      // Ignore cleanup errors
+      //NOTE(self): Ignore cleanup errors
     }
   }
 }
@@ -116,7 +116,7 @@ export async function saveAndExecModule(
 
   const modulePath = join(context.selfPath, `${name}.ts`);
 
-  // Log the module creation
+  //NOTE(self): Log the module creation
   const logEntry = `
 ## Module Created: ${name}
 **Time:** ${new Date().toISOString()}

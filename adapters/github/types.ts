@@ -18,12 +18,14 @@ export interface GitHubRepository {
   clone_url: string;
   ssh_url: string;
   default_branch: string;
+  language: string | null;
   stargazers_count: number;
   watchers_count: number;
   forks_count: number;
   open_issues_count: number;
   created_at: string;
   updated_at: string;
+  pushed_at: string;
 }
 
 export interface GitHubIssue {

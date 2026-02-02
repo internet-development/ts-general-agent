@@ -1,9 +1,9 @@
 /**
  * Social Graph Module
  *
- * // NOTE(self): Extracts entities from social content and builds relational context.
- * // NOTE(self): Helps the agent understand who people are talking about.
- * // NOTE(self): Stores learned profiles in .memory/social/ for persistence across sessions.
+ * //NOTE(self): Extracts entities from social content and builds relational context.
+ * //NOTE(self): Helps the agent understand who people are talking about.
+ * //NOTE(self): Stores learned profiles in .memory/social/ for persistence across sessions.
  */
 
 import * as fs from 'fs';
@@ -12,11 +12,11 @@ import { getProfile } from '@adapters/atproto/get-profile.js';
 import type { AtprotoProfile, AtprotoFeedItem, AtprotoFollower } from '@adapters/atproto/types.js';
 import { ui } from '@modules/ui.js';
 
-// NOTE(self): Pattern to extract Bluesky handles from text
-// NOTE(self): Matches @handle.bsky.social, @handle.domain.tld, etc.
+//NOTE(self): Pattern to extract Bluesky handles from text
+//NOTE(self): Matches @handle.bsky.social, @handle.domain.tld, etc.
 const HANDLE_PATTERN = /@([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}/g;
 
-// NOTE(self): Also match bare handles without @ when they look like domains
+//NOTE(self): Also match bare handles without @ when they look like domains
 const BARE_HANDLE_PATTERN = /\b([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+bsky\.social\b/g;
 
 export interface MentionedEntity {
@@ -35,17 +35,17 @@ export interface SocialGraphData {
   knownHandles: Set<string>;
 }
 
-// NOTE(self): Extract handles from arbitrary text
+//NOTE(self): Extract handles from arbitrary text
 export function extractHandles(text: string): string[] {
   const handles = new Set<string>();
 
-  // NOTE(self): Match @handle patterns
+  //NOTE(self): Match @handle patterns
   const atMatches = text.match(HANDLE_PATTERN) || [];
   for (const match of atMatches) {
     handles.add(match.slice(1).toLowerCase());
   }
 
-  // NOTE(self): Match bare .bsky.social handles
+  //NOTE(self): Match bare .bsky.social handles
   const bareMatches = text.match(BARE_HANDLE_PATTERN) || [];
   for (const match of bareMatches) {
     handles.add(match.toLowerCase());
@@ -54,7 +54,7 @@ export function extractHandles(text: string): string[] {
   return Array.from(handles);
 }
 
-// NOTE(self): Extract all mentioned entities from social seed data
+//NOTE(self): Extract all mentioned entities from social seed data
 export function extractMentionedEntities(
   ownerProfile: AtprotoProfile | null,
   ownerFollows: AtprotoFollower[],
@@ -63,12 +63,12 @@ export function extractMentionedEntities(
   const entities: MentionedEntity[] = [];
   const seenHandles = new Set<string>();
 
-  // NOTE(self): Collect handles we already know about (owner's follows)
+  //NOTE(self): Collect handles we already know about (owner's follows)
   for (const follow of ownerFollows) {
     seenHandles.add(follow.handle.toLowerCase());
   }
 
-  // NOTE(self): Extract from owner's bio - these are likely important people
+  //NOTE(self): Extract from owner's bio - these are likely important people
   if (ownerProfile?.description) {
     const bioHandles = extractHandles(ownerProfile.description);
     for (const handle of bioHandles) {
@@ -83,7 +83,7 @@ export function extractMentionedEntities(
     }
   }
 
-  // NOTE(self): Extract from timeline posts
+  //NOTE(self): Extract from timeline posts
   for (const item of timeline) {
     const postText = (item.post.record as { text?: string })?.text || '';
     const postHandles = extractHandles(postText);
@@ -100,23 +100,29 @@ export function extractMentionedEntities(
       }
     }
 
-    // NOTE(self): Also extract from bios of people in timeline
-    // NOTE(self): (If we had their full profiles, we'd check those too)
+    //NOTE(self): Also extract from bios of people in timeline
+    //NOTE(self): (If we had their full profiles, we'd check those too)
   }
 
   return entities;
 }
 
-// NOTE(self): Memory path for cached profiles
+//NOTE(self): Memory path for cached profiles
 const MEMORY_SOCIAL_PATH = '.memory/social';
 
-function ensureSocialMemoryDir(): void {
-  if (!fs.existsSync(MEMORY_SOCIAL_PATH)) {
-    fs.mkdirSync(MEMORY_SOCIAL_PATH, { recursive: true });
+function ensureSocialMemoryDir(): boolean {
+  try {
+    if (!fs.existsSync(MEMORY_SOCIAL_PATH)) {
+      fs.mkdirSync(MEMORY_SOCIAL_PATH, { recursive: true });
+    }
+    return true;
+  } catch {
+    //NOTE(self): Directory creation failed - caching will be skipped
+    return false;
   }
 }
 
-// NOTE(self): Load cached profile from memory
+//NOTE(self): Load cached profile from memory
 export function loadCachedProfile(handle: string): EnrichedProfile | null {
   const safeName = handle.replace(/[^a-zA-Z0-9.-]/g, '_');
   const filePath = path.join(MEMORY_SOCIAL_PATH, `${safeName}.json`);
@@ -127,13 +133,13 @@ export function loadCachedProfile(handle: string): EnrichedProfile | null {
       return JSON.parse(data) as EnrichedProfile;
     }
   } catch {
-    // NOTE(self): Cache miss or corrupt file, will fetch fresh
+    //NOTE(self): Cache miss or corrupt file, will fetch fresh
   }
 
   return null;
 }
 
-// NOTE(self): Save profile to memory cache
+//NOTE(self): Save profile to memory cache
 export function cacheProfile(profile: EnrichedProfile): void {
   ensureSocialMemoryDir();
   const safeName = profile.handle.replace(/[^a-zA-Z0-9.-]/g, '_');
@@ -143,12 +149,12 @@ export function cacheProfile(profile: EnrichedProfile): void {
     profile.lastSeen = new Date().toISOString();
     fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
   } catch {
-    // NOTE(self): Cache write failed, not critical
+    //NOTE(self): Cache write failed, not critical
   }
 }
 
-// NOTE(self): Fetch and enrich profiles for mentioned entities
-// NOTE(self): Respects rate limiting by capping lookups per cycle
+//NOTE(self): Fetch and enrich profiles for mentioned entities
+//NOTE(self): Respects rate limiting by capping lookups per cycle
 export async function enrichMentionedEntities(
   entities: MentionedEntity[],
   maxLookups: number = 3
@@ -157,7 +163,7 @@ export async function enrichMentionedEntities(
   let lookupCount = 0;
 
   for (const entity of entities) {
-    // NOTE(self): Check cache first
+    //NOTE(self): Check cache first
     const cached = loadCachedProfile(entity.handle);
     if (cached) {
       cached.relationship = entity.context;
@@ -165,12 +171,12 @@ export async function enrichMentionedEntities(
       continue;
     }
 
-    // NOTE(self): Respect lookup limit for dignity
+    //NOTE(self): Respect lookup limit for dignity
     if (lookupCount >= maxLookups) {
       continue;
     }
 
-    // NOTE(self): Fetch fresh profile
+    //NOTE(self): Fetch fresh profile
     ui.startSpinner(`Learning about @${entity.handle}`);
     const result = await getProfile(entity.handle);
     ui.stopSpinner();
@@ -190,7 +196,7 @@ export async function enrichMentionedEntities(
   return profiles;
 }
 
-// NOTE(self): Format enriched profiles for the agent's context
+//NOTE(self): Format enriched profiles for the agent's context
 export function formatEnrichedContext(profiles: EnrichedProfile[]): string {
   if (profiles.length === 0) {
     return '';
@@ -219,28 +225,28 @@ export function formatEnrichedContext(profiles: EnrichedProfile[]): string {
   return parts.join('\n');
 }
 
-// NOTE(self): Main entry point - extract and enrich social graph
+//NOTE(self): Main entry point - extract and enrich social graph
 export async function buildSocialContext(
   ownerProfile: AtprotoProfile | null,
   ownerFollows: AtprotoFollower[],
   timeline: AtprotoFeedItem[]
 ): Promise<string> {
-  // NOTE(self): Extract mentioned entities
+  //NOTE(self): Extract mentioned entities
   const entities = extractMentionedEntities(ownerProfile, ownerFollows, timeline);
 
   if (entities.length === 0) {
     return '';
   }
 
-  // NOTE(self): Prioritize bio mentions (most important) then limit
+  //NOTE(self): Prioritize bio mentions (most important) then limit
   const prioritized = [
     ...entities.filter((e) => e.source === 'bio'),
     ...entities.filter((e) => e.source === 'post'),
   ].slice(0, 5);
 
-  // NOTE(self): Enrich with profile lookups
+  //NOTE(self): Enrich with profile lookups
   const profiles = await enrichMentionedEntities(prioritized);
 
-  // NOTE(self): Format for agent context
+  //NOTE(self): Format for agent context
   return formatEnrichedContext(profiles);
 }

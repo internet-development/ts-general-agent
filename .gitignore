@@ -9,3 +9,6 @@ dist/
 .memory/
 .workrepos/
 .self/
+
+# Agent identity (created from template on first run)
+SELF.md

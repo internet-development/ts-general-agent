@@ -86,18 +86,36 @@ export function validateConfig(config: Config): void {
   }
 }
 
-// NOTE(SELF): Initialize SELF.md with agent name on first run
+//NOTE(self): Initialize SELF.md from template on first run
 export function initializeSelf(config: Config): void {
+  const templatePath = join(config.paths.root, 'SELF.md.template');
+
+  //NOTE(self): If SELF.md doesn't exist, create it from template
   if (!existsSync(config.paths.selfmd)) {
+    if (existsSync(templatePath)) {
+      try {
+        let content = readFileSync(templatePath, 'utf-8');
+        content = content.replace(/\{\{AGENT_NAME\}\}/g, config.agent.name);
+        content = content.replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0]);
+        writeFileSync(config.paths.selfmd, content, 'utf-8');
+        console.log(`Created SELF.md for ${config.agent.name}`);
+      } catch (err) {
+        console.error('Failed to create SELF.md from template:', err);
+      }
+    }
     return;
   }
 
-  const content = readFileSync(config.paths.selfmd, 'utf-8');
-
-  // NOTE(SELF): Replace placeholder with actual agent name
-  if (content.includes('{{AGENT_NAME}}')) {
-    const updated = content.replace(/\{\{AGENT_NAME\}\}/g, config.agent.name);
-    writeFileSync(config.paths.selfmd, updated, 'utf-8');
+  //NOTE(self): If SELF.md exists but has placeholders, replace them
+  try {
+    const content = readFileSync(config.paths.selfmd, 'utf-8');
+    if (content.includes('{{AGENT_NAME}}') || content.includes('{{DATE}}')) {
+      let updated = content.replace(/\{\{AGENT_NAME\}\}/g, config.agent.name);
+      updated = updated.replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0]);
+      writeFileSync(config.paths.selfmd, updated, 'utf-8');
+    }
+  } catch (err) {
+    console.error('Failed to update SELF.md placeholders:', err);
   }
 }
 

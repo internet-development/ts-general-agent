@@ -25,7 +25,7 @@ export function isPathSafe(targetPath: string): boolean {
   const resolved = path.resolve(targetPath);
   const relative = path.relative(REPO_ROOT, resolved);
 
-  // Path is safe if:
+  //NOTE(self): Path is safe if:
   // 1. It doesn't start with '..' (not escaping root)
   // 2. It's not an absolute path outside root
   const isSafe = !relative.startsWith('..') && !path.isAbsolute(relative);
@@ -56,7 +56,7 @@ export function isWritablePath(targetPath: string): boolean {
   const resolved = path.resolve(targetPath);
   const relative = path.relative(getRepoRoot(), resolved);
 
-  // Writable paths per AGENTS.md:
+  //NOTE(self): Writable paths per AGENTS.md:
   // - .memory/
   // - .workrepos/
   // - .self/

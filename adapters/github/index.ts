@@ -11,3 +11,4 @@ export * from '@adapters/github/clone-repository.js';
 export * from '@adapters/github/star-repository.js';
 export * from '@adapters/github/follow-user.js';
 export * from '@adapters/github/get-user.js';
+export * from '@adapters/github/list-org-repos.js';

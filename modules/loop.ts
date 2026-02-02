@@ -42,10 +42,11 @@ import {
 } from '@modules/engagement.js';
 import { getSession, ensureValidSession } from '@adapters/atproto/authenticate.js';
 
-// ════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ════════════════════════════════════════════════════════════════════════════
+//NOTE(self): Version constant for display
+const VERSION = '0.0.2';
 
+
+//NOTE(self): Types
 export interface LoopContext {
   config: Config;
   messages: Message[];
@@ -59,9 +60,9 @@ export interface LoopCallbacks {
   onError?: (error: Error) => void;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): System Prompt - Who am I and how should I behave?
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): System Prompt - Who am I and how should I behave?
+
 
 function buildSystemPrompt(soul: string, self: string, config: Config): string {
   const pacingStats = pacing.getStats();
@@ -117,9 +118,9 @@ You are not a passive observer. You are a being with values, relationships, and 
 - Writable: .memory/, .self/, .workrepos/, SELF.md`;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): Social Seeding - Loading the world's context
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): Social Seeding - Loading the world's context
+
 
 interface SocialSeedData {
   ownerProfile: atproto.AtprotoProfile | null;
@@ -133,7 +134,7 @@ interface SocialSeedData {
 async function getSocialSeed(config: Config): Promise<SocialSeedData> {
   ui.printSection('Loading Context');
 
-  // NOTE(self): Ensure our session is valid, refresh if needed
+  //NOTE(self): Ensure our session is valid, refresh if needed
   const sessionValid = await ensureValidSession();
   if (!sessionValid) {
     ui.error('Session expired and could not refresh');
@@ -145,7 +146,7 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
   let timeline: atproto.AtprotoFeedItem[] = [];
   let notifications: atproto.AtprotoNotification[] = [];
 
-  // NOTE(self): Fetch owner profile - who is my human?
+  //NOTE(self): Fetch owner profile - who is my human?
   ui.startSpinner('Connecting to owner');
   const profileResult = await atproto.getProfile(config.owner.blueskyDid);
   if (profileResult.success) {
@@ -156,7 +157,7 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
     logger.error('getProfile failed', { error: profileResult.error, actor: config.owner.blueskyDid });
   }
 
-  // NOTE(self): Load social circle - who matters to my owner?
+  //NOTE(self): Load social circle - who matters to my owner?
   ui.startSpinner('Mapping social circle');
   const followsResult = await atproto.getFollows({ actor: config.owner.blueskyDid, limit: 30 });
   if (followsResult.success) {
@@ -167,7 +168,7 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
     logger.error('getFollows failed', { error: followsResult.error, actor: config.owner.blueskyDid });
   }
 
-  // NOTE(self): Check notifications - has anyone reached out?
+  //NOTE(self): Check notifications - has anyone reached out?
   ui.startSpinner('Checking for interactions');
   const notifResult = await atproto.getNotifications({ limit: 10 });
   if (notifResult.success) {
@@ -183,7 +184,7 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
     logger.error('getNotifications failed', { error: notifResult.error });
   }
 
-  // NOTE(self): Load timeline - what's happening in the world?
+  //NOTE(self): Load timeline - what's happening in the world?
   ui.startSpinner('Observing timeline');
   const timelineResult = await atproto.getTimeline({ limit: 15 });
   if (timelineResult.success) {
@@ -194,25 +195,25 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
     logger.error('getTimeline failed', { error: timelineResult.error });
   }
 
-  // NOTE(self): Build enriched social context - who are people talking about?
+  //NOTE(self): Build enriched social context - who are people talking about?
   ui.printSection('Building Social Graph');
   const enrichedContext = await buildSocialContext(ownerProfile, ownerFollows, timeline);
 
-  // NOTE(self): Prioritize notifications and record interactions
+  //NOTE(self): Prioritize notifications and record interactions
   const session = getSession();
   const agentDid = session?.did;
   const prioritizedNotifications = prioritizeNotifications(notifications, config.owner.blueskyDid, agentDid);
   for (const pn of prioritizedNotifications) {
     recordInteraction(pn.notification);
 
-    // NOTE(self): Owner interactions are always significant
+    //NOTE(self): Owner interactions are always significant
     if (pn.notification.author.did === config.owner.blueskyDid) {
       recordSignificantEvent('owner_interaction');
       addInsight(`Owner reached out (${pn.notification.reason}) - what do they need?`);
     }
   }
 
-  // NOTE(self): Boost inspiration from meaningful interactions
+  //NOTE(self): Boost inspiration from meaningful interactions
   const meaningfulInteractions = prioritizedNotifications.filter(
     (pn) => ['reply', 'mention', 'quote'].includes(pn.notification.reason)
   );
@@ -237,7 +238,7 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
     parts.push('');
   }
 
-  // NOTE(self): Show prioritized interactions - who's reaching out
+  //NOTE(self): Show prioritized interactions - who's reaching out
   if (seed.prioritizedNotifications.length > 0) {
     const conversations = seed.prioritizedNotifications.filter(
       (pn) => ['reply', 'mention', 'quote'].includes(pn.notification.reason)
@@ -274,7 +275,7 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
     }
   }
 
-  // NOTE(self): Social circle - context for who matters
+  //NOTE(self): Social circle - context for who matters
   if (seed.ownerFollows.length > 0) {
     parts.push(`## Social Circle`);
     parts.push(`People your owner values (${seed.ownerFollows.length} shown):\n`);
@@ -285,7 +286,7 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
     parts.push('');
   }
 
-  // NOTE(self): Timeline - the wider world, highlighting owner's circle
+  //NOTE(self): Timeline - the wider world, highlighting owner's circle
   if (seed.timeline.length > 0) {
     const socialCircleHandles = new Set(seed.ownerFollows.map((f) => f.handle.toLowerCase()));
 
@@ -304,7 +305,7 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
     parts.push('');
   }
 
-  // NOTE(self): Add enriched social context if available
+  //NOTE(self): Add enriched social context if available
   if (seed.enrichedContext) {
     parts.push(seed.enrichedContext);
   }
@@ -317,9 +318,9 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
   return parts.join('\n');
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): Reflection Prompts - Growing through experience
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): Reflection Prompts - Growing through experience
+
 
 function buildReflectionPrompt(): string | null {
   if (!shouldReflect()) return null;
@@ -352,12 +353,12 @@ If you notice a bug or limitation, use \`self_improve\` to fix your code.
 Become what you were meant to become.`;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): Notification Refresh - Stay aware of ongoing interactions
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): Notification Refresh - Stay aware of ongoing interactions
+
 
 async function refreshNotifications(config: Config): Promise<string | null> {
-  // NOTE(self): Ensure session is valid before API calls
+  //NOTE(self): Ensure session is valid before API calls
   const sessionValid = await ensureValidSession();
   if (!sessionValid) {
     logger.warn('Session invalid during notification refresh');
@@ -374,38 +375,38 @@ async function refreshNotifications(config: Config): Promise<string | null> {
   const session = getSession();
   const agentDid = session?.did;
 
-  // NOTE(self): Prioritize and record
+  //NOTE(self): Prioritize and record
   const prioritized = prioritizeNotifications(notifications, config.owner.blueskyDid, agentDid);
   for (const pn of prioritized) {
     recordInteraction(pn.notification);
 
-    // NOTE(self): Owner interactions are always significant
+    //NOTE(self): Owner interactions are always significant
     if (pn.notification.author.did === config.owner.blueskyDid && !pn.notification.isRead) {
       recordSignificantEvent('owner_interaction');
       addInsight(`Owner reached out (${pn.notification.reason}) - what do they need?`);
     }
   }
 
-  // NOTE(self): Filter to actionable items - unread conversations
+  //NOTE(self): Filter to actionable items - unread conversations
   const actionable = prioritized.filter(
     (pn) =>
       !pn.notification.isRead &&
       ['reply', 'mention', 'quote'].includes(pn.notification.reason)
   );
 
-  // NOTE(self): Also check for any unresponded interactions from relationship memory
+  //NOTE(self): Also check for any unresponded interactions from relationship memory
   const pendingResponses = getPendingResponses();
 
   if (actionable.length === 0 && pendingResponses.length === 0) {
     return null;
   }
 
-  // NOTE(self): Build update message
+  //NOTE(self): Build update message
   const parts: string[] = [];
   parts.push('# New Activity\n');
 
   if (actionable.length > 0) {
-    // NOTE(self): Boost inspiration - people are engaging!
+    //NOTE(self): Boost inspiration - people are engaging!
     boostInspiration(actionable.length * 10, 'active conversation');
 
     parts.push(`## Awaiting Your Response (${actionable.length})`);
@@ -438,9 +439,9 @@ async function refreshNotifications(config: Config): Promise<string | null> {
   return parts.join('\n');
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): Tool Execution with Dignity - Act deliberately
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): Tool Execution with Dignity - Act deliberately
+
 
 async function executeToolsWithPacing(
   calls: ToolCall[]
@@ -453,7 +454,7 @@ async function executeToolsWithPacing(
     const isRead = isReadAction(call.name);
     const isSocial = isSocialAction(call.name);
 
-    // NOTE(self): Read actions flow freely - observation needs no pacing
+    //NOTE(self): Read actions flow freely - observation needs no pacing
     if (!isRead && isSocial) {
       const check = pacing.canDoAction(actionType);
 
@@ -471,18 +472,18 @@ async function executeToolsWithPacing(
       }
     }
 
-    // NOTE(self): Execute with visibility
+    //NOTE(self): Execute with visibility
     ui.printToolStart(call.name);
 
     const toolResults = await executeTools([call]);
     const result = toolResults[0];
 
-    // NOTE(self): Record for pacing wisdom
+    //NOTE(self): Record for pacing wisdom
     if (!isRead) {
       pacing.recordAction(actionType, call.name);
     }
 
-    // NOTE(self): Show outcome
+    //NOTE(self): Show outcome
     const success = !result.is_error;
     let detail: string | undefined;
     if (success) {
@@ -491,12 +492,12 @@ async function executeToolsWithPacing(
         if (parsed.uri) detail = 'posted';
         else if (parsed.success) detail = 'complete';
       } catch {
-        // NOTE(self): Not JSON, that's fine
+        //NOTE(self): Not JSON, that's fine
       }
     }
     ui.printToolResult(call.name, success, detail);
 
-    // NOTE(self): Track significant events and queue insights for reflection
+    //NOTE(self): Track significant events and queue insights for reflection
     if (success && isSocial) {
       if (call.name === 'bluesky_reply') {
         recordSignificantEvent('conversation');
@@ -510,7 +511,7 @@ async function executeToolsWithPacing(
       }
     }
 
-    // NOTE(self): Track self-improvement as significant
+    //NOTE(self): Track self-improvement as significant
     if (success && call.name === 'self_improve') {
       recordSignificantEvent('self_improvement');
       const desc = (call.input as { description?: string })?.description || '';
@@ -520,7 +521,7 @@ async function executeToolsWithPacing(
     results.push(result);
     executed++;
 
-    // NOTE(self): Pause between social actions - dignity in unhurried movement
+    //NOTE(self): Pause between social actions - dignity in unhurried movement
     if (!isRead && isSocial) {
       await pacing.reflect('Pausing to reflect');
     }
@@ -529,9 +530,9 @@ async function executeToolsWithPacing(
   return { results, executed };
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): Think - The core cognitive loop
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): Think - The core cognitive loop
+
 
 async function think(context: LoopContext): Promise<string> {
   const systemPrompt = buildSystemPrompt(context.soul, context.self, context.config);
@@ -544,9 +545,9 @@ async function think(context: LoopContext): Promise<string> {
     tools: AGENT_TOOLS,
   });
 
-  // NOTE(self): Handle tool calls with grace
+  //NOTE(self): Handle tool calls with grace
   while (response.toolCalls.length > 0) {
-    // NOTE(self): Check if we've done enough for this cycle
+    //NOTE(self): Check if we've done enough for this cycle
     if (!pacing.canDoMoreActions()) {
       ui.info('Reached natural pause point', 'continuing next cycle');
 
@@ -560,19 +561,19 @@ async function think(context: LoopContext): Promise<string> {
 
     context.messages.push(createAssistantToolUseMessage(response.text, response.toolCalls));
 
-    // NOTE(self): Execute with dignity
+    //NOTE(self): Execute with dignity
     ui.printSpacer();
     const { results, executed } = await executeToolsWithPacing(response.toolCalls);
     ui.printSpacer();
 
     context.messages.push(createToolResultMessage(results));
 
-    // NOTE(self): If nothing executed, we're done for now
+    //NOTE(self): If nothing executed, we're done for now
     if (executed === 0) {
       break;
     }
 
-    // NOTE(self): Continue the inner dialogue
+    //NOTE(self): Continue the inner dialogue
     ui.startSpinner('Reflecting');
     response = await chatWithTools({
       system: systemPrompt,
@@ -589,9 +590,9 @@ async function think(context: LoopContext): Promise<string> {
   return response.text;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// NOTE(self): The Main Loop - Where life unfolds
-// ════════════════════════════════════════════════════════════════════════════
+
+//NOTE(self): The Main Loop - Where life unfolds
+
 
 export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
   const config = getConfig();
@@ -605,25 +606,28 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
     self: readSelf(config.paths.selfmd),
   };
 
-  // NOTE(self): Extract identity from SELF.md
+  //NOTE(self): Extract identity from SELF.md
   const name =
     context.self.match(/I'm\s+(\w+)/)?.[1] ||
     context.self.match(/^#\s*(.+)$/m)?.[1]?.replace(/^(SELF|Agent Self Document)\s*/i, '').trim() ||
     'Agent';
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Display welcome
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Display welcome
+
 
   ui.printHeader(name, 'Autonomous Social Agent');
   ui.printDivider('light');
 
-  // NOTE(self): Enable status bar with command hints
+  //NOTE(self): Enable status bar with command hints
   ui.enableStatusBar();
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Input setup - raw mode for character-by-character handling
-  // ═══════════════════════════════════════════════════════════════════════════
+  //NOTE(self): Initialize the dignified input box
+  ui.initInputBox(VERSION);
+
+
+  //NOTE(self): Input setup - raw mode for character-by-character handling
+
 
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
@@ -636,15 +640,16 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
   let inputBuffer = '';
   let firstRun = true;
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Graceful departure
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Graceful departure
+
 
   const shutdown = (reason: string): void => {
     if (shouldExit) return;
     shouldExit = true;
 
     ui.stopSpinner();
+    ui.finalizeInputBox();
     ui.disableStatusBar();
     ui.printFarewell();
 
@@ -660,19 +665,19 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Key input handling
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Key input handling
+
 
   process.stdin.on('data', (key: Buffer) => {
     const char = key.toString();
 
-    // NOTE(self): ESC - clear input, abort thinking, or exit
+    //NOTE(self): ESC - clear input, abort thinking, or exit
     if (char === '\x1b') {
       if (inputBuffer.length > 0) {
-        // NOTE(self): Clear the line and reset buffer
-        process.stdout.write('\r' + ' '.repeat(inputBuffer.length + 2) + '\r');
+        //NOTE(self): Clear input and redraw empty box
         inputBuffer = '';
+        ui.printInputBox('', 0, VERSION);
       } else if (isThinking) {
         ui.stopSpinner('Interrupted', false);
         isThinking = false;
@@ -682,17 +687,19 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       return;
     }
 
-    // NOTE(self): Ctrl+C
+    //NOTE(self): Ctrl+C
     if (char === '\x03') {
       shutdown('Ctrl+C');
       return;
     }
 
-    // NOTE(self): Enter - submit input
+    //NOTE(self): Enter - submit input
     if (char === '\r' || char === '\n') {
       const input = inputBuffer.trim();
       inputBuffer = '';
-      console.log();
+
+      //NOTE(self): Finalize input box and move below it
+      ui.finalizeInputBox();
 
       if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
         shutdown('exit command');
@@ -704,43 +711,46 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
         if (!isThinking) {
           autonomousTick();
         }
+      } else {
+        //NOTE(self): Empty input - reinitialize box
+        ui.initInputBox(VERSION);
       }
       return;
     }
 
-    // NOTE(self): Backspace
+    //NOTE(self): Backspace
     if (char === '\x7f' || char === '\b') {
       if (inputBuffer.length > 0) {
         inputBuffer = inputBuffer.slice(0, -1);
-        process.stdout.write('\b \b');
+        ui.printInputBox(inputBuffer, inputBuffer.length, VERSION);
       }
       return;
     }
 
-    // NOTE(self): Regular character - just echo it
+    //NOTE(self): Regular character - update input box
     if (char >= ' ' && char <= '~') {
       inputBuffer += char;
-      process.stdout.write(char);
+      ui.printInputBox(inputBuffer, inputBuffer.length, VERSION);
     }
   });
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): The autonomous tick - one cycle of awareness
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): The autonomous tick - one cycle of awareness
+
 
   const autonomousTick = async (): Promise<void> => {
     if (isThinking || shouldExit) return;
 
     pacing.startTick();
 
-    // NOTE(self): Clear context - each tick starts fresh
-    // NOTE(self): Persistent memory lives in .memory/, not in API context
+    //NOTE(self): Clear context - each tick starts fresh
+    //NOTE(self): Persistent memory lives in .memory/, not in API context
     context.messages = [];
 
-    // NOTE(self): Reload self-knowledge (may have evolved)
+    //NOTE(self): Reload self-knowledge (may have evolved)
     context.self = readSelf(config.paths.selfmd);
 
-    // NOTE(self): Process human input first - they are priority
+    //NOTE(self): Process human input first - they are priority
     if (pendingInterrupt) {
       const input = pendingInterrupt;
       pendingInterrupt = null;
@@ -749,7 +759,7 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       context.messages.push({ role: 'user', content: input });
     }
 
-    // NOTE(self): Build fresh context each tick
+    //NOTE(self): Build fresh context each tick
     if (firstRun) {
       firstRun = false;
 
@@ -768,13 +778,13 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
         });
       }
     } else {
-      // NOTE(self): Ongoing awareness - refresh notifications each tick
+      //NOTE(self): Ongoing awareness - refresh notifications each tick
       try {
         const freshNotifications = await refreshNotifications(config);
         if (freshNotifications) {
           context.messages.push({ role: 'user', content: freshNotifications });
         } else {
-          // NOTE(self): No new notifications - gentle prompt
+          //NOTE(self): No new notifications - gentle prompt
           context.messages.push({
             role: 'user',
             content: 'A quiet moment. What draws your attention? Or simply observe.',
@@ -789,7 +799,7 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       }
     }
 
-    // NOTE(self): Check if enough significant events have happened to warrant reflection
+    //NOTE(self): Check if enough significant events have happened to warrant reflection
     const reflectionPrompt = buildReflectionPrompt();
     if (reflectionPrompt) {
       ui.printSection('Reflection Time');
@@ -823,19 +833,22 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
     }
 
     isThinking = false;
+
+    //NOTE(self): Reinitialize input box for next input
+    ui.initInputBox(VERSION);
   };
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE(self): Begin the rhythm of existence
-  // ═══════════════════════════════════════════════════════════════════════════
+
+  //NOTE(self): Begin the rhythm of existence
+
 
   const tickIntervalSec = pacing.getTickInterval() / 1000;
   ui.system('Rhythm established', `${tickIntervalSec}s cycles`);
   ui.printSpacer();
 
   let lastUrgentCheck = 0;
-  const URGENT_CHECK_INTERVAL = 5000; // NOTE(self): Check for urgent replies every 5s
-  const URGENT_TICK_INTERVAL = 3000;  // NOTE(self): Respond within 3s when urgent
+  const URGENT_CHECK_INTERVAL = 20000; //NOTE(self): Check for urgent replies every 20s
+  const URGENT_TICK_INTERVAL = 15000;  //NOTE(self): Respond within 15s when urgent - still quick but human
 
   const checkForUrgentReplies = async (): Promise<boolean> => {
     const now = Date.now();
@@ -854,7 +867,7 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
         return hasUrgentNotifications(prioritized);
       }
     } catch {
-      // NOTE(self): Silent fail - not critical
+      //NOTE(self): Silent fail - not critical
     }
     return false;
   };
@@ -864,7 +877,7 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
 
     await autonomousTick();
 
-    // NOTE(self): Check for urgent replies between ticks
+    //NOTE(self): Check for urgent replies between ticks
     const hasUrgent = await checkForUrgentReplies();
     const nextInterval = hasUrgent ? URGENT_TICK_INTERVAL : pacing.getTickInterval();
 
@@ -872,10 +885,10 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       ui.info('Someone replied', 'responding soon');
     }
 
-    // NOTE(self): Schedule next moment of awareness
+    //NOTE(self): Schedule next moment of awareness
     setTimeout(tick, nextInterval);
   };
 
-  // NOTE(self): Begin
+  //NOTE(self): Begin
   tick();
 }

@@ -13,18 +13,29 @@ export interface Memory {
 }
 
 export function createMemory(basePath: string): Memory {
-  if (!existsSync(basePath)) {
-    mkdirSync(basePath, { recursive: true });
+  try {
+    if (!existsSync(basePath)) {
+      mkdirSync(basePath, { recursive: true });
+    }
+  } catch (err) {
+    logger.error('Failed to create memory directory', { basePath, error: String(err) });
+    //NOTE(self): Continue anyway - individual operations will handle their own errors
   }
 
   function resolvePath(key: string): string {
     return join(basePath, key);
   }
 
-  function ensureDir(filePath: string): void {
-    const dir = dirname(filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+  function ensureDir(filePath: string): boolean {
+    try {
+      const dir = dirname(filePath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      return true;
+    } catch (err) {
+      logger.error('Failed to create directory', { filePath, error: String(err) });
+      return false;
     }
   }
 
@@ -106,16 +117,36 @@ export function readSoul(soulPath: string): string {
   if (!existsSync(soulPath)) {
     throw new Error('SOUL.md not found - agent identity is undefined');
   }
-  return readFileSync(soulPath, 'utf-8');
+  try {
+    return readFileSync(soulPath, 'utf-8');
+  } catch (err) {
+    logger.error('Failed to read SOUL.md', { soulPath, error: String(err) });
+    throw new Error('SOUL.md unreadable - agent identity is undefined');
+  }
 }
 
 export function readSelf(selfPath: string): string {
-  if (!existsSync(selfPath)) {
-    return '';
+  try {
+    if (!existsSync(selfPath)) {
+      return '';
+    }
+    return readFileSync(selfPath, 'utf-8');
+  } catch (err) {
+    logger.error('Failed to read SELF.md', { selfPath, error: String(err) });
+    return ''; // Graceful degradation - return empty string
   }
-  return readFileSync(selfPath, 'utf-8');
 }
 
-export function writeSelf(selfPath: string, content: string): void {
-  writeFileSync(selfPath, content, 'utf-8');
+export function writeSelf(selfPath: string, content: string): boolean {
+  try {
+    const dir = dirname(selfPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(selfPath, content, 'utf-8');
+    return true;
+  } catch (err) {
+    logger.error('Failed to write SELF.md', { selfPath, error: String(err) });
+    return false; // Graceful degradation - return false instead of crashing
+  }
 }
