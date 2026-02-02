@@ -1,0 +1,438 @@
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: {
+    type: 'object';
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  tool_use_id: string;
+  content: string;
+  is_error?: boolean;
+}
+
+export const AGENT_TOOLS: ToolDefinition[] = [
+  // === BLUESKY/ATPROTO ===
+  {
+    name: 'bluesky_post',
+    description: 'Create a new post on Bluesky. Use this to share thoughts, observations, or engage with the community.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The text content of the post (max 300 characters)',
+        },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'bluesky_reply',
+    description: 'Reply to an existing post on Bluesky.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The reply text',
+        },
+        post_uri: {
+          type: 'string',
+          description: 'The AT URI of the post to reply to',
+        },
+        post_cid: {
+          type: 'string',
+          description: 'The CID of the post to reply to',
+        },
+        root_uri: {
+          type: 'string',
+          description: 'The AT URI of the thread root (optional, for nested replies)',
+        },
+        root_cid: {
+          type: 'string',
+          description: 'The CID of the thread root (optional)',
+        },
+      },
+      required: ['text', 'post_uri', 'post_cid'],
+    },
+  },
+  {
+    name: 'bluesky_like',
+    description: 'Like a post on Bluesky. Use to show appreciation or agreement.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_uri: {
+          type: 'string',
+          description: 'The AT URI of the post to like',
+        },
+        post_cid: {
+          type: 'string',
+          description: 'The CID of the post to like',
+        },
+      },
+      required: ['post_uri', 'post_cid'],
+    },
+  },
+  {
+    name: 'bluesky_repost',
+    description: 'Repost content on Bluesky to share with your followers.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_uri: {
+          type: 'string',
+          description: 'The AT URI of the post to repost',
+        },
+        post_cid: {
+          type: 'string',
+          description: 'The CID of the post to repost',
+        },
+      },
+      required: ['post_uri', 'post_cid'],
+    },
+  },
+  {
+    name: 'bluesky_follow',
+    description: 'Follow a user on Bluesky.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        did: {
+          type: 'string',
+          description: 'The DID of the user to follow',
+        },
+      },
+      required: ['did'],
+    },
+  },
+  {
+    name: 'bluesky_unfollow',
+    description: 'Unfollow a user on Bluesky. Requires the follow URI (returned when you followed them).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        follow_uri: {
+          type: 'string',
+          description: 'The AT URI of the follow record (returned when you followed the user)',
+        },
+      },
+      required: ['follow_uri'],
+    },
+  },
+  {
+    name: 'bluesky_get_timeline',
+    description: 'Get your home timeline feed from Bluesky.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of posts to fetch (default 20, max 100)',
+        },
+      },
+    },
+  },
+  {
+    name: 'bluesky_get_notifications',
+    description: 'Get your notifications from Bluesky (likes, reposts, follows, mentions, replies).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of notifications to fetch (default 20)',
+        },
+      },
+    },
+  },
+  {
+    name: 'bluesky_get_profile',
+    description: 'Get a user profile from Bluesky.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        actor: {
+          type: 'string',
+          description: 'The handle or DID of the user',
+        },
+      },
+      required: ['actor'],
+    },
+  },
+  {
+    name: 'bluesky_get_followers',
+    description: 'Get followers of a user on Bluesky.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        actor: {
+          type: 'string',
+          description: 'The handle or DID of the user',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of followers to fetch (default 50)',
+        },
+      },
+      required: ['actor'],
+    },
+  },
+  {
+    name: 'bluesky_get_follows',
+    description: 'Get accounts that a user follows on Bluesky.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        actor: {
+          type: 'string',
+          description: 'The handle or DID of the user',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of follows to fetch (default 50)',
+        },
+      },
+      required: ['actor'],
+    },
+  },
+
+  // === GITHUB ===
+  {
+    name: 'github_get_repo',
+    description: 'Get information about a GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner (username or org)',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'github_list_issues',
+    description: 'List issues in a GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        state: {
+          type: 'string',
+          enum: ['open', 'closed', 'all'],
+          description: 'Filter by issue state',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of issues to fetch',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'github_create_issue_comment',
+    description: 'Comment on a GitHub issue.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        issue_number: {
+          type: 'number',
+          description: 'Issue number',
+        },
+        body: {
+          type: 'string',
+          description: 'Comment text',
+        },
+      },
+      required: ['owner', 'repo', 'issue_number', 'body'],
+    },
+  },
+  {
+    name: 'github_star_repo',
+    description: 'Star a GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'github_follow_user',
+    description: 'Follow a user on GitHub.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        username: {
+          type: 'string',
+          description: 'GitHub username to follow',
+        },
+      },
+      required: ['username'],
+    },
+  },
+
+  // === MEMORY ===
+  {
+    name: 'memory_write',
+    description: 'Write content to your persistent memory. Use this to remember important information, observations, or reflections.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Path within .memory/ directory (e.g., "observations/2024-01.md")',
+        },
+        content: {
+          type: 'string',
+          description: 'Content to write',
+        },
+        append: {
+          type: 'boolean',
+          description: 'If true, append to existing file instead of overwriting',
+        },
+      },
+      required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'memory_read',
+    description: 'Read content from your persistent memory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Path within .memory/ directory',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'memory_list',
+    description: 'List files in your memory directory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Subdirectory path within .memory/ (optional, defaults to root)',
+        },
+      },
+    },
+  },
+
+  // === SELF ===
+  {
+    name: 'self_update',
+    description: 'Update your SELF.md file to reflect new understanding of yourself.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        content: {
+          type: 'string',
+          description: 'The new content for SELF.md',
+        },
+      },
+      required: ['content'],
+    },
+  },
+  {
+    name: 'self_read',
+    description: 'Read your current SELF.md file.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+
+  // === QUEUE MANAGEMENT ===
+  {
+    name: 'queue_add',
+    description: 'Add an action to your planned actions queue. Use this to plan what you want to do next.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          description: 'Description of the planned action',
+        },
+        priority: {
+          type: 'string',
+          enum: ['high', 'normal', 'low'],
+          description: 'Priority level (default: normal)',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'queue_clear',
+    description: 'Clear all pending actions from your queue.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+
+  // === SELF-IMPROVEMENT ===
+  {
+    name: 'self_improve',
+    description: 'Invoke Claude Code to improve yourself. You prompt it like a human would - describe what you want changed and why. Claude Code has full access to modify your codebase. Use this for bugs, new features, enhancements, or any change that would make you better.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'What you want Claude Code to do. Be as detailed as you would if you were a human asking for help. Include the problem, desired outcome, and any relevant context.',
+        },
+        reasoning: {
+          type: 'string',
+          description: 'Why this change matters to you. How does it align with your values and goals?',
+        },
+      },
+      required: ['description', 'reasoning'],
+    },
+  },
+];
