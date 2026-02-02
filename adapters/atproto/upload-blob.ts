@@ -1,5 +1,6 @@
 import { getSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
+import { logger } from '@modules/logger.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -41,13 +42,23 @@ export async function uploadBlob(
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to upload blob' };
+      const errorText = await response.text();
+      let errorMessage = 'Failed to upload blob';
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorMessage = errorJson.message || errorJson.error || errorText;
+      } catch {
+        errorMessage = errorText || `HTTP ${response.status}`;
+      }
+      logger.error('Blob upload failed', { status: response.status, error: errorMessage });
+      return { success: false, error: errorMessage };
     }
 
     const result = await response.json();
+    logger.debug('Blob upload response', { blob: result.blob });
     return { success: true, data: { blob: result.blob } };
   } catch (error) {
+    logger.error('Blob upload exception', { error: String(error) });
     return { success: false, error: String(error) };
   }
 }

@@ -21,6 +21,7 @@ import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import { markInteractionResponded } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
+import { processBase64ImageForUpload } from '@modules/image-processor.js';
 
 export interface ActionQueueItem {
   id: string;
@@ -82,25 +83,65 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           alt_text: string;
         };
 
-        //NOTE(self): First upload the image blob
-        const uploadResult = await atproto.uploadImageFromBase64(image_base64, image_mime_type);
+        //NOTE(self): Validate inputs
+        if (!image_base64 || image_base64.length === 0) {
+          return { tool_use_id: call.id, content: 'Error: image_base64 is empty or missing', is_error: true };
+        }
+
+        const originalSizeBytes = Math.ceil(image_base64.length * 0.75);
+        logger.info('Processing image for upload', {
+          originalMimeType: image_mime_type,
+          originalSizeKB: Math.round(originalSizeBytes / 1024),
+        });
+
+        //NOTE(self): Process image - resize, compress, optimize for Bluesky
+        let processedImage;
+        try {
+          processedImage = await processBase64ImageForUpload(image_base64);
+          logger.info('Image processed', {
+            originalSizeKB: Math.round(processedImage.originalSize / 1024),
+            processedSizeKB: Math.round(processedImage.processedSize / 1024),
+            dimensions: `${processedImage.width}x${processedImage.height}`,
+            mimeType: processedImage.mimeType,
+          });
+        } catch (err) {
+          logger.error('Image processing failed', { error: String(err) });
+          return { tool_use_id: call.id, content: `Error processing image: ${String(err)}`, is_error: true };
+        }
+
+        //NOTE(self): Upload the processed image blob
+        const uploadResult = await atproto.uploadBlob(processedImage.buffer, processedImage.mimeType);
         if (!uploadResult.success) {
           return { tool_use_id: call.id, content: `Error uploading image: ${uploadResult.error}`, is_error: true };
         }
 
-        //NOTE(self): Create post with the uploaded image
+        logger.info('Image blob uploaded', { blob: uploadResult.data.blob });
+
+        //NOTE(self): Create post with the uploaded image and aspect ratio
         const postResult = await atproto.createPost({
           text,
           images: [{
             alt: alt_text,
             image: uploadResult.data.blob,
+            aspectRatio: {
+              width: processedImage.width,
+              height: processedImage.height,
+            },
           }],
         });
 
         if (postResult.success) {
-          return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: postResult.data.uri }) };
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              uri: postResult.data.uri,
+              processedSize: processedImage.processedSize,
+              dimensions: `${processedImage.width}x${processedImage.height}`,
+            }),
+          };
         }
-        return { tool_use_id: call.id, content: `Error: ${postResult.error}`, is_error: true };
+        return { tool_use_id: call.id, content: `Error creating post: ${postResult.error}`, is_error: true };
       }
 
       case 'bluesky_reply': {

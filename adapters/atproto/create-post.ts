@@ -58,11 +58,17 @@ export async function createPost(
     if (params.images && params.images.length > 0) {
       record.embed = {
         $type: 'app.bsky.embed.images',
-        images: params.images.map((img) => ({
-          alt: img.alt,
-          image: img.image,
-          aspectRatio: img.aspectRatio,
-        })),
+        images: params.images.map((img) => {
+          const imageEmbed: Record<string, unknown> = {
+            alt: img.alt,
+            image: img.image,
+          };
+          //NOTE(self): Only include aspectRatio if provided
+          if (img.aspectRatio) {
+            imageEmbed.aspectRatio = img.aspectRatio;
+          }
+          return imageEmbed;
+        }),
       };
     }
 

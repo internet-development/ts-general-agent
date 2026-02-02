@@ -222,6 +222,7 @@ ts-general-agent/
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
 │   ├── anthropic.ts            # Claude API (SDK + raw fetch fallback)
+│   ├── image-processor.ts      # Image resize/compress for Bluesky (sharp)
 │   ├── exec.ts                 # Code execution for .self/
 │   └── loop.ts                 # Main autonomous loop
 │
