@@ -121,7 +121,7 @@ export class TerminalUI {
   private thinkingMessage = '';
   private inputBoxEnabled = false;
   private inputBoxHeight = 4; //NOTE(self): top border, 2 content lines, bottom border
-  private currentVersion = '0.0.2';
+  private currentVersion = '0.0.0'; //NOTE(self): Fallback, actual version passed from loop.ts
   private currentInputText = '';
   private currentCursorPos = 0;
 
@@ -337,7 +337,7 @@ export class TerminalUI {
   //NOTE(self): Anchored Input Box using scroll regions
 
   //NOTE(self): Setup scroll region and draw initial input box
-  initInputBox(version: string = '0.0.2'): void {
+  initInputBox(version: string = '0.0.0'): void {
     this.currentVersion = version;
     this.currentInputText = '';
     this.currentCursorPos = 0;
@@ -370,17 +370,17 @@ export class TerminalUI {
     });
   }
 
-  //NOTE(self): Redraw the input box at fixed bottom position
+  //NOTE(self): Redraw the input box at fixed bottom position (full width)
   private redrawInputBox(): void {
     if (!this.inputBoxEnabled) return;
 
     const height = getTerminalHeight();
-    const width = Math.min(getTerminalWidth() - 2, 78);
-    const innerWidth = width - 4;
+    const width = getTerminalWidth();
+    const innerWidth = width - 4; //NOTE(self): Account for borders and padding (│ + space + space + │)
 
-    //NOTE(self): Build the box lines
+    //NOTE(self): Build the box lines - full terminal width
     const hotkeys = 'ESC: clear  Ctrl+C: quit  Enter: send';
-    const topPadding = Math.max(0, innerWidth - hotkeys.length - 2);
+    const topPadding = Math.max(0, width - hotkeys.length - 4); //NOTE(self): 4 = ┌─ + space + ─┐
     const topLine = `${BOX.topLeft}${BOX.horizontal} ${hotkeys} ${BOX.horizontal.repeat(topPadding)}${BOX.topRight}`;
 
     const displayText = this.currentInputText || '';
@@ -389,7 +389,7 @@ export class TerminalUI {
     const line2 = (textLines[1] || '').padEnd(innerWidth);
 
     const ver = `v${this.currentVersion}`;
-    const bottomPadding = Math.max(0, innerWidth - ver.length - 1);
+    const bottomPadding = Math.max(0, width - ver.length - 5); //NOTE(self): 5 = └ + space + ver + space + ─┘
     const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(bottomPadding)} ${ver} ${BOX.horizontal}${BOX.bottomRight}`;
 
     //NOTE(self): Save cursor position in scroll region
@@ -418,7 +418,7 @@ export class TerminalUI {
   }
 
   //NOTE(self): Update input box content
-  printInputBox(text: string, cursorPos: number, version: string = '0.0.2'): void {
+  printInputBox(text: string, cursorPos: number, version: string = '0.0.0'): void {
     this.currentInputText = text;
     this.currentCursorPos = cursorPos;
     this.currentVersion = version;
@@ -426,7 +426,7 @@ export class TerminalUI {
   }
 
   //NOTE(self): Clear input and redraw
-  clearInputBox(version: string = '0.0.2'): void {
+  clearInputBox(version: string = '0.0.0'): void {
     this.printInputBox('', 0, version);
   }
 

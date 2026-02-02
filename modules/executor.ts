@@ -1,5 +1,11 @@
 import * as path from 'path';
+import { createRequire } from 'module';
 import { logger } from '@modules/logger.js';
+
+//NOTE(self): Read version from package.json for User-Agent
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
+const VERSION = pkg.version || '0.0.0';
 import { getConfig } from '@modules/config.js';
 import {
   safeReadFile,
@@ -342,7 +348,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         try {
           const response = await fetch(url, {
             headers: {
-              'User-Agent': 'ts-general-agent/0.0.2 (Autonomous Agent)',
+              'User-Agent': `ts-general-agent/${VERSION} (Autonomous Agent)`,
               'Accept': extract === 'json' ? 'application/json' : 'text/html,text/plain,*/*',
             },
           });

@@ -41,9 +41,12 @@ import {
   type PrioritizedNotification,
 } from '@modules/engagement.js';
 import { getSession, ensureValidSession } from '@adapters/atproto/authenticate.js';
+import { createRequire } from 'module';
 
-//NOTE(self): Version constant for display
-const VERSION = '0.0.2';
+//NOTE(self): Read version from package.json
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
+const VERSION = pkg.version || '0.0.0';
 
 
 //NOTE(self): Types
