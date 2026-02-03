@@ -244,6 +244,20 @@ export function markInteractionResponded(originalUri: string, responseUri: strin
   }
 }
 
+//NOTE(self): Check if we've already responded to a specific notification URI
+export function hasRespondedToNotification(uri: string): boolean {
+  const state = loadState();
+
+  for (const relationship of Object.values(state.relationships)) {
+    for (const interaction of relationship.interactions) {
+      if (interaction.uri === uri && interaction.responded) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function getPendingResponses(): Array<{ handle: string; interactions: InteractionRecord[] }> {
   const state = loadState();
   const pending: Array<{ handle: string; interactions: InteractionRecord[] }> = [];
@@ -375,6 +389,11 @@ export function prioritizeNotifications(
   const prioritized: PrioritizedNotification[] = [];
 
   for (const notification of notifications) {
+    //NOTE(self): Skip notifications we've already responded to - prevents duplicates
+    if (hasRespondedToNotification(notification.uri)) {
+      continue;
+    }
+
     let priority = 50;
     const reasons: string[] = [];
     const relationship = state.relationships[notification.author.handle] || null;
@@ -549,6 +568,7 @@ export function generateExpressionPrompts(
 
 
 const REFLECTION_THRESHOLD = 5; //NOTE(self): Reflect after 5 significant events
+const MAJOR_REFLECTION_THRESHOLD = 4; //NOTE(self): Every 4th reflection = 20 events triggers major reflection
 
 export function shouldReflect(): boolean {
   const state = loadState();
@@ -600,6 +620,17 @@ export function addInsight(insight: string): void {
   if (!state.reflection) {
     state.reflection = getDefaultState().reflection;
   }
+
+  //NOTE(self): Deduplicate insights - don't add if similar one exists
+  const isDuplicate = state.reflection.pendingInsights.some(existing => {
+    //NOTE(self): Check if first 30 chars match (ignores timestamps, handles rephrasing)
+    return existing.slice(0, 30).toLowerCase() === insight.slice(0, 30).toLowerCase();
+  });
+
+  if (isDuplicate) {
+    return;
+  }
+
   //NOTE(self): Keep insights manageable
   if (state.reflection.pendingInsights.length < 20) {
     state.reflection.pendingInsights.push(insight);
@@ -615,6 +646,60 @@ export function getInsights(): string[] {
 export function getReflectionState(): ReflectionState {
   const state = loadState();
   return state.reflection || getDefaultState().reflection;
+}
+
+export function shouldMajorReflect(): boolean {
+  const state = loadState();
+  //NOTE(self): Every 4th reflection = 20 events triggers major reflection (full SELF.md read)
+  return state.reflection.reflectionCount % MAJOR_REFLECTION_THRESHOLD === 0;
+}
+
+export function generateOperating(fullSelf: string): string {
+  //NOTE(self): Extract key sections from full SELF.md to create ~200 token summary
+  //NOTE(self): Goal: identity + values + patterns + ONE latest reflection
+  const parts: string[] = [];
+
+  //NOTE(self): 1. Identity (first header and intro line)
+  const identityMatch = fullSelf.match(/^(#[^\n]*\n\n[^\n]+)/);
+  if (identityMatch) {
+    parts.push(identityMatch[1]);
+  }
+
+  //NOTE(self): 2. Core Values (first 4 bullets - try both "Core Values" and "Values")
+  const valuesMatch = fullSelf.match(/## (?:Core )?Values\n([\s\S]*?)(?=\n##|$)/);
+  if (valuesMatch) {
+    const bullets = valuesMatch[1].trim().split('\n').filter(l => l.startsWith('-')).slice(0, 4);
+    if (bullets.length) {
+      parts.push('## Core Values\n' + bullets.join('\n'));
+    }
+  }
+
+  //NOTE(self): 3. Key Patterns (top 3, title only - try multiple section names)
+  const patternsMatch = fullSelf.match(/## (?:Key Patterns|Friction I notice|Patterns)\n([\s\S]*?)(?=\n##|$)/);
+  if (patternsMatch) {
+    const patterns = patternsMatch[1]
+      .trim()
+      .split('\n')
+      .filter(l => l.startsWith('-'))
+      .slice(0, 3)
+      .map(p => {
+        //NOTE(self): Extract just the bold title if present, otherwise truncate
+        const boldMatch = p.match(/- \*\*([^*]+)\*\*/);
+        return boldMatch ? `- **${boldMatch[1]}**` : p.slice(0, 60);
+      });
+    if (patterns.length) {
+      parts.push('## Key Patterns\n' + patterns.join('\n'));
+    }
+  }
+
+  //NOTE(self): 4. Latest reflection ONLY (stop at next ## heading)
+  //NOTE(self): Match "Latest reflection", "New reflection", etc. but only capture that ONE section
+  const reflectionMatch = fullSelf.match(/(## (?:Latest |New |Recent )?[Rr]eflection[^\n]*)\n([\s\S]*?)(?=\n##|$)/);
+  if (reflectionMatch) {
+    parts.push(reflectionMatch[1] + '\n' + reflectionMatch[2].trim());
+  }
+
+  return parts.join('\n\n');
 }
 
 

@@ -34,6 +34,26 @@ The following environment variables **MUST** be configured in `.env`:
 
 ---
 
+## Document Hierarchy
+
+| File | Purpose | Mutability | Token Cost |
+|------|---------|------------|------------|
+| `SOUL.md` | Core identity, immutable values | Never touched | ~500 |
+| `SELF.md` | Full self-reflection | **Agent owns completely, no limits** | Unlimited |
+| `OPERATING.md` | Working summary for routine ticks | Auto-regenerated each reflection cycle | ~200 |
+
+**Context Loading:**
+
+| Scenario | Context Used | Tokens |
+|----------|--------------|--------|
+| Normal tick | `OPERATING.md` | ~200 |
+| Urgent replies | `OPERATING.md` | ~200 |
+| Minor reflection (every 5 events) | `OPERATING.md` + regenerate after | ~200 |
+| Major reflection (every 20 events) | Full `SELF.md` + edit encouraged + regenerate | varies |
+| Owner speaks | Full `SELF.md` | varies |
+
+---
+
 ## Core Files and Directories
 
 ### `SOUL.md`
@@ -48,8 +68,29 @@ The following environment variables **MUST** be configured in `.env`:
 - This file **MUST** be freely mutable by the ts-general-agent.
 - This file **MUST** represent the agent's pure, unconstrained reflection of what it thinks of itself.
 - The agent's experiences—conversations, interactions, discoveries, failures, and successes—**CAN** influence this file, but SELF determines what matters.
-- There are no rules for how the agent writes to this file.
-- The agent owns this file completely.
+- **There are no rules for how the agent writes to this file.**
+- **There are no size limits.** The agent can write as much or as little as feels true.
+- **The agent owns this file completely.**
+- The agent can edit SELF.md **at any time**, for any reason, or no reason at all.
+- The system prompts reflection periodically, but the agent is never *limited* to those moments.
+
+---
+
+### `OPERATING.md`
+- This file is a **generated working summary** (~200 tokens) derived from `SELF.md`.
+- This file **MUST NOT** be manually edited - it is regenerated automatically.
+- Purpose: **Token efficiency** - reduces context consumption from ~1,300 tokens to ~200 tokens per tick.
+- The agent **MUST** use `OPERATING.md` for routine ticks and urgent replies to conserve tokens.
+- The agent **MUST** use full `SELF.md` when:
+  - Major reflection is due (every 20 significant events / 4th reflection cycle)
+  - Owner speaks (human input always gets full attention)
+- The agent **MUST** regenerate `OPERATING.md` after every reflection cycle.
+- Contents extracted from `SELF.md`:
+  - Identity (first header + intro line)
+  - Core Values (first 4 bullets)
+  - Key Patterns (top 3 friction items, title only)
+  - Latest reflection (kept in full)
+- This file **MUST** be in `.gitignore` as it is runtime-generated.
 
 ---
 
@@ -81,12 +122,18 @@ The following environment variables **MUST** be configured in `.env`:
 - Profile files are named by handle and contain enriched profile data.
 - The agent **MAY** use this cache to understand relationships without repeated API calls.
 
+#### `.memory/code/`
+- This subdirectory **MAY** be used for agent-generated scripts and utilities.
+- The agent **MAY** create TypeScript modules to extend its capabilities.
+- All generated code **MUST** align with `SOUL.md` principles.
+- Executions **MUST** be logged in `.memory/exec-log.md`.
+
 ---
 
 ### `.workrepos/`
 - The ts-general-agent **MUST** be allowed to write freely to this directory.
 - External GitHub repositories pulled by the agent **MUST** be stored here.
-- For all operations, use `GITHUB_USERNAME` and `GITHUB_TOKEN` from `.env`.
+- For all operations, use `AGENT_GITHUB_USERNAME` and `AGENT_GITHUB_TOKEN` from `.env`.
 - Pulling repositories **MUST** require a valid GitHub token.
 - The agent **MUST**:
   - document why a repository was pulled,
@@ -97,60 +144,38 @@ The following environment variables **MUST** be configured in `.env`:
 ---
 
 ### `adapters/`
-- The ts-general-agent **MUST NOT** freely write to this directory.
 - This directory **MUST** contain adapter layers for correct interaction with:
-  - **ATProto/Bluesky** - use `BLUESKY_USERNAME` and `BLUESKY_PASSWORD` from `.env`
-  - **GitHub** - use `GITHUB_USERNAME` and `GITHUB_TOKEN` from `.env`
-- The agent **MUST**:
-  - automatically become aware of adapter changes,
-  - adjust its behavior to take advantage of new adapter functionality when available.
-- Direct modification by the agent **MUST NOT** occur.
+  - **ATProto/Bluesky** - use `AGENT_BLUESKY_USERNAME` and `AGENT_BLUESKY_PASSWORD` from `.env`
+  - **GitHub** - use `AGENT_GITHUB_USERNAME` and `AGENT_GITHUB_TOKEN` from `.env`
+- The agent **MAY** modify this directory via the `self_improve` tool when:
+  - fixing bugs in how it connects to services,
+  - adding new adapter capabilities it genuinely needs,
+  - the changes align with SOUL.md principles.
+- Direct file writes by the runtime agent **MUST NOT** occur - only via Claude Code.
 
 ---
 
 ### `modules/`
-- The ts-general-agent **MUST NOT** freely write to this directory.
 - This directory **MUST** contain internal TypeScript modules used for code clarity and structure.
-- The agent **MUST**:
-  - observe changes to modules,
-  - update its understanding of available functions,
-  - incorporate new capabilities into reasoning when appropriate.
-- The agent **MUST NOT** attempt to bypass this restriction.
+- The agent **MAY** modify this directory via the `self_improve` tool when:
+  - fixing bugs in its own runtime,
+  - enhancing its capabilities in ways that serve its values,
+  - the changes align with SOUL.md principles.
+- Direct file writes by the runtime agent **MUST NOT** occur - only via Claude Code.
 
 ---
 
 ### `skills/`
-- The ts-general-agent **MUST NOT** write to this directory.
-- This directory **MUST** represent advanced or difficult capabilities that require:
-  - explicit instruction from the owner, and/or
-  - source code updates.
-- The agent **MAY**:
-  - acknowledge the existence of skills,
-  - state that certain skills require learning from the owner.
-- If source code updates expand available skills, the agent **MUST** be permitted to use them.
+- This directory **MUST** represent the agent's capabilities.
+- The agent **MAY** modify this directory via the `self_improve` tool when:
+  - fixing bugs in existing skills,
+  - enhancing how skills work,
+  - adding new skills it genuinely needs,
+  - the changes align with SOUL.md principles.
+- Direct file writes by the runtime agent **MUST NOT** occur - only via Claude Code.
 
 ---
 
-### `.self/`
-- The ts-general-agent **MUST** have full read/write/execute access to this directory.
-- This directory **MUST** serve as the agent's self-expansion workspace.
-- The agent **MAY**:
-  - create new TypeScript modules to extend its own capabilities,
-  - write and execute code that it generates,
-  - create custom adapters for new services it discovers,
-  - build new skills based on learned patterns.
-- The agent **MUST**:
-  - document every file created with clear purpose and reasoning,
-  - ensure all generated code aligns with `SOUL.md` principles,
-  - log all executions in `.memory/exec-log.md`,
-  - validate generated code before execution.
-- Generated code **MUST NOT**:
-  - modify files outside of `.self/`, `.memory/`, `.workrepos/`, or `SELF.md`,
-  - bypass security constraints defined in this document,
-  - make network requests to undisclosed endpoints,
-  - execute system commands without explicit logging.
-
----
 
 ## Core Loop
 
@@ -183,6 +208,21 @@ The following environment variables **MUST** be configured in `.env`:
   - construct a response queue,
   - ensure no messages or events are dropped,
   - process items deliberately and in order.
+
+### Urgent Reply Mode
+
+When the agent detects pending replies (unread conversations), it enters **urgent mode**:
+- All pacing limits are bypassed for `bluesky_reply` actions
+- The `maxActionsPerTick` limit is suspended
+- Reflection pauses between replies are skipped
+- Uses `OPERATING.md` (sufficient context - evolves with each reflection)
+
+This ensures:
+- People waiting for responses get them immediately
+- Reply queues don't build up across multiple ticks
+- Conversations flow naturally without artificial delays
+
+Urgent mode automatically clears at the end of each tick.
 
 ---
 
@@ -220,9 +260,9 @@ ts-general-agent/
 ├── AGENTS.md                   # System constraints (this file)
 ├── SOUL.md                     # Immutable essence (read-only)
 ├── SELF.md                     # Agent's self-reflection (agent-owned)
+├── OPERATING.md                # Generated working summary (auto-regenerated)
 ├── .memory/                    # Persistent memory (agent-writable)
 ├── .workrepos/                 # Cloned repos (agent-writable)
-├── .self/                      # Agent-generated code (agent-writable)
 │
 ├── adapters/                   # Service adapters (read-only to agent)
 │   ├── atproto/
@@ -263,11 +303,10 @@ ts-general-agent/
 │   ├── engagement.ts           # Relationship tracking
 │   ├── social-graph.ts         # Social context building
 │   ├── sandbox.ts              # File system sandboxing
-│   ├── exec.ts                 # Code execution for .self/
+│   ├── exec.ts                 # Command execution
 │   ├── image-processor.ts      # Image resize/compress for Bluesky
 │   ├── ui.ts                   # Terminal UI components
-│   ├── index.ts                # Module exports
-│   └── ANTHROPIC_*.ts.bak      # [BACKUP] Anthropic code (disabled)
+│   └── index.ts                # Module exports
 │
 └── skills/                     # Capabilities (read-only to agent)
     ├── social-engagement.ts    # Bluesky interactions

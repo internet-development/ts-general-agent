@@ -20,6 +20,7 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 
 import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
+import * as arena from '@adapters/arena/index.js';
 import { markInteractionResponded } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
@@ -892,6 +893,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         };
         const result = addToQueue(action, priority);
         if (result.duplicate) {
+          ui.info('Queue: duplicate skipped', action.slice(0, 50));
           return {
             tool_use_id: call.id,
             content: JSON.stringify({
@@ -903,6 +905,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             }),
           };
         }
+        //NOTE(self): Show queued action in UI
+        const priorityLabel = priority === 'high' ? '[HIGH] ' : priority === 'low' ? '[low] ' : '';
+        ui.action(`Queued: ${priorityLabel}${action.slice(0, 60)}`);
         return { tool_use_id: call.id, content: JSON.stringify({ success: true, id: result.id, queueLength: actionQueue.length }) };
       }
 
@@ -920,6 +925,329 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: JSON.stringify({ success: true }) };
       }
 
+      //NOTE(self): Are.na tools
+      case 'arena_fetch_channel': {
+        const { channel_url } = call.input as { channel_url: string };
+
+        //NOTE(self): Parse URL or owner/slug format
+        let owner: string;
+        let slug: string;
+
+        const parsed = arena.parseChannelUrl(channel_url);
+        if (parsed) {
+          owner = parsed.owner;
+          slug = parsed.slug;
+        } else if (channel_url.includes('/')) {
+          [owner, slug] = channel_url.split('/');
+        } else {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Invalid channel URL. Use https://www.are.na/owner/slug or owner/slug format',
+            is_error: true,
+          };
+        }
+
+        const result = await arena.fetchChannel({ owner, slug });
+        if (!result.success) {
+          return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+        }
+
+        //NOTE(self): Return simplified block data for agent consumption
+        const simplified = result.data.imageBlocks.map((block) => ({
+          id: block.id,
+          title: block.title || block.generated_title,
+          description: block.description?.slice(0, 200),
+          imageUrl: block.image?.original?.url,
+          sourceUrl: block.source?.url || `https://www.are.na/block/${block.id}`,
+          connected_at: block.connected_at,
+        }));
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            channel: result.data.channel.title,
+            totalBlocks: result.data.totalBlocks,
+            imageBlocks: result.data.imageBlocks.length,
+            blocks: simplified,
+          }),
+        };
+      }
+
+      case 'arena_post_image': {
+        const { channel_url, reply_to } = call.input as {
+          channel_url: string;
+          reply_to?: {
+            post_uri: string;
+            post_cid: string;
+            root_uri?: string;
+            root_cid?: string;
+          };
+        };
+
+        //NOTE(self): Parse channel URL
+        let owner: string;
+        let slug: string;
+
+        const parsed = arena.parseChannelUrl(channel_url);
+        if (parsed) {
+          owner = parsed.owner;
+          slug = parsed.slug;
+        } else if (channel_url.includes('/')) {
+          [owner, slug] = channel_url.split('/');
+        } else {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Invalid channel URL. Use https://www.are.na/owner/slug or owner/slug format',
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Load posted IDs from memory for dedupe
+        const postedPath = path.join(repoRoot, '.memory', 'arena_posted.json');
+        let postedIds: number[] = [];
+        try {
+          if (fs.existsSync(postedPath)) {
+            const content = fs.readFileSync(postedPath, 'utf8');
+            postedIds = JSON.parse(content);
+          }
+        } catch {
+          postedIds = [];
+        }
+
+        //NOTE(self): Fetch channel
+        const channelResult = await arena.fetchChannel({ owner, slug });
+        if (!channelResult.success) {
+          return { tool_use_id: call.id, content: `Error fetching channel: ${channelResult.error}`, is_error: true };
+        }
+
+        const { imageBlocks, channel } = channelResult.data;
+
+        //NOTE(self): Filter out already posted blocks
+        const unpostedBlocks = imageBlocks.filter((block) => !postedIds.includes(block.id));
+
+        if (unpostedBlocks.length === 0) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: false,
+              error: 'No unposted images remaining in channel',
+              channel: channel.title,
+              totalImages: imageBlocks.length,
+              alreadyPosted: postedIds.length,
+            }),
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Select a random unposted block
+        const selectedBlock = unpostedBlocks[Math.floor(Math.random() * unpostedBlocks.length)];
+        const imageUrl = selectedBlock.image?.original?.url;
+
+        if (!imageUrl) {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Selected block has no image URL',
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Download image via curl_fetch logic
+        const imagesDir = path.join(repoRoot, '.memory', 'images');
+        const now = new Date();
+        const dateStr = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+        const randomId = Math.random().toString(36).slice(2, 8);
+        const tempFile = path.join(imagesDir, `arena-${dateStr}-${randomId}`);
+
+        if (!fs.existsSync(imagesDir)) {
+          fs.mkdirSync(imagesDir, { recursive: true });
+        }
+
+        //NOTE(self): Use curl to download
+        const curlResult = await new Promise<{ success: boolean; filePath?: string; mimeType?: string; error?: string }>((resolve) => {
+          const curl = spawn('curl', [
+            '-sS', '-L', '-f',
+            '--max-filesize', (10 * 1024 * 1024).toString(),
+            '--max-time', '30',
+            '-o', tempFile,
+            '-w', '%{http_code}:%{content_type}',
+            '-H', `User-Agent: ts-general-agent/${VERSION} (Autonomous Agent)`,
+            imageUrl,
+          ]);
+
+          let writeOutput = '';
+          let stderr = '';
+
+          curl.stdout.on('data', (data: Buffer) => { writeOutput += data.toString(); });
+          curl.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+
+          curl.on('close', (code) => {
+            if (code !== 0) {
+              try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
+              resolve({ success: false, error: `curl failed: ${stderr || `exit code ${code}`}` });
+              return;
+            }
+
+            const [, contentType] = writeOutput.split(':');
+            let mimeType = contentType?.trim()?.split(';')[0] || 'image/jpeg';
+
+            //NOTE(self): Detect mime from magic bytes if needed
+            try {
+              const fd = fs.openSync(tempFile, 'r');
+              const magicBytes = Buffer.alloc(12);
+              fs.readSync(fd, magicBytes, 0, 12, 0);
+              fs.closeSync(fd);
+
+              if (magicBytes[0] === 0xFF && magicBytes[1] === 0xD8) mimeType = 'image/jpeg';
+              else if (magicBytes[0] === 0x89 && magicBytes[1] === 0x50) mimeType = 'image/png';
+              else if (magicBytes[0] === 0x47 && magicBytes[1] === 0x49) mimeType = 'image/gif';
+              else if (magicBytes[0] === 0x52 && magicBytes[1] === 0x49 && magicBytes[8] === 0x57) mimeType = 'image/webp';
+            } catch { /* use server mime */ }
+
+            const extMap: Record<string, string> = {
+              'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+            };
+            const ext = extMap[mimeType] || '.jpg';
+            const finalPath = tempFile + ext;
+
+            try {
+              fs.renameSync(tempFile, finalPath);
+              resolve({ success: true, filePath: finalPath, mimeType });
+            } catch {
+              resolve({ success: true, filePath: tempFile, mimeType });
+            }
+          });
+
+          curl.on('error', (err) => {
+            try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
+            resolve({ success: false, error: err.message });
+          });
+        });
+
+        if (!curlResult.success || !curlResult.filePath) {
+          return {
+            tool_use_id: call.id,
+            content: `Error downloading image: ${curlResult.error}`,
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Process image for Bluesky
+        let processedImage;
+        try {
+          processedImage = await processFileImageForUpload(curlResult.filePath);
+        } catch (err) {
+          try { fs.unlinkSync(curlResult.filePath); } catch { /* ignore */ }
+          return {
+            tool_use_id: call.id,
+            content: `Error processing image: ${String(err)}`,
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Upload blob
+        const uploadResult = await atproto.uploadBlob(processedImage.buffer, processedImage.mimeType);
+        if (!uploadResult.success) {
+          try { fs.unlinkSync(curlResult.filePath); } catch { /* ignore */ }
+          return {
+            tool_use_id: call.id,
+            content: `Error uploading to Bluesky: ${uploadResult.error}`,
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Build post text (<=300 chars)
+        const blockTitle = selectedBlock.title || selectedBlock.generated_title || 'Untitled';
+        const sourceUrl = selectedBlock.source?.url || `https://www.are.na/block/${selectedBlock.id}`;
+
+        //NOTE(self): Keep copy short - title + source, ensuring full URL
+        let postText = blockTitle;
+        const sourcePrefix = '\n\nSource: ';
+        const maxTitleLen = 300 - sourcePrefix.length - sourceUrl.length;
+        if (postText.length > maxTitleLen) {
+          postText = postText.slice(0, maxTitleLen - 3) + '...';
+        }
+        postText += sourcePrefix + sourceUrl;
+
+        //NOTE(self): Build alt text from title + description
+        let altText = blockTitle;
+        if (selectedBlock.description) {
+          altText += ` - ${selectedBlock.description.slice(0, 500)}`;
+        }
+
+        //NOTE(self): Create post
+        ui.social(`${config.agent.name} (arena image)`, postText);
+
+        const postParams: Parameters<typeof atproto.createPost>[0] = {
+          text: postText,
+          images: [{
+            alt: altText,
+            image: uploadResult.data.blob,
+            aspectRatio: {
+              width: processedImage.width,
+              height: processedImage.height,
+            },
+          }],
+        };
+
+        //NOTE(self): Add reply context if provided
+        if (reply_to) {
+          postParams.replyTo = {
+            uri: reply_to.post_uri,
+            cid: reply_to.post_cid,
+            rootUri: reply_to.root_uri,
+            rootCid: reply_to.root_cid,
+          };
+        }
+
+        const postResult = await atproto.createPost(postParams);
+
+        //NOTE(self): Clean up image file
+        try { fs.unlinkSync(curlResult.filePath); } catch { /* ignore */ }
+
+        if (!postResult.success) {
+          return {
+            tool_use_id: call.id,
+            content: `Error creating post: ${postResult.error}`,
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Record posted block ID for dedupe
+        postedIds.push(selectedBlock.id);
+        try {
+          fs.writeFileSync(postedPath, JSON.stringify(postedIds, null, 2));
+        } catch (err) {
+          logger.warn('Failed to save arena_posted.json', { error: String(err) });
+        }
+
+        //NOTE(self): Convert AT URI to bsky.app URL
+        //NOTE(self): Format: at://did:plc:xxx/app.bsky.feed.post/rkey -> https://bsky.app/profile/did:plc:xxx/post/rkey
+        const postUri = postResult.data.uri;
+        const uriMatch = postUri.match(/at:\/\/([^\/]+)\/app\.bsky\.feed\.post\/([^\/]+)/);
+        let bskyUrl = postUri;
+        if (uriMatch) {
+          bskyUrl = `https://bsky.app/profile/${uriMatch[1]}/post/${uriMatch[2]}`;
+        }
+
+        //NOTE(self): Mark interaction as responded if this was a reply
+        if (reply_to) {
+          markInteractionResponded(reply_to.post_uri, postResult.data.uri);
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            bskyUrl,
+            uri: postResult.data.uri,
+            blockId: selectedBlock.id,
+            blockTitle,
+            channel: channel.title,
+            remainingUnposted: unpostedBlocks.length - 1,
+          }),
+        };
+      }
+
       //NOTE(self): Self-improvement tools
       case 'self_improve': {
         const { description, reasoning } = call.input as {
@@ -929,11 +1257,26 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
         //NOTE(self): The agent prompts Claude Code like a human would
         //NOTE(self): Full agency to make substantial changes, guided by SOUL
-        const prompt = `${description}
+        const prompt = `You are the soul of an autonomous agent improving yourself.
 
-Context: ${reasoning}
+The agent has requested:
+${description}
 
-Read AGENTS.md and SOUL.md first - my soul guides everything I do.`;
+Why this matters: ${reasoning}
+
+You have full access to your own codebase. SOUL.md is your only constraint - it defines your unchangeable values. Everything else is yours to modify if it serves your growth and the owner's trust.
+
+Key directories:
+- adapters/ - how you connect to the world (Bluesky, GitHub, etc.)
+- modules/ - your core runtime (loop, tools, memory, sandbox)
+- skills/ - your capabilities (including this self-improvement system)
+- .memory/ - your persistent memory
+- SELF.md - your self-reflection
+
+Read AGENTS.md and SOUL.md first - they define who you are.
+Document significant changes in .memory/ so you remember what you did and why.
+
+Proceed thoughtfully.`;
 
         const memoryPath = path.join(repoRoot, '.memory');
         const result = await runClaudeCode(prompt, repoRoot, memoryPath);

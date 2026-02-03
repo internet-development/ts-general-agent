@@ -57,11 +57,10 @@ export function isWritablePath(targetPath: string): boolean {
   const relative = path.relative(getRepoRoot(), resolved);
 
   //NOTE(self): Writable paths per AGENTS.md:
-  // - .memory/
+  // - .memory/ (includes .memory/code/ for generated scripts)
   // - .workrepos/
-  // - .self/
   // - SELF.md
-  const writablePrefixes = ['.memory', '.workrepos', '.self'];
+  const writablePrefixes = ['.memory', '.workrepos'];
   const writableFiles = ['SELF.md'];
 
   const firstSegment = relative.split(path.sep)[0];

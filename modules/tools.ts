@@ -644,4 +644,44 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       required: ['description', 'reasoning'],
     },
   },
+
+  //NOTE(self): Are.na tools
+  {
+    name: 'arena_post_image',
+    description: 'Complete workflow: fetch an Are.na channel, select a random unposted image block, download it, and post to Bluesky with alt text and source URL. Tracks posted block IDs in .memory/arena_posted.json to avoid duplicates. Returns the bsky.app URL of the posted image.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel_url: {
+          type: 'string',
+          description: 'Are.na channel URL (e.g., https://www.are.na/www-jim/rpg-ui-01) or owner/slug format',
+        },
+        reply_to: {
+          type: 'object',
+          description: 'Optional: reply context for posting as a reply in a thread',
+          properties: {
+            post_uri: { type: 'string', description: 'AT URI of parent post' },
+            post_cid: { type: 'string', description: 'CID of parent post' },
+            root_uri: { type: 'string', description: 'AT URI of thread root (for nested replies)' },
+            root_cid: { type: 'string', description: 'CID of thread root' },
+          },
+        },
+      },
+      required: ['channel_url'],
+    },
+  },
+  {
+    name: 'arena_fetch_channel',
+    description: 'Fetch blocks from an Are.na channel. Returns image blocks with metadata. Use arena_post_image for the complete workflow.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel_url: {
+          type: 'string',
+          description: 'Are.na channel URL or owner/slug format',
+        },
+      },
+      required: ['channel_url'],
+    },
+  },
 ];

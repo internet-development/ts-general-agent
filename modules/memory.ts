@@ -150,3 +150,29 @@ export function writeSelf(selfPath: string, content: string): boolean {
     return false; // Graceful degradation - return false instead of crashing
   }
 }
+
+export function readOperating(operatingPath: string): string | null {
+  try {
+    if (!existsSync(operatingPath)) {
+      return null;
+    }
+    return readFileSync(operatingPath, 'utf-8');
+  } catch (err) {
+    logger.error('Failed to read OPERATING.md', { operatingPath, error: String(err) });
+    return null;
+  }
+}
+
+export function writeOperating(operatingPath: string, content: string): boolean {
+  try {
+    const dir = dirname(operatingPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(operatingPath, content, 'utf-8');
+    return true;
+  } catch (err) {
+    logger.error('Failed to write OPERATING.md', { operatingPath, error: String(err) });
+    return false;
+  }
+}

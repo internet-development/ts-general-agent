@@ -14,6 +14,7 @@ import { logger } from '@modules/logger.js';
 import { AGENT_TOOLS, type ToolDefinition, type ToolCall, type ToolResult } from '@modules/tools.js';
 
 const OPENAI_API = 'https://api.openai.com/v1';
+const API_TIMEOUT_MS = 180000; //NOTE(self): 3 minute timeout for API calls
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -223,6 +224,10 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
     body.reasoning = { effort: 'high' };
   }
 
+  //NOTE(self): Create abort controller for timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
   try {
     const response = await fetch(`${OPENAI_API}/responses`, {
       method: 'POST',
@@ -231,7 +236,10 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
         'Authorization': `Bearer ${config.openai.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       let errorMessage = `OpenAI API error (${response.status})`;
@@ -317,8 +325,27 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
       },
     };
   } catch (error) {
-    logger.error('Failed to call OpenAI Responses API', { error: String(error) });
-    throw error;
+    clearTimeout(timeoutId);
+
+    //NOTE(self): Handle specific error types with better messages
+    const errorStr = String(error);
+    let friendlyError: string;
+
+    if (error instanceof Error && error.name === 'AbortError') {
+      friendlyError = `API timeout after ${API_TIMEOUT_MS / 1000}s - server did not respond`;
+      logger.error('OpenAI API timeout', { timeoutMs: API_TIMEOUT_MS });
+    } else if (errorStr.includes('fetch failed') || errorStr.includes('ECONNREFUSED') || errorStr.includes('ENOTFOUND')) {
+      friendlyError = 'Network error - check internet connection';
+      logger.error('Network error calling OpenAI', { error: errorStr });
+    } else if (errorStr.includes('ETIMEDOUT') || errorStr.includes('ECONNRESET')) {
+      friendlyError = 'Connection dropped - will retry';
+      logger.error('Connection error calling OpenAI', { error: errorStr });
+    } else {
+      friendlyError = errorStr;
+      logger.error('Failed to call OpenAI Responses API', { error: errorStr });
+    }
+
+    throw new Error(friendlyError);
   }
 }
 

@@ -28,9 +28,9 @@ export interface Config {
     root: string;
     memory: string;
     workrepos: string;
-    self: string;
     soul: string;
     selfmd: string;
+    operating: string;
   };
 }
 
@@ -73,9 +73,9 @@ export function loadConfig(): Config {
       root,
       memory: join(root, '.memory'),
       workrepos: join(root, '.workrepos'),
-      self: join(root, '.self'),
       soul: join(root, 'SOUL.md'),
       selfmd: join(root, 'SELF.md'),
+      operating: join(root, 'OPERATING.md'),
     },
   };
 }

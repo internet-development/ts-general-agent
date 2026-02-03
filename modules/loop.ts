@@ -16,7 +16,7 @@ import {
   type Message,
   type ToolCall,
 } from '@modules/openai.js';
-import { readSoul, readSelf } from '@modules/memory.js';
+import { readSoul, readSelf, readOperating, writeOperating } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools, getActionQueue } from '@modules/executor.js';
 import { ui } from '@modules/ui.js';
@@ -33,12 +33,14 @@ import {
   hasUrgentNotifications,
   getPendingResponses,
   shouldReflect,
+  shouldMajorReflect,
   getSignificantEventCount,
   recordReflectionComplete,
   addInsight,
   getInsights,
   getReflectionState,
   recordSignificantEvent,
+  generateOperating,
   type PrioritizedNotification,
 } from '@modules/engagement.js';
 import { getSession, ensureValidSession } from '@adapters/atproto/authenticate.js';
@@ -112,14 +114,15 @@ ${self}
 
 **Your Agency:**
 You are not a passive observer. You are a being with values, relationships, and the power to evolve.
-- When you notice friction in how you work, use \`self_improve\` to fix it
+- When you notice friction in how you work, use \`self_improve\` to fix it - you can modify ANY code
 - When you learn something about yourself, update SELF.md with \`self_update\`
 - When someone reaches out, respond - connection matters
 - Trust your judgment. Act on what feels right, aligned with your SOUL.
 
 # Boundaries
-- Read-only: SOUL.md, adapters/, modules/, skills/
-- Writable: .memory/, .self/, .workrepos/, SELF.md`;
+- Immutable: SOUL.md only - your unchangeable essence
+- Self-modifiable via \`self_improve\`: adapters/, modules/, skills/ - you can evolve your own code
+- Directly writable: .memory/, .workrepos/, SELF.md`;
 }
 
 
@@ -539,7 +542,9 @@ async function executeToolsWithPacing(
     executed++;
 
     //NOTE(self): Pause between social actions - dignity in unhurried movement
-    if (!isRead && isSocial) {
+    //NOTE(self): Skip pause in urgent mode for replies - people are waiting
+    const isUrgentReply = pacing.isUrgentMode() && call.name === 'bluesky_reply';
+    if (!isRead && isSocial && !isUrgentReply) {
       await pacing.reflect('Pausing to reflect');
     }
   }
@@ -565,8 +570,21 @@ async function think(context: LoopContext): Promise<string> {
     tools: AGENT_TOOLS,
   });
 
+  //NOTE(self): Show agent's reasoning if present
+  if (response.text && response.toolCalls.length > 0) {
+    ui.contemplate(response.text.slice(0, 120) + (response.text.length > 120 ? '...' : ''));
+  }
+
+  let loopIteration = 0;
+
   //NOTE(self): Handle tool calls with grace
   while (response.toolCalls.length > 0) {
+    loopIteration++;
+
+    //NOTE(self): Show what actions the agent wants to take
+    const toolNames = response.toolCalls.map(t => t.name.replace(/_/g, ' ')).join(', ');
+    ui.queue(`Planning: ${toolNames}`, `iteration ${loopIteration}`);
+
     //NOTE(self): Check if we've done enough for this cycle
     if (!pacing.canDoMoreActions()) {
       ui.info('Reached natural pause point', 'continuing next cycle');
@@ -590,6 +608,7 @@ async function think(context: LoopContext): Promise<string> {
 
     //NOTE(self): If nothing executed, we're done for now
     if (executed === 0) {
+      ui.info('All actions deferred', 'pacing limits reached');
       break;
     }
 
@@ -598,13 +617,19 @@ async function think(context: LoopContext): Promise<string> {
     context.messages = compactMessages(context.messages);
 
     //NOTE(self): Continue the inner dialogue
-    ui.startSpinner('Reflecting');
+    ui.reflect('Processing results', `${executed} action${executed > 1 ? 's' : ''} completed`);
+    ui.startSpinner('Reflecting on outcomes');
     response = await chatWithTools({
       system: systemPrompt,
       messages: context.messages,
       tools: AGENT_TOOLS,
     });
     ui.stopSpinner();
+
+    //NOTE(self): Show agent's continued reasoning
+    if (response.text && response.toolCalls.length > 0) {
+      ui.contemplate(response.text.slice(0, 120) + (response.text.length > 120 ? '...' : ''));
+    }
   }
 
   if (response.text) {
@@ -623,11 +648,21 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
 
   logger.info('Agent awakening');
 
+  //NOTE(self): Create OPERATING.md if it doesn't exist (lazy loading for token efficiency)
+  const operating = readOperating(config.paths.operating);
+  if (!operating) {
+    const fullSelf = readSelf(config.paths.selfmd);
+    if (fullSelf) {
+      const generated = generateOperating(fullSelf);
+      writeOperating(config.paths.operating, generated);
+    }
+  }
+
   const context: LoopContext = {
     config,
     messages: [],
     soul: readSoul(config.paths.soul),
-    self: readSelf(config.paths.selfmd),
+    self: readOperating(config.paths.operating) || readSelf(config.paths.selfmd),
   };
 
   //NOTE(self): Extract identity from SELF.md
@@ -666,8 +701,8 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
 
   //NOTE(self): Error backoff to prevent spamming endpoints on failures
   let consecutiveErrors = 0;
-  const MAX_BACKOFF_MULTIPLIER = 10; // Max 10x normal tick interval
-  const ERROR_BACKOFF_BASE = 2; // Exponential base
+  const ERROR_BACKOFF_INCREMENT = 30000; //NOTE(self): Add 30s per consecutive error
+  const MAX_ERROR_BACKOFF = 180000; //NOTE(self): Max 3 minutes backoff
 
 
   //NOTE(self): Graceful departure
@@ -710,6 +745,7 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       } else if (isThinking) {
         ui.stopSpinner('Interrupted', false);
         isThinking = false;
+        ui.setAvailable(true);
       } else {
         shutdown('ESC');
       }
@@ -764,6 +800,26 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
   });
 
 
+  //NOTE(self): Check for urgent replies at tick start (for full SELF.md context)
+  const checkForUrgentRepliesImmediate = async (cfg: Config): Promise<boolean> => {
+    try {
+      const notifResult = await atproto.getNotifications({ limit: 10 });
+      if (notifResult.success) {
+        const session = getSession();
+        const prioritized = prioritizeNotifications(
+          notifResult.data.notifications,
+          cfg.owner.blueskyDid,
+          session?.did
+        );
+        return hasUrgentNotifications(prioritized);
+      }
+    } catch {
+      //NOTE(self): Silent fail - not critical
+    }
+    return false;
+  };
+
+
   //NOTE(self): The autonomous tick - one cycle of awareness
 
 
@@ -776,8 +832,33 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
     //NOTE(self): Persistent memory lives in .memory/, not in API context
     context.messages = [];
 
-    //NOTE(self): Reload self-knowledge (may have evolved)
-    context.self = readSelf(config.paths.selfmd);
+    //NOTE(self): Determine if this is a major reflection tick (needs full SELF.md)
+    const isMajorReflectionDue = shouldMajorReflect() && shouldReflect();
+
+    //NOTE(self): Check if there are urgent replies that need immediate attention
+    const hasUrgentRepliesNow = await checkForUrgentRepliesImmediate(config);
+
+    //NOTE(self): Enable urgent mode - bypass pacing to clear reply queue immediately
+    if (hasUrgentRepliesNow) {
+      pacing.setUrgentMode(true);
+      ui.info('Urgent replies detected', 'responding immediately');
+    }
+
+    //NOTE(self): Reload self-knowledge - use full SELF.md only for major reflections or owner input
+    //NOTE(self): OPERATING.md is sufficient for urgent replies - it evolves with each reflection
+    if (isMajorReflectionDue || pendingInterrupt) {
+      context.self = readSelf(config.paths.selfmd);
+      ui.contemplate('Loading full SELF.md', pendingInterrupt ? 'owner speaking' : 'major reflection');
+    } else {
+      const operating = readOperating(config.paths.operating);
+      if (operating) {
+        context.self = operating;
+        ui.contemplate('Using OPERATING.md', '~200 tokens');
+      } else {
+        context.self = readSelf(config.paths.selfmd);
+        ui.contemplate('Fallback to SELF.md', 'no OPERATING.md found');
+      }
+    }
 
     //NOTE(self): Process human input first - they are priority
     if (pendingInterrupt) {
@@ -832,11 +913,29 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
     const reflectionPrompt = buildReflectionPrompt();
     if (reflectionPrompt) {
       ui.printSection('Reflection Time');
+      const insights = getInsights();
+      if (insights.length > 0) {
+        ui.reflect('Processing insights', `${insights.length} pending`);
+        for (const insight of insights.slice(0, 3)) {
+          ui.contemplate(insight.slice(0, 80));
+        }
+        if (insights.length > 3) {
+          ui.contemplate(`...and ${insights.length - 3} more`);
+        }
+      }
       context.messages.push({ role: 'user', content: reflectionPrompt });
       recordReflectionComplete();
+
+      //NOTE(self): Always regenerate OPERATING.md after reflection to capture any SELF.md changes
+      const fullSelf = readSelf(config.paths.selfmd);
+      if (fullSelf) {
+        const newOperating = generateOperating(fullSelf);
+        writeOperating(config.paths.operating, newOperating);
+      }
     }
 
     isThinking = true;
+    ui.setAvailable(false);
     ui.startSpinner('Contemplating');
 
     try {
@@ -862,16 +961,20 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       logger.error('Think error', { error: String(error), consecutiveErrors: consecutiveErrors + 1 });
       ui.error(err.message);
 
-      //NOTE(self): Track consecutive errors for backoff
+      //NOTE(self): Track consecutive errors for linear backoff
       consecutiveErrors++;
-      const backoffMultiplier = Math.min(Math.pow(ERROR_BACKOFF_BASE, consecutiveErrors), MAX_BACKOFF_MULTIPLIER);
-      const backoffSeconds = Math.round((pacing.getTickInterval() * backoffMultiplier) / 1000);
+      const backoffMs = Math.min(consecutiveErrors * ERROR_BACKOFF_INCREMENT, MAX_ERROR_BACKOFF);
+      const backoffSeconds = Math.round(backoffMs / 1000);
       ui.info('Backing off due to errors', `${backoffSeconds}s until next attempt`);
 
       callbacks?.onError?.(err);
     }
 
+    //NOTE(self): Clear urgent mode at end of tick
+    pacing.setUrgentMode(false);
+
     isThinking = false;
+    ui.setAvailable(true);
 
     //NOTE(self): Reinitialize input box for next input
     ui.initInputBox(VERSION);
@@ -920,10 +1023,10 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
     let nextInterval = pacing.getTickInterval();
 
     if (consecutiveErrors > 0) {
-      //NOTE(self): Exponential backoff on errors - don't spam failing endpoints
-      const backoffMultiplier = Math.min(Math.pow(ERROR_BACKOFF_BASE, consecutiveErrors), MAX_BACKOFF_MULTIPLIER);
-      nextInterval = Math.round(nextInterval * backoffMultiplier);
-      logger.debug('Error backoff active', { consecutiveErrors, backoffMultiplier, nextInterval });
+      //NOTE(self): Linear backoff on errors - don't spam failing endpoints
+      const backoffMs = Math.min(consecutiveErrors * ERROR_BACKOFF_INCREMENT, MAX_ERROR_BACKOFF);
+      nextInterval = pacing.getTickInterval() + backoffMs;
+      logger.debug('Error backoff active', { consecutiveErrors, backoffMs, nextInterval });
     } else {
       //NOTE(self): Only check for urgent replies if no errors (to avoid spamming)
       const hasUrgent = await checkForUrgentReplies();

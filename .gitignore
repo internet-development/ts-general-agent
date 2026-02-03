@@ -8,7 +8,9 @@ dist/
 # Agent-writable directories (contain runtime data)
 .memory/
 .workrepos/
-.self/
 
 # Agent identity (created from template on first run)
 SELF.md
+
+# Generated working summary (regenerated each reflection cycle)
+OPERATING.md

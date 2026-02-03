@@ -124,6 +124,7 @@ export class TerminalUI {
   private currentVersion = '0.0.0'; //NOTE(self): Fallback, actual version passed from loop.ts
   private currentInputText = '';
   private currentCursorPos = 0;
+  private availableForMessage = true; //NOTE(self): Track if agent can be interrupted
 
   //NOTE(self): Write to the output area (scroll region)
   private writeOutput(text: string): void {
@@ -188,6 +189,18 @@ export class TerminalUI {
     this.log(SYM.square, ANSI.gray, 'sys', message, detail);
   }
 
+  reflect(message: string, detail?: string): void {
+    this.log(SYM.diamond, ANSI.brightCyan, 'refl', message, detail);
+  }
+
+  contemplate(message: string, detail?: string): void {
+    this.log(SYM.ring, ANSI.cyan, 'mind', message, detail);
+  }
+
+  queue(message: string, detail?: string): void {
+    this.log(SYM.pointer, ANSI.yellow, 'queue', message, detail);
+  }
+
   //NOTE(self): Spinner - just prints a message, no animation that interferes
   startSpinner(message: string): void {
     this.thinkingMessage = message;
@@ -212,6 +225,18 @@ export class TerminalUI {
 
   isSpinnerActive(): boolean {
     return this.thinkingMessage !== '';
+  }
+
+  //NOTE(self): Set availability status for message interruption
+  setAvailable(available: boolean): void {
+    this.availableForMessage = available;
+    if (this.inputBoxEnabled) {
+      this.redrawInputBox();
+    }
+  }
+
+  isAvailable(): boolean {
+    return this.availableForMessage;
   }
 
   //NOTE(self): Header
@@ -379,9 +404,12 @@ export class TerminalUI {
     const innerWidth = width - 4; //NOTE(self): Account for borders and padding (│ + space + space + │)
 
     //NOTE(self): Build the box lines - full terminal width
-    const hotkeys = 'ESC: clear  Ctrl+C: quit  Enter: send';
+    const statusTag = this.availableForMessage ? '[Available]' : '[Thinking...]';
+    const statusColor = this.availableForMessage ? ANSI.green : ANSI.yellow;
+    const hotkeys = `${statusTag}  ESC: clear  Ctrl+C: quit  Enter: send`;
     const topPadding = Math.max(0, width - hotkeys.length - 4); //NOTE(self): 4 = ┌─ + space + ─┐
-    const topLine = `${BOX.topLeft}${BOX.horizontal} ${hotkeys} ${BOX.horizontal.repeat(topPadding)}${BOX.topRight}`;
+    const topLineContent = `${statusColor}${statusTag}${ANSI.reset}  ESC: clear  Ctrl+C: quit  Enter: send`;
+    const topLine = `${BOX.topLeft}${BOX.horizontal} ${topLineContent} ${BOX.horizontal.repeat(topPadding)}${BOX.topRight}`;
 
     const displayText = this.currentInputText || '';
     const textLines = wrapText(displayText, innerWidth);

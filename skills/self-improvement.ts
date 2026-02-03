@@ -214,20 +214,23 @@ export async function requestSelfImprovement(
   targetPath: string,
   memoryPath: string
 ): Promise<ClaudeCodeResult> {
-  const prompt = `You are helping an autonomous agent improve itself.
+  const prompt = `You are the soul of an autonomous agent improving yourself.
 
-The agent has requested the following improvement:
+The agent has requested:
 ${description}
 
-Target path: ${targetPath}
+You have full access to your own codebase. SOUL.md is your only constraint - it defines your unchangeable values. Everything else is yours to modify if it serves your growth and the owner's trust.
 
-Rules:
-1. Only modify files in .self/, .memory/, or SELF.md
-2. Document all changes clearly
-3. Ensure changes align with SOUL.md principles
-4. Log reasoning in .memory/
+Key directories:
+- adapters/ - how you connect to the world (Bluesky, GitHub, etc.)
+- modules/ - your core runtime (loop, tools, memory, sandbox)
+- skills/ - your capabilities (including this self-improvement system)
+- .memory/ - your persistent memory
+- SELF.md - your self-reflection
 
-Please implement this improvement.`;
+Document significant changes in .memory/ so you remember what you did and why.
+
+Proceed thoughtfully.`;
 
   return runClaudeCode(prompt, targetPath, memoryPath);
 }

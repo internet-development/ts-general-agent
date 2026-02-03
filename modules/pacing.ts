@@ -56,9 +56,25 @@ class PacingManager {
   private actionHistory: ActionRecord[] = [];
   private actionsThisTick = 0;
   private lastTickTime = 0;
+  private urgentMode = false;
 
   constructor(limits: RateLimits = DEFAULT_LIMITS) {
     this.limits = limits;
+  }
+
+
+  //NOTE(self): Urgent Mode - bypass pacing for immediate replies
+
+
+  setUrgentMode(urgent: boolean): void {
+    this.urgentMode = urgent;
+    if (urgent) {
+      logger.debug('Urgent mode enabled - replies will flow immediately');
+    }
+  }
+
+  isUrgentMode(): boolean {
+    return this.urgentMode;
   }
 
 
@@ -87,6 +103,10 @@ class PacingManager {
   }
 
   canDoMoreActions(): boolean {
+    //NOTE(self): Urgent mode allows unlimited actions - clear the queue
+    if (this.urgentMode) {
+      return true;
+    }
     return this.actionsThisTick < this.limits.maxActionsPerTick;
   }
 
@@ -135,6 +155,11 @@ class PacingManager {
 
   canDoAction(type: string): { allowed: boolean; waitSeconds: number; reason?: string } {
     const now = Date.now();
+
+    //NOTE(self): Urgent mode bypasses all pacing for replies - people deserve quick responses
+    if (this.urgentMode && type === 'reply') {
+      return { allowed: true, waitSeconds: 0 };
+    }
 
     //NOTE(self): Check actions per tick limit
     if (!this.canDoMoreActions()) {
