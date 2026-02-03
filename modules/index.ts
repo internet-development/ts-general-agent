@@ -10,7 +10,6 @@ export * from '@modules/tools.js';
 export * from '@modules/executor.js';
 export * from '@modules/ui.js';
 export * from '@modules/pacing.js';
-export * from '@modules/action-queue.js';
 export * from '@modules/post-log.js';
 
 //NOTE(self): New scheduler architecture modules

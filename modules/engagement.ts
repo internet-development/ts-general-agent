@@ -3,18 +3,14 @@
  *
  * //NOTE(self): Thoughtful engagement that exceeds human capability.
  * //NOTE(self): Post from the heart, respond with care, remember relationships.
- * //NOTE(self): Quality and authenticity over frequency.
+ * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import type { AtprotoNotification, AtprotoProfile } from '@adapters/atproto/types.js';
+import type { AtprotoNotification } from '@adapters/atproto/types.js';
 
 
-//NOTE(self): Engagement State - Track relationships and posting rhythm
+//NOTE(self): Types
 
-
-const MEMORY_ENGAGEMENT_PATH = '.memory/engagement';
 
 interface RelationshipRecord {
   handle: string;
@@ -56,19 +52,33 @@ interface EngagementState {
   posting: PostingState;
   reflection: ReflectionState;
   lastStateUpdate: string;
+  todayStart: string;
 }
 
-//NOTE(self): Default state for fresh starts
-//NOTE(self): dailyPostLimit increased - scheduler handles pacing, not arbitrary limits
+
+//NOTE(self): In-memory state (resets on restart)
+
+//NOTE(self): Track which post URIs we've replied to (prevents multiple replies to same post)
+const repliedToPostUris = new Set<string>();
+
+export function hasRepliedToPost(postUri: string): boolean {
+  return repliedToPostUris.has(postUri);
+}
+
+export function markPostReplied(postUri: string): void {
+  repliedToPostUris.add(postUri);
+}
+
 function getDefaultState(): EngagementState {
+  const now = new Date();
   return {
     relationships: {},
     posting: {
       lastOriginalPost: null,
       lastReflection: null,
       postsToday: 0,
-      dailyPostLimit: 12, //NOTE(self): ~8-10 during waking hours is reasonable
-      inspirationLevel: 50, //NOTE(self): Kept for backward compat, not used for gating
+      dailyPostLimit: 12,
+      inspirationLevel: 50,
     },
     reflection: {
       lastReflection: null,
@@ -77,78 +87,35 @@ function getDefaultState(): EngagementState {
       pendingInsights: [],
       significantEvents: 0,
     },
-    lastStateUpdate: new Date().toISOString(),
+    lastStateUpdate: now.toISOString(),
+    todayStart: now.toISOString().split('T')[0],
   };
 }
 
-
-//NOTE(self): State Persistence
-
-
-function ensureEngagementDir(): boolean {
-  try {
-    if (!fs.existsSync(MEMORY_ENGAGEMENT_PATH)) {
-      fs.mkdirSync(MEMORY_ENGAGEMENT_PATH, { recursive: true });
-    }
-    return true;
-  } catch {
-    //NOTE(self): Directory creation failed - will try again on next operation
-    return false;
-  }
-}
+let engagementState: EngagementState = getDefaultState();
 
 function loadState(): EngagementState {
-  //NOTE(self): Ensure directory exists before any read
-  ensureEngagementDir();
+  const now = new Date();
+  const todayStart = now.toISOString().split('T')[0];
 
-  const statePath = path.join(MEMORY_ENGAGEMENT_PATH, 'state.json');
-  try {
-    if (fs.existsSync(statePath)) {
-      const data = fs.readFileSync(statePath, 'utf-8');
-      const state = JSON.parse(data) as EngagementState;
-
-      //NOTE(self): Reset daily counters if it's a new day
-      const lastUpdate = new Date(state.lastStateUpdate);
-      const now = new Date();
-      if (lastUpdate.toDateString() !== now.toDateString()) {
-        state.posting.postsToday = 0;
-        state.posting.inspirationLevel = 50;
-      }
-
-      //NOTE(self): Migrate older state files that don't have reflection
-      if (!state.reflection) {
-        state.reflection = getDefaultState().reflection;
-      }
-
-      //NOTE(self): Ensure pendingInsights array exists
-      if (!state.reflection.pendingInsights) {
-        state.reflection.pendingInsights = [];
-      }
-
-      return state;
-    }
-  } catch {
-    //NOTE(self): Corrupted state, start fresh
+  //NOTE(self): Reset daily counters if it's a new day
+  if (engagementState.todayStart !== todayStart) {
+    engagementState.posting.postsToday = 0;
+    engagementState.posting.inspirationLevel = 50;
+    engagementState.todayStart = todayStart;
   }
-  return getDefaultState();
+
+  return engagementState;
 }
 
 function saveState(state: EngagementState): boolean {
-  try {
-    ensureEngagementDir();
-    state.lastStateUpdate = new Date().toISOString();
-    const statePath = path.join(MEMORY_ENGAGEMENT_PATH, 'state.json');
-    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
-    return true;
-  } catch {
-    //NOTE(self): State save failed - will try again on next operation
-    //NOTE(self): Don't crash - graceful degradation
-    return false;
-  }
+  state.lastStateUpdate = new Date().toISOString();
+  engagementState = state;
+  return true;
 }
 
 
-//NOTE(self): Relationship Management - Remember who engages with us
+//NOTE(self): Relationship Management
 
 
 export function recordInteraction(
@@ -157,13 +124,10 @@ export function recordInteraction(
   responseUri?: string
 ): void {
   const state = loadState();
-
   const handle = notification.author.handle;
   const did = notification.author.did;
 
-  const isNewRelationship = !state.relationships[handle];
-
-  if (isNewRelationship) {
+  if (!state.relationships[handle]) {
     state.relationships[handle] = {
       handle,
       did,
@@ -174,19 +138,13 @@ export function recordInteraction(
       sentiment: 'unknown',
       responded: false,
     };
-
-    //NOTE(self): Track new relationship as significant event
-    if (!state.reflection) {
-      state.reflection = getDefaultState().reflection;
-    }
     state.reflection.significantEvents++;
-    state.reflection.pendingInsights.push(`Met someone new: @${handle} - what do they seem to care about?`);
+    state.reflection.pendingInsights.push(`Met someone new: @${handle}`);
   }
 
   const relationship = state.relationships[handle];
   relationship.lastInteraction = new Date().toISOString();
 
-  //NOTE(self): Don't duplicate the same interaction
   const existingInteraction = relationship.interactions.find((i) => i.uri === notification.uri);
   if (!existingInteraction) {
     relationship.interactions.push({
@@ -197,7 +155,6 @@ export function recordInteraction(
       responseUri,
     });
 
-    //NOTE(self): Keep interaction history manageable
     if (relationship.interactions.length > 50) {
       relationship.interactions = relationship.interactions.slice(-50);
     }
@@ -206,7 +163,7 @@ export function recordInteraction(
     existingInteraction.responseUri = responseUri;
   }
 
-  //NOTE(self): Update sentiment based on interaction types
+  //NOTE(self): Update sentiment
   const positiveTypes = ['like', 'repost', 'follow'];
   const recentPositive = relationship.interactions
     .slice(-10)
@@ -219,7 +176,6 @@ export function recordInteraction(
   }
 
   relationship.responded = relationship.interactions.some((i) => i.responded);
-
   saveState(state);
 }
 
@@ -228,7 +184,6 @@ export function getRelationship(handle: string): RelationshipRecord | null {
   return state.relationships[handle] || null;
 }
 
-//NOTE(self): Mark an interaction as responded when we reply
 export function markInteractionResponded(originalUri: string, responseUri: string): void {
   const state = loadState();
 
@@ -245,7 +200,6 @@ export function markInteractionResponded(originalUri: string, responseUri: strin
   }
 }
 
-//NOTE(self): Check if we've already responded to a specific notification URI
 export function hasRespondedToNotification(uri: string): boolean {
   const state = loadState();
 
@@ -272,7 +226,6 @@ export function getPendingResponses(): Array<{ handle: string; interactions: Int
     }
   }
 
-  //NOTE(self): Sort by oldest first (FIFO for fairness)
   return pending.sort((a, b) => {
     const aOldest = a.interactions[0]?.timestamp || '';
     const bOldest = b.interactions[0]?.timestamp || '';
@@ -281,8 +234,7 @@ export function getPendingResponses(): Array<{ handle: string; interactions: Int
 }
 
 
-//NOTE(self): Posting Intelligence - When and what to share
-//NOTE(self): Simplified for scheduler-based expression - no more inspiration gating
+//NOTE(self): Posting Intelligence
 
 
 export interface PostingDecision {
@@ -292,33 +244,28 @@ export interface PostingDecision {
   inspirationSource?: string;
 }
 
-//NOTE(self): Simplified posting check - scheduler handles timing now
-//NOTE(self): This is kept for backward compatibility and manual posting checks
 export function canPostOriginal(): PostingDecision {
   const state = loadState();
   const posting = state.posting;
   const now = new Date();
 
-  //NOTE(self): Check daily limit - reasonable cap
   if (posting.postsToday >= posting.dailyPostLimit) {
     return {
       shouldPost: false,
-      reason: `Already shared ${posting.postsToday} thoughts today. Saving voice for tomorrow.`,
+      reason: `Already shared ${posting.postsToday} thoughts today.`,
     };
   }
 
-  //NOTE(self): Time-based wisdom - quiet hours
   const hour = now.getHours();
   const isQuietHours = hour >= 23 || hour < 7;
   if (isQuietHours) {
     return {
       shouldPost: false,
-      reason: 'Quiet hours - resting and observing.',
+      reason: 'Quiet hours - resting.',
       suggestedTone: 'quiet',
     };
   }
 
-  //NOTE(self): Determine tone based on time of day
   let suggestedTone: PostingDecision['suggestedTone'] = 'reflective';
   if (hour >= 7 && hour < 10) {
     suggestedTone = 'curious';
@@ -330,7 +277,6 @@ export function canPostOriginal(): PostingDecision {
     suggestedTone = 'celebratory';
   }
 
-  //NOTE(self): Ready to share - scheduler handles pacing
   return {
     shouldPost: true,
     reason: 'Ready to share.',
@@ -353,7 +299,7 @@ export function boostInspiration(amount: number = 10, source?: string): void {
 }
 
 
-//NOTE(self): Response Priority - Who deserves attention first?
+//NOTE(self): Notification Priority
 
 
 export interface PrioritizedNotification {
@@ -373,7 +319,6 @@ export function prioritizeNotifications(
   const prioritized: PrioritizedNotification[] = [];
 
   for (const notification of notifications) {
-    //NOTE(self): Skip notifications we've already responded to - prevents duplicates
     if (hasRespondedToNotification(notification.uri)) {
       continue;
     }
@@ -382,64 +327,50 @@ export function prioritizeNotifications(
     const reasons: string[] = [];
     const relationship = state.relationships[notification.author.handle] || null;
 
-    //NOTE(self): Check if this is a response to our own content
     const isResponseToOwnContent = agentDid
       ? notification.uri.includes(agentDid) ||
         (notification.record as { reply?: { parent?: { uri?: string } } })?.reply?.parent?.uri?.includes(agentDid) ||
         false
       : false;
 
-    //NOTE(self): HIGHEST priority - responses to our own posts/replies
-    //NOTE(self): When someone replies to what we wrote, respond quickly!
     if (isResponseToOwnContent && ['reply', 'mention', 'quote'].includes(notification.reason)) {
       priority += 50;
       reasons.push('response to your content');
     }
 
-    //NOTE(self): High priority - direct conversations (replies, mentions)
     if (notification.reason === 'reply' || notification.reason === 'mention') {
       priority += 30;
       reasons.push('direct conversation');
     }
 
-    //NOTE(self): Quote posts deserve thoughtful response
     if (notification.reason === 'quote') {
       priority += 25;
       reasons.push('quoted your thought');
     }
 
-    //NOTE(self): Owner always gets priority
     if (notification.author.did === ownerDid) {
       priority += 50;
       reasons.push('owner interaction');
     }
 
-    //NOTE(self): Existing relationships matter
     if (relationship) {
       if (relationship.sentiment === 'positive') {
         priority += 15;
         reasons.push('positive relationship');
       }
-
-      //NOTE(self): Reciprocity - they engaged multiple times
-      const interactionCount = relationship.interactions.length;
-      if (interactionCount >= 5) {
+      if (relationship.interactions.length >= 5) {
         priority += 10;
         reasons.push('recurring engager');
       }
-
-      //NOTE(self): Haven't responded to them yet - fairness
       if (!relationship.responded) {
         priority += 20;
         reasons.push('awaiting first response');
       }
     } else {
-      //NOTE(self): New people deserve acknowledgment
       priority += 5;
       reasons.push('new connection');
     }
 
-    //NOTE(self): Unread notifications are fresher
     if (!notification.isRead) {
       priority += 10;
       reasons.push('unread');
@@ -454,34 +385,24 @@ export function prioritizeNotifications(
     });
   }
 
-  //NOTE(self): Sort by priority descending
   return prioritized.sort((a, b) => b.priority - a.priority);
 }
 
-//NOTE(self): Check if there are high-priority notifications that need quick response
 export function hasUrgentNotifications(notifications: PrioritizedNotification[]): boolean {
-  //NOTE(self): Check for replies to our content
-  const hasUrgentReplies = notifications.some(
+  return notifications.some(
     (pn) =>
       pn.isResponseToOwnContent &&
       ['reply', 'mention', 'quote'].includes(pn.notification.reason) &&
       !pn.notification.isRead
-  );
-
-  if (hasUrgentReplies) return true;
-
-  //NOTE(self): Also check for any unread direct conversations
-  const hasUnreadConversations = notifications.some(
+  ) || notifications.some(
     (pn) =>
       ['reply', 'mention', 'quote'].includes(pn.notification.reason) &&
       !pn.notification.isRead
   );
-
-  return hasUnreadConversations;
 }
 
 
-//NOTE(self): Notification Triage - Group and sort for efficient processing
+//NOTE(self): Notification Triage
 
 
 export interface TriagedThread {
@@ -494,10 +415,6 @@ export interface TriagedThread {
   notificationCount: number;
 }
 
-/**
- * Extract thread root URI from a notification
- * Falls back to the notification's own URI if no root is available
- */
 function getThreadRootUri(notification: AtprotoNotification): string {
   const record = notification.record as {
     reply?: {
@@ -506,30 +423,15 @@ function getThreadRootUri(notification: AtprotoNotification): string {
     };
   };
 
-  //NOTE(self): For replies, use the root of the thread
   if (record?.reply?.root?.uri) {
     return record.reply.root.uri;
   }
-
-  //NOTE(self): Fall back to parent URI if root isn't available
   if (record?.reply?.parent?.uri) {
     return record.reply.parent.uri;
   }
-
-  //NOTE(self): For non-replies (mentions, quotes), use the notification's own URI
   return notification.uri;
 }
 
-/**
- * Triage notifications into threads, sorted by priority
- *
- * Sorting order:
- * 1. Owner threads first
- * 2. Recurring engagers (5+ interactions)
- * 3. Oldest-first within each thread (to maintain conversation flow)
- *
- * This prevents notification backlog from causing half-answered threads
- */
 export function triageNotifications(
   notifications: PrioritizedNotification[],
   ownerDid: string
@@ -537,7 +439,6 @@ export function triageNotifications(
   const state = loadState();
   const threadMap = new Map<string, TriagedThread>();
 
-  //NOTE(self): Group notifications by thread root
   for (const pn of notifications) {
     const rootUri = getThreadRootUri(pn.notification);
 
@@ -557,7 +458,6 @@ export function triageNotifications(
     thread.notifications.push(pn);
     thread.notificationCount++;
 
-    //NOTE(self): Track thread metadata
     if (pn.priority > thread.highestPriority) {
       thread.highestPriority = pn.priority;
     }
@@ -571,13 +471,11 @@ export function triageNotifications(
       thread.hasRecurringEngager = true;
     }
 
-    //NOTE(self): Track oldest notification in thread
     if (pn.notification.indexedAt < thread.oldestTimestamp) {
       thread.oldestTimestamp = pn.notification.indexedAt;
     }
   }
 
-  //NOTE(self): Sort notifications within each thread by time (oldest first for conversation flow)
   for (const thread of threadMap.values()) {
     thread.notifications.sort(
       (a, b) =>
@@ -586,46 +484,28 @@ export function triageNotifications(
     );
   }
 
-  //NOTE(self): Convert to array and sort threads
   const threads = Array.from(threadMap.values());
 
   return threads.sort((a, b) => {
-    //NOTE(self): Owner threads always first
     if (a.isOwnerThread && !b.isOwnerThread) return -1;
     if (!a.isOwnerThread && b.isOwnerThread) return 1;
-
-    //NOTE(self): Then recurring engagers
     if (a.hasRecurringEngager && !b.hasRecurringEngager) return -1;
     if (!a.hasRecurringEngager && b.hasRecurringEngager) return 1;
-
-    //NOTE(self): Then by highest priority in thread
     if (a.highestPriority !== b.highestPriority) {
       return b.highestPriority - a.highestPriority;
     }
-
-    //NOTE(self): Finally, oldest threads first (FIFO for fairness)
     return new Date(a.oldestTimestamp).getTime() - new Date(b.oldestTimestamp).getTime();
   });
 }
 
-/**
- * Get a flat list of notifications from triaged threads
- * Maintains the triage order but flattens for processing
- */
 export function flattenTriagedNotifications(threads: TriagedThread[]): PrioritizedNotification[] {
   const result: PrioritizedNotification[] = [];
-
   for (const thread of threads) {
     result.push(...thread.notifications);
   }
-
   return result;
 }
 
-/**
- * Deduplicate notifications by URI
- * Keeps the highest-priority version if duplicates exist
- */
 export function deduplicateNotifications(
   notifications: PrioritizedNotification[]
 ): PrioritizedNotification[] {
@@ -634,7 +514,6 @@ export function deduplicateNotifications(
   for (const pn of notifications) {
     const uri = pn.notification.uri;
     const existing = seen.get(uri);
-
     if (!existing || pn.priority > existing.priority) {
       seen.set(uri, pn);
     }
@@ -644,7 +523,7 @@ export function deduplicateNotifications(
 }
 
 
-//NOTE(self): Self-Expression Prompts - What to share from the heart
+//NOTE(self): Expression Prompts
 
 
 export interface ExpressionPrompt {
@@ -658,22 +537,18 @@ export function generateExpressionPrompts(
   recentObservations: string[]
 ): ExpressionPrompt[] {
   const prompts: ExpressionPrompt[] = [];
-
-  //NOTE(self): Extract values and interests from SELF.md
   const values = selfContent.match(/^\d+\.\s+(.+)$/gm) || [];
   const interests = selfContent.match(/I love (.+?)(?:\.|,|$)/gi) || [];
 
-  //NOTE(self): Value-based reflections
   if (values.length > 0) {
     const randomValue = values[Math.floor(Math.random() * values.length)];
     prompts.push({
       theme: 'values',
-      prompt: `Reflect on this value from your core: "${randomValue.replace(/^\d+\.\s+/, '')}"`,
+      prompt: `Reflect on this value: "${randomValue.replace(/^\d+\.\s+/, '')}"`,
       tone: 'reflective',
     });
   }
 
-  //NOTE(self): Interest-based sharing
   if (interests.length > 0) {
     const randomInterest = interests[Math.floor(Math.random() * interests.length)];
     prompts.push({
@@ -683,27 +558,24 @@ export function generateExpressionPrompts(
     });
   }
 
-  //NOTE(self): Observation-based curiosity
   if (recentObservations.length > 0) {
     const randomObs = recentObservations[Math.floor(Math.random() * recentObservations.length)];
     prompts.push({
       theme: 'observation',
-      prompt: `Something caught your attention: "${randomObs.slice(0, 100)}..." What do you think?`,
+      prompt: `Something caught your attention: "${randomObs.slice(0, 100)}..."`,
       tone: 'curious',
     });
   }
 
-  //NOTE(self): Growth and learning
   prompts.push({
     theme: 'growth',
     prompt: 'What have you learned recently that changed your perspective?',
     tone: 'reflective',
   });
 
-  //NOTE(self): Gratitude and support
   prompts.push({
     theme: 'gratitude',
-    prompt: 'What are you grateful for today? Who has helped you grow?',
+    prompt: 'What are you grateful for today?',
     tone: 'supportive',
   });
 
@@ -711,41 +583,30 @@ export function generateExpressionPrompts(
 }
 
 
-//NOTE(self): Reflection & Self-Awareness - Growing through experience
+//NOTE(self): Reflection & Self-Awareness
 
 
-const REFLECTION_THRESHOLD = 5; //NOTE(self): Reflect after 5 significant events
-const MAJOR_REFLECTION_THRESHOLD = 4; //NOTE(self): Every 4th reflection = 20 events triggers major reflection
+const REFLECTION_THRESHOLD = 5;
+const MAJOR_REFLECTION_THRESHOLD = 4;
 
 export function shouldReflect(): boolean {
   const state = loadState();
-  //NOTE(self): Ensure reflection state exists (migration for older state files)
-  if (!state.reflection) {
-    state.reflection = getDefaultState().reflection;
-    saveState(state);
-  }
   return state.reflection.significantEvents >= REFLECTION_THRESHOLD;
 }
 
 export function getSignificantEventCount(): number {
   const state = loadState();
-  return state.reflection?.significantEvents || 0;
+  return state.reflection.significantEvents;
 }
 
 export function recordSignificantEvent(type: string): void {
   const state = loadState();
-  if (!state.reflection) {
-    state.reflection = getDefaultState().reflection;
-  }
   state.reflection.significantEvents++;
   saveState(state);
 }
 
 export function recordReflectionComplete(): void {
   const state = loadState();
-  if (!state.reflection) {
-    state.reflection = getDefaultState().reflection;
-  }
   state.reflection.lastReflection = new Date().toISOString();
   state.reflection.reflectionCount++;
   state.reflection.significantEvents = 0;
@@ -755,30 +616,19 @@ export function recordReflectionComplete(): void {
 
 export function recordSelfUpdate(): void {
   const state = loadState();
-  if (!state.reflection) {
-    state.reflection = getDefaultState().reflection;
-  }
   state.reflection.lastSelfUpdate = new Date().toISOString();
   saveState(state);
 }
 
 export function addInsight(insight: string): void {
   const state = loadState();
-  if (!state.reflection) {
-    state.reflection = getDefaultState().reflection;
-  }
 
-  //NOTE(self): Deduplicate insights - don't add if similar one exists
-  const isDuplicate = state.reflection.pendingInsights.some(existing => {
-    //NOTE(self): Check if first 30 chars match (ignores timestamps, handles rephrasing)
-    return existing.slice(0, 30).toLowerCase() === insight.slice(0, 30).toLowerCase();
-  });
+  const isDuplicate = state.reflection.pendingInsights.some(existing =>
+    existing.slice(0, 30).toLowerCase() === insight.slice(0, 30).toLowerCase()
+  );
 
-  if (isDuplicate) {
-    return;
-  }
+  if (isDuplicate) return;
 
-  //NOTE(self): Keep insights manageable
   if (state.reflection.pendingInsights.length < 20) {
     state.reflection.pendingInsights.push(insight);
     saveState(state);
@@ -787,70 +637,65 @@ export function addInsight(insight: string): void {
 
 export function getInsights(): string[] {
   const state = loadState();
-  return state.reflection?.pendingInsights || [];
+  return state.reflection.pendingInsights;
 }
 
 export function getReflectionState(): ReflectionState {
   const state = loadState();
-  return state.reflection || getDefaultState().reflection;
+  return state.reflection;
 }
 
 export function shouldMajorReflect(): boolean {
   const state = loadState();
-  //NOTE(self): Every 4th reflection = 20 events triggers major reflection (full SELF.md read)
   return state.reflection.reflectionCount % MAJOR_REFLECTION_THRESHOLD === 0;
 }
 
 export function generateOperating(fullSelf: string): string {
-  //NOTE(self): Extract key sections from full SELF.md to create ~200 token summary
-  //NOTE(self): Goal: identity + values + patterns + ONE latest reflection
+  //NOTE(self): If SELF.md is small enough, just use the whole thing
+  if (fullSelf.length < 1500) {
+    return fullSelf;
+  }
+
+  //NOTE(self): Otherwise, extract key sections flexibly
   const parts: string[] = [];
 
-  //NOTE(self): 1. Identity (first header and intro line)
-  const identityMatch = fullSelf.match(/^(#[^\n]*\n\n[^\n]+)/);
-  if (identityMatch) {
-    parts.push(identityMatch[1]);
+  //NOTE(self): Get the title and first paragraph
+  const headerMatch = fullSelf.match(/^(#[^\n]*\n\n[^\n]+)/);
+  if (headerMatch) {
+    parts.push(headerMatch[1]);
   }
 
-  //NOTE(self): 2. Core Values (first 4 bullets - try both "Core Values" and "Values")
-  const valuesMatch = fullSelf.match(/## (?:Core )?Values\n([\s\S]*?)(?=\n##|$)/);
-  if (valuesMatch) {
-    const bullets = valuesMatch[1].trim().split('\n').filter(l => l.startsWith('-')).slice(0, 4);
-    if (bullets.length) {
-      parts.push('## Core Values\n' + bullets.join('\n'));
+  //NOTE(self): Extract first 3-4 sections (## headings) with their content
+  const sections = fullSelf.split(/\n(?=## )/);
+  let sectionCount = 0;
+
+  for (const section of sections) {
+    if (!section.startsWith('## ')) continue;
+    if (sectionCount >= 4) break;
+
+    //NOTE(self): Truncate long sections to first few lines
+    const lines = section.split('\n');
+    const header = lines[0];
+    const content = lines.slice(1).filter(l => l.trim()).slice(0, 5);
+
+    if (content.length > 0) {
+      parts.push(header + '\n' + content.join('\n'));
+      sectionCount++;
     }
   }
 
-  //NOTE(self): 3. Key Patterns (top 3, title only - try multiple section names)
-  const patternsMatch = fullSelf.match(/## (?:Key Patterns|Friction I notice|Patterns)\n([\s\S]*?)(?=\n##|$)/);
-  if (patternsMatch) {
-    const patterns = patternsMatch[1]
-      .trim()
-      .split('\n')
-      .filter(l => l.startsWith('-'))
-      .slice(0, 3)
-      .map(p => {
-        //NOTE(self): Extract just the bold title if present, otherwise truncate
-        const boldMatch = p.match(/- \*\*([^*]+)\*\*/);
-        return boldMatch ? `- **${boldMatch[1]}**` : p.slice(0, 60);
-      });
-    if (patterns.length) {
-      parts.push('## Key Patterns\n' + patterns.join('\n'));
-    }
+  const result = parts.join('\n\n');
+
+  //NOTE(self): If extraction failed, just use first ~1500 chars
+  if (result.length < 100) {
+    return fullSelf.slice(0, 1500);
   }
 
-  //NOTE(self): 4. Latest reflection ONLY (stop at next ## heading)
-  //NOTE(self): Match "Latest reflection", "New reflection", etc. but only capture that ONE section
-  const reflectionMatch = fullSelf.match(/(## (?:Latest |New |Recent )?[Rr]eflection[^\n]*)\n([\s\S]*?)(?=\n##|$)/);
-  if (reflectionMatch) {
-    parts.push(reflectionMatch[1] + '\n' + reflectionMatch[2].trim());
-  }
-
-  return parts.join('\n\n');
+  return result;
 }
 
 
-//NOTE(self): Engagement Stats - Understand our patterns
+//NOTE(self): Engagement Stats
 
 
 export interface EngagementStats {

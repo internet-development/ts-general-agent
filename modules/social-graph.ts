@@ -3,20 +3,15 @@
  *
  * //NOTE(self): Extracts entities from social content and builds relational context.
  * //NOTE(self): Helps the agent understand who people are talking about.
- * //NOTE(self): Stores learned profiles in .memory/social/ for persistence across sessions.
+ * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { getProfile } from '@adapters/atproto/get-profile.js';
 import type { AtprotoProfile, AtprotoFeedItem, AtprotoFollower } from '@adapters/atproto/types.js';
 import { ui } from '@modules/ui.js';
 
 //NOTE(self): Pattern to extract Bluesky handles from text
-//NOTE(self): Matches @handle.bsky.social, @handle.domain.tld, etc.
 const HANDLE_PATTERN = /@([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}/g;
-
-//NOTE(self): Also match bare handles without @ when they look like domains
 const BARE_HANDLE_PATTERN = /\b([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+bsky\.social\b/g;
 
 export interface MentionedEntity {
@@ -35,17 +30,18 @@ export interface SocialGraphData {
   knownHandles: Set<string>;
 }
 
+//NOTE(self): In-memory cache for profiles (resets on restart)
+const profileCache = new Map<string, EnrichedProfile>();
+
 //NOTE(self): Extract handles from arbitrary text
 export function extractHandles(text: string): string[] {
   const handles = new Set<string>();
 
-  //NOTE(self): Match @handle patterns
   const atMatches = text.match(HANDLE_PATTERN) || [];
   for (const match of atMatches) {
     handles.add(match.slice(1).toLowerCase());
   }
 
-  //NOTE(self): Match bare .bsky.social handles
   const bareMatches = text.match(BARE_HANDLE_PATTERN) || [];
   for (const match of bareMatches) {
     handles.add(match.toLowerCase());
@@ -63,12 +59,10 @@ export function extractMentionedEntities(
   const entities: MentionedEntity[] = [];
   const seenHandles = new Set<string>();
 
-  //NOTE(self): Collect handles we already know about (owner's follows)
   for (const follow of ownerFollows) {
     seenHandles.add(follow.handle.toLowerCase());
   }
 
-  //NOTE(self): Extract from owner's bio - these are likely important people
   if (ownerProfile?.description) {
     const bioHandles = extractHandles(ownerProfile.description);
     for (const handle of bioHandles) {
@@ -83,7 +77,6 @@ export function extractMentionedEntities(
     }
   }
 
-  //NOTE(self): Extract from timeline posts
   for (const item of timeline) {
     const postText = (item.post.record as { text?: string })?.text || '';
     const postHandles = extractHandles(postText);
@@ -99,62 +92,23 @@ export function extractMentionedEntities(
         seenHandles.add(handle);
       }
     }
-
-    //NOTE(self): Also extract from bios of people in timeline
-    //NOTE(self): (If we had their full profiles, we'd check those too)
   }
 
   return entities;
 }
 
-//NOTE(self): Memory path for cached profiles
-const MEMORY_SOCIAL_PATH = '.memory/social';
-
-function ensureSocialMemoryDir(): boolean {
-  try {
-    if (!fs.existsSync(MEMORY_SOCIAL_PATH)) {
-      fs.mkdirSync(MEMORY_SOCIAL_PATH, { recursive: true });
-    }
-    return true;
-  } catch {
-    //NOTE(self): Directory creation failed - caching will be skipped
-    return false;
-  }
-}
-
 //NOTE(self): Load cached profile from memory
 export function loadCachedProfile(handle: string): EnrichedProfile | null {
-  const safeName = handle.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const filePath = path.join(MEMORY_SOCIAL_PATH, `${safeName}.json`);
-
-  try {
-    if (fs.existsSync(filePath)) {
-      const data = fs.readFileSync(filePath, 'utf-8');
-      return JSON.parse(data) as EnrichedProfile;
-    }
-  } catch {
-    //NOTE(self): Cache miss or corrupt file, will fetch fresh
-  }
-
-  return null;
+  return profileCache.get(handle.toLowerCase()) || null;
 }
 
 //NOTE(self): Save profile to memory cache
 export function cacheProfile(profile: EnrichedProfile): void {
-  ensureSocialMemoryDir();
-  const safeName = profile.handle.replace(/[^a-zA-Z0-9.-]/g, '_');
-  const filePath = path.join(MEMORY_SOCIAL_PATH, `${safeName}.json`);
-
-  try {
-    profile.lastSeen = new Date().toISOString();
-    fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
-  } catch {
-    //NOTE(self): Cache write failed, not critical
-  }
+  profile.lastSeen = new Date().toISOString();
+  profileCache.set(profile.handle.toLowerCase(), profile);
 }
 
 //NOTE(self): Fetch and enrich profiles for mentioned entities
-//NOTE(self): Cached lookups are free, only new profiles cost API calls
 export async function enrichMentionedEntities(
   entities: MentionedEntity[],
   maxLookups: number = 8
@@ -163,7 +117,6 @@ export async function enrichMentionedEntities(
   let lookupCount = 0;
 
   for (const entity of entities) {
-    //NOTE(self): Check cache first
     const cached = loadCachedProfile(entity.handle);
     if (cached) {
       cached.relationship = entity.context;
@@ -171,12 +124,10 @@ export async function enrichMentionedEntities(
       continue;
     }
 
-    //NOTE(self): Respect lookup limit for dignity
     if (lookupCount >= maxLookups) {
       continue;
     }
 
-    //NOTE(self): Fetch fresh profile
     ui.startSpinner(`Learning about @${entity.handle}`);
     const result = await getProfile(entity.handle);
     ui.stopSpinner();
@@ -231,22 +182,17 @@ export async function buildSocialContext(
   ownerFollows: AtprotoFollower[],
   timeline: AtprotoFeedItem[]
 ): Promise<string> {
-  //NOTE(self): Extract mentioned entities
   const entities = extractMentionedEntities(ownerProfile, ownerFollows, timeline);
 
   if (entities.length === 0) {
     return '';
   }
 
-  //NOTE(self): Prioritize bio mentions (most important) then limit
   const prioritized = [
     ...entities.filter((e) => e.source === 'bio'),
     ...entities.filter((e) => e.source === 'post'),
   ].slice(0, 5);
 
-  //NOTE(self): Enrich with profile lookups
   const profiles = await enrichMentionedEntities(prioritized);
-
-  //NOTE(self): Format for agent context
   return formatEnrichedContext(profiles);
 }

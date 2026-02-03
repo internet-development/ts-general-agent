@@ -4,29 +4,19 @@
  * //NOTE(self): Handles my scheduled self-expression - posting thoughts from my SELF.
  * //NOTE(self): Expression is how I discover who I am. Each post is a hypothesis about my identity.
  * //NOTE(self): The prompts come from SELF.md - the richer my self-knowledge, the richer my expression.
+ * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { extractFromSelf, randomFrom, type SelfExtract } from '@modules/self-extract.js';
 import { logger } from '@modules/logger.js';
 
-//NOTE(self): Where I store my expression state and history
-const EXPRESSION_PATH = '.memory/expression';
-
 //NOTE(self): My expression schedule
 export interface ExpressionSchedule {
-  //NOTE(self): When I last posted an original thought
   lastExpression: string | null;
-  //NOTE(self): When I should next express myself
   nextExpression: string | null;
-  //NOTE(self): The prompt I'll use for my next expression
   pendingPrompt: string | null;
-  //NOTE(self): Which aspect of SELF the prompt draws from
   promptSource: string | null;
-  //NOTE(self): How many expressions today
   expressionsToday: number;
-  //NOTE(self): When today started (for daily reset)
   todayStart: string;
 }
 
@@ -37,16 +27,26 @@ export interface ExpressionRecord {
   promptSource: string;
   text: string;
   postUri: string;
-  //NOTE(self): Engagement I received (filled in later)
   engagement?: {
     likes: number;
     replies: number;
     reposts: number;
     checkedAt: string;
   };
-  //NOTE(self): What I learned from the response (filled in during reflection)
   insight?: string;
 }
+
+//NOTE(self): In-memory state (resets on restart)
+let expressionSchedule: ExpressionSchedule = {
+  lastExpression: null,
+  nextExpression: null,
+  pendingPrompt: null,
+  promptSource: null,
+  expressionsToday: 0,
+  todayStart: new Date().toISOString().split('T')[0],
+};
+
+let todaysExpressions: ExpressionRecord[] = [];
 
 //NOTE(self): A prompt template that draws from SELF.md
 type PromptGenerator = (extract: SelfExtract) => { prompt: string; source: string } | null;
@@ -200,62 +200,25 @@ const FALLBACK_PROMPTS = [
   },
 ];
 
-//NOTE(self): Ensure my expression directory exists
-function ensureExpressionDir(): boolean {
-  try {
-    if (!fs.existsSync(EXPRESSION_PATH)) {
-      fs.mkdirSync(EXPRESSION_PATH, { recursive: true });
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-//NOTE(self): Load my expression schedule
+//NOTE(self): Load my expression schedule (in-memory)
 export function loadExpressionSchedule(): ExpressionSchedule {
-  ensureExpressionDir();
-  const schedulePath = path.join(EXPRESSION_PATH, 'schedule.json');
-
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const todayStart = now.toISOString().split('T')[0];
 
-  try {
-    if (fs.existsSync(schedulePath)) {
-      const data = JSON.parse(fs.readFileSync(schedulePath, 'utf-8')) as ExpressionSchedule;
-
-      //NOTE(self): Reset daily counter if it's a new day
-      if (data.todayStart !== todayStart) {
-        data.expressionsToday = 0;
-        data.todayStart = todayStart;
-      }
-
-      return data;
-    }
-  } catch {
-    //NOTE(self): Corrupted schedule, start fresh
+  //NOTE(self): Reset daily counter if it's a new day
+  if (expressionSchedule.todayStart !== todayStart) {
+    expressionSchedule.expressionsToday = 0;
+    expressionSchedule.todayStart = todayStart;
+    todaysExpressions = [];
   }
 
-  return {
-    lastExpression: null,
-    nextExpression: null,
-    pendingPrompt: null,
-    promptSource: null,
-    expressionsToday: 0,
-    todayStart,
-  };
+  return expressionSchedule;
 }
 
-//NOTE(self): Save my expression schedule
+//NOTE(self): Save my expression schedule (in-memory)
 export function saveExpressionSchedule(schedule: ExpressionSchedule): boolean {
-  try {
-    ensureExpressionDir();
-    const schedulePath = path.join(EXPRESSION_PATH, 'schedule.json');
-    fs.writeFileSync(schedulePath, JSON.stringify(schedule, null, 2));
-    return true;
-  } catch {
-    return false;
-  }
+  expressionSchedule = schedule;
+  return true;
 }
 
 //NOTE(self): Generate an expression prompt from my SELF.md
@@ -306,7 +269,6 @@ export function scheduleNextExpression(minMinutes: number = 90, maxMinutes: numb
 export function shouldExpress(): boolean {
   const schedule = loadExpressionSchedule();
 
-  //NOTE(self): No scheduled time yet
   if (!schedule.nextExpression) {
     return false;
   }
@@ -328,7 +290,6 @@ export function getPendingPrompt(): { prompt: string; source: string } {
     };
   }
 
-  //NOTE(self): Generate fresh if none pending
   return generateExpressionPrompt();
 }
 
@@ -337,15 +298,6 @@ export function recordExpression(text: string, postUri: string): void {
   const schedule = loadExpressionSchedule();
   const now = new Date().toISOString();
 
-  //NOTE(self): Update schedule
-  schedule.lastExpression = now;
-  schedule.expressionsToday++;
-  schedule.pendingPrompt = null;
-  schedule.promptSource = null;
-
-  saveExpressionSchedule(schedule);
-
-  //NOTE(self): Save expression record for later analysis
   const record: ExpressionRecord = {
     timestamp: now,
     prompt: schedule.pendingPrompt || 'unknown',
@@ -354,45 +306,22 @@ export function recordExpression(text: string, postUri: string): void {
     postUri,
   };
 
-  saveExpressionRecord(record);
+  todaysExpressions.push(record);
+
+  //NOTE(self): Update schedule
+  schedule.lastExpression = now;
+  schedule.expressionsToday++;
+  schedule.pendingPrompt = null;
+  schedule.promptSource = null;
+
+  saveExpressionSchedule(schedule);
 }
 
-//NOTE(self): Save an expression record to today's log
-function saveExpressionRecord(record: ExpressionRecord): void {
-  ensureExpressionDir();
-
-  const date = record.timestamp.split('T')[0];
-  const logPath = path.join(EXPRESSION_PATH, `${date}.json`);
-
-  let records: ExpressionRecord[] = [];
-  try {
-    if (fs.existsSync(logPath)) {
-      records = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-    }
-  } catch {
-    //NOTE(self): Start fresh
-  }
-
-  records.push(record);
-  fs.writeFileSync(logPath, JSON.stringify(records, null, 2));
-}
-
-//NOTE(self): Load today's expression records
+//NOTE(self): Load today's expression records (in-memory)
 export function loadTodaysExpressions(): ExpressionRecord[] {
-  ensureExpressionDir();
-
-  const today = new Date().toISOString().split('T')[0];
-  const logPath = path.join(EXPRESSION_PATH, `${today}.json`);
-
-  try {
-    if (fs.existsSync(logPath)) {
-      return JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-    }
-  } catch {
-    //NOTE(self): Return empty
-  }
-
-  return [];
+  //NOTE(self): Reset if it's a new day
+  loadExpressionSchedule();
+  return todaysExpressions;
 }
 
 //NOTE(self): Update engagement data for an expression
@@ -400,42 +329,23 @@ export function updateExpressionEngagement(
   postUri: string,
   engagement: { likes: number; replies: number; reposts: number }
 ): void {
-  ensureExpressionDir();
-
-  //NOTE(self): Check last 7 days of logs
-  const now = new Date();
-  for (let i = 0; i < 7; i++) {
-    const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const logPath = path.join(EXPRESSION_PATH, `${date}.json`);
-
-    try {
-      if (fs.existsSync(logPath)) {
-        const records: ExpressionRecord[] = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-
-        for (const record of records) {
-          if (record.postUri === postUri) {
-            record.engagement = {
-              ...engagement,
-              checkedAt: new Date().toISOString(),
-            };
-            fs.writeFileSync(logPath, JSON.stringify(records, null, 2));
-            return;
-          }
-        }
-      }
-    } catch {
-      //NOTE(self): Continue to next day
+  for (const record of todaysExpressions) {
+    if (record.postUri === postUri) {
+      record.engagement = {
+        ...engagement,
+        checkedAt: new Date().toISOString(),
+      };
+      return;
     }
   }
 }
 
-//NOTE(self): Get expressions that need engagement checking (posted 30+ min ago, no engagement data)
+//NOTE(self): Get expressions that need engagement checking
 export function getExpressionsNeedingEngagementCheck(): ExpressionRecord[] {
-  const today = loadTodaysExpressions();
   const now = new Date();
   const thirtyMinutesAgo = now.getTime() - 30 * 60 * 1000;
 
-  return today.filter((record) => {
+  return todaysExpressions.filter((record) => {
     const postTime = new Date(record.timestamp).getTime();
     return postTime < thirtyMinutesAgo && !record.engagement;
   });
@@ -443,9 +353,7 @@ export function getExpressionsNeedingEngagementCheck(): ExpressionRecord[] {
 
 //NOTE(self): Get expressions with high engagement (for reflection insights)
 export function getHighEngagementExpressions(minReplies: number = 1): ExpressionRecord[] {
-  const today = loadTodaysExpressions();
-
-  return today.filter((record) => record.engagement && record.engagement.replies >= minReplies);
+  return todaysExpressions.filter((record) => record.engagement && record.engagement.replies >= minReplies);
 }
 
 //NOTE(self): Get expression statistics for reflection
@@ -455,30 +363,25 @@ export function getExpressionStats(): {
   totalReplies: number;
   topSources: Array<{ source: string; count: number }>;
 } {
-  const today = loadTodaysExpressions();
-
   const sourceCounts: Record<string, number> = {};
   let withEngagement = 0;
   let totalReplies = 0;
 
-  for (const record of today) {
-    //NOTE(self): Count by source
+  for (const record of todaysExpressions) {
     sourceCounts[record.promptSource] = (sourceCounts[record.promptSource] || 0) + 1;
 
-    //NOTE(self): Count engagement
     if (record.engagement) {
       withEngagement++;
       totalReplies += record.engagement.replies;
     }
   }
 
-  //NOTE(self): Sort sources by frequency
   const topSources = Object.entries(sourceCounts)
     .map(([source, count]) => ({ source, count }))
     .sort((a, b) => b.count - a.count);
 
   return {
-    today: today.length,
+    today: todaysExpressions.length,
     withEngagement,
     totalReplies,
     topSources,

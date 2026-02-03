@@ -21,96 +21,11 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import * as arena from '@adapters/arena/index.js';
-import { markInteractionResponded } from '@modules/engagement.js';
+import { markInteractionResponded, hasRepliedToPost, markPostReplied } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { ui } from '@modules/ui.js';
 import { logPost, lookupPostByUri, lookupPostByBskyUrl, generatePostContext, type PostLogEntry } from '@modules/post-log.js';
-
-export interface ActionQueueItem {
-  id: string;
-  action: string;
-  priority: 'high' | 'normal' | 'low';
-  timestamp: number;
-}
-
-let actionQueue: ActionQueueItem[] = [];
-let queueIdCounter = 0;
-
-export function getActionQueue(): ActionQueueItem[] {
-  return [...actionQueue];
-}
-
-export function clearActionQueue(): void {
-  actionQueue = [];
-}
-
-//NOTE(self): Check if an action is similar to existing queue items
-//NOTE(self): Uses word overlap to detect duplicates
-function isDuplicateAction(newAction: string): ActionQueueItem | null {
-  const newWords = new Set(
-    newAction.toLowerCase()
-      .split(/\s+/)
-      .filter((w) => w.length > 3) //NOTE(self): Ignore short words
-  );
-
-  if (newWords.size === 0) return null;
-
-  for (const item of actionQueue) {
-    const existingWords = new Set(
-      item.action.toLowerCase()
-        .split(/\s+/)
-        .filter((w) => w.length > 3)
-    );
-
-    //NOTE(self): Count overlapping meaningful words
-    let overlap = 0;
-    for (const word of newWords) {
-      if (existingWords.has(word)) overlap++;
-    }
-
-    //NOTE(self): If more than 50% of words overlap, consider it a duplicate
-    const overlapRatio = overlap / Math.min(newWords.size, existingWords.size);
-    if (overlapRatio > 0.5) {
-      return item;
-    }
-  }
-
-  return null;
-}
-
-export function addToQueue(action: string, priority: 'high' | 'normal' | 'low' = 'normal'): { id: string; duplicate: boolean; existingId?: string } {
-  //NOTE(self): Check for duplicates before adding
-  const existing = isDuplicateAction(action);
-  if (existing) {
-    logger.debug('Duplicate action detected, not adding', { action, existingId: existing.id });
-    return { id: existing.id, duplicate: true, existingId: existing.id };
-  }
-
-  const id = `action-${++queueIdCounter}`;
-  actionQueue.push({
-    id,
-    action,
-    priority,
-    timestamp: Date.now(),
-  });
-
-  //NOTE(self): Sort by priority (high first)
-  const priorityOrder = { high: 0, normal: 1, low: 2 };
-  actionQueue.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
-
-  return { id, duplicate: false };
-}
-
-export function removeFromQueue(id: string): boolean {
-  const index = actionQueue.findIndex((item) => item.id === id);
-  if (index !== -1) {
-    actionQueue.splice(index, 1);
-    logger.debug('Removed from queue', { id });
-    return true;
-  }
-  return false;
-}
 
 export async function executeTool(call: ToolCall): Promise<ToolResult> {
   const config = getConfig();
@@ -294,6 +209,11 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: 'Error: post_uri and post_cid are required to reply', is_error: true };
         }
 
+        //NOTE(self): Prevent multiple replies to the same post
+        if (hasRepliedToPost(post_uri)) {
+          return { tool_use_id: call.id, content: 'Error: Already replied to this post. Only one reply per post is allowed.', is_error: true };
+        }
+
         //NOTE(self): Build reply refs - auto-resolves root if not provided
         const replyRefsResult = await atproto.getReplyRefs(post_uri, post_cid, root_uri, root_cid);
         if (!replyRefsResult.success) {
@@ -317,6 +237,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         if (result.success) {
           //NOTE(self): Mark the interaction as responded in engagement tracking
           markInteractionResponded(post_uri, result.data.uri);
+          //NOTE(self): Mark this post as replied to (prevents duplicate replies)
+          markPostReplied(post_uri);
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
@@ -873,48 +795,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         });
       }
 
-      //NOTE(self): Memory tools
-      case 'memory_write': {
-        const { path: relativePath, content, append = false } = call.input as {
-          path: string;
-          content: string;
-          append?: boolean;
-        };
-        const fullPath = path.join(repoRoot, '.memory', relativePath);
-
-        const success = append
-          ? safeAppendFile(fullPath, content)
-          : safeWriteFile(fullPath, content);
-
-        if (success) {
-          return { tool_use_id: call.id, content: JSON.stringify({ success: true, path: relativePath }) };
-        }
-        return { tool_use_id: call.id, content: 'Error: Failed to write to memory', is_error: true };
-      }
-
-      case 'memory_read': {
-        const relativePath = call.input.path as string;
-        const fullPath = path.join(repoRoot, '.memory', relativePath);
-        const content = safeReadFile(fullPath);
-
-        if (content !== null) {
-          return { tool_use_id: call.id, content };
-        }
-        return { tool_use_id: call.id, content: 'Error: File not found or not readable', is_error: true };
-      }
-
-      case 'memory_list': {
-        const relativePath = (call.input.path as string) || '';
-        const fullPath = path.join(repoRoot, '.memory', relativePath);
-        const files = safeListDir(fullPath);
-
-        if (files !== null) {
-          return { tool_use_id: call.id, content: JSON.stringify(files) };
-        }
-        return { tool_use_id: call.id, content: 'Error: Directory not found or not readable', is_error: true };
-      }
-
-      //NOTE(self): Self tools
+      //NOTE(self): Self tools - SELF.md is the agent's memory
       case 'self_update': {
         const content = call.input.content as string;
         const fullPath = path.join(repoRoot, 'SELF.md');
@@ -933,46 +814,6 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content };
         }
         return { tool_use_id: call.id, content: 'Error: Failed to read SELF.md', is_error: true };
-      }
-
-      //NOTE(self): Queue tools
-      case 'queue_add': {
-        const { action, priority = 'normal' } = call.input as {
-          action: string;
-          priority?: 'high' | 'normal' | 'low';
-        };
-        const result = addToQueue(action, priority);
-        if (result.duplicate) {
-          ui.info('Queue: duplicate skipped', action.slice(0, 50));
-          return {
-            tool_use_id: call.id,
-            content: JSON.stringify({
-              success: true,
-              id: result.existingId,
-              duplicate: true,
-              message: 'Similar action already in queue',
-              queueLength: actionQueue.length,
-            }),
-          };
-        }
-        //NOTE(self): Show queued action in UI
-        const priorityLabel = priority === 'high' ? '[HIGH] ' : priority === 'low' ? '[low] ' : '';
-        ui.action(`Queued: ${priorityLabel}${action.slice(0, 60)}`);
-        return { tool_use_id: call.id, content: JSON.stringify({ success: true, id: result.id, queueLength: actionQueue.length }) };
-      }
-
-      case 'queue_remove': {
-        const { id } = call.input as { id: string };
-        const removed = removeFromQueue(id);
-        return {
-          tool_use_id: call.id,
-          content: JSON.stringify({ success: removed, queueLength: actionQueue.length }),
-        };
-      }
-
-      case 'queue_clear': {
-        clearActionQueue();
-        return { tool_use_id: call.id, content: JSON.stringify({ success: true }) };
       }
 
       //NOTE(self): Are.na tools

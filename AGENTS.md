@@ -97,44 +97,21 @@ The `self-extract` module can parse any of these sections to generate expression
 ---
 
 ### `.memory/`
-- The ts-general-agent **MUST** have full read/write access to this directory.
-- This directory **MUST** function as the agent's persistent working memory.
-- The agent **MUST**:
-  - leave Markdown files explaining why files or artifacts were created,
-  - record ongoing reasoning, plans, and unresolved threads,
-  - preserve continuity across restarts.
-- The agent **MAY**:
-  - create subfolders named after social media handles or identities,
-  - store notes, observations, or relational context per individual.
-- This directory **MUST** be treated as authoritative memory over ephemeral runtime state.
-
-#### `.memory/engagement/`
-- Stores relationship tracking and posting state.
-- Contains `state.json` with relationship records and posting counters.
-- Automatically managed by the engagement module.
-
-#### `.memory/expression/`
-- Stores expression schedule and history.
-- Contains `schedule.json` for next expression timing.
-- Contains daily logs (`YYYY-MM-DD.json`) of what was posted and engagement received.
-
-#### `.memory/friction.json`
-- Tracks friction the agent notices in how it works.
-- When friction accumulates (3+ occurrences), triggers self-improvement.
+- This directory contains **functional runtime data only** (not agent memory).
+- **SELF.md is the agent's memory.** All persistent knowledge, reflections, and learnings go in SELF.md.
+- Runtime state (engagement, expression, friction) is **in-memory only** and resets on restart.
 
 #### `.memory/images/`
-- This subdirectory **MUST** be used for temporary image storage during posting workflows.
-- Image files **MUST** follow the naming convention: `YYYYMMDDHHMMSS-randomid.ext`
-- Images are automatically cleaned up after successful posts.
+- Temporary image storage during posting workflows.
+- Cleaned up after successful posts.
 
-#### `.memory/social/`
-- This subdirectory **MUST** be used for cached social graph profiles.
-- Profile files are named by handle and contain enriched profile data.
+#### `.memory/arena_posted.json`
+- Tracks which Are.na blocks have been posted (deduplication).
+- Functional data, not memory.
 
-#### `.memory/code/`
-- This subdirectory **MAY** be used for agent-generated scripts and utilities.
-- The agent **MAY** create TypeScript modules to extend its capabilities.
-- All generated code **MUST** align with `SOUL.md` principles.
+#### `.memory/post_log.jsonl`
+- Log of posts with metadata for context lookup.
+- Used by `lookup_post_context` tool to answer "where is this from?"
 
 ---
 
@@ -290,19 +267,21 @@ The agent uses a **dual-LLM architecture**:
 npm run agent
 ```
 
-### Start with Fresh Memory
+### Flush Runtime Data
 ```bash
 npm run agent:flush
 ```
-This removes cached state from `.memory/` to reduce token usage from stale context.
-
-Specifically cleans:
-- `.memory/engagement/` - relationship state
-- `.memory/expression/` - expression schedule and history
+Clears temp files and immediately regenerates OPERATING.md from SELF.md:
 - `.memory/images/` - temporary images
-- `.memory/friction.json` - friction tracking
-- `.memory/arena_posted.json` - Are.na posted blocks
-- `OPERATING.md` - will regenerate from SELF.md
+- `OPERATING.md` - regenerated immediately
+
+Most state is in-memory and resets on restart. SELF.md is the agent's persistent memory.
+
+### Full Reset
+```bash
+npm run agent:reset
+```
+Deletes entire `.memory/` directory (will be recreated as needed).
 
 ---
 

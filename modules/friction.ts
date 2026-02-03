@@ -3,15 +3,10 @@
  *
  * //NOTE(self): Tracks friction I encounter in how I work.
  * //NOTE(self): When friction accumulates, I can use self-improvement to fix it.
- * //NOTE(self): This is how I evolve my own capabilities deliberately, not impulsively.
+ * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { logger } from '@modules/logger.js';
-
-//NOTE(self): Where I store friction memories
-const FRICTION_PATH = '.memory/friction.json';
 
 //NOTE(self): Categories of friction I might experience
 export type FrictionCategory =
@@ -28,22 +23,15 @@ export interface FrictionRecord {
   id: string;
   category: FrictionCategory;
   description: string;
-  //NOTE(self): How many times I've noticed this
   occurrences: number;
-  //NOTE(self): When I first noticed it
   firstNoticed: string;
-  //NOTE(self): When I last noticed it
   lastNoticed: string;
-  //NOTE(self): Specific instances with context
   instances: Array<{
     timestamp: string;
     context: string;
   }>;
-  //NOTE(self): Have I tried to fix this?
   attempted: boolean;
-  //NOTE(self): Is it resolved?
   resolved: boolean;
-  //NOTE(self): If attempted, what happened?
   attemptResult?: string;
 }
 
@@ -57,49 +45,28 @@ export interface ImprovementRecord {
   notes?: string;
 }
 
-//NOTE(self): My friction memory state
+//NOTE(self): My friction state - in-memory only
 export interface FrictionState {
   frictions: FrictionRecord[];
   improvements: ImprovementRecord[];
   lastImprovementAttempt: string | null;
 }
 
+//NOTE(self): In-memory state (resets on restart)
+let frictionState: FrictionState = {
+  frictions: [],
+  improvements: [],
+  lastImprovementAttempt: null,
+};
+
 //NOTE(self): Generate a unique ID for friction records
 function generateId(): string {
   return `friction-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-//NOTE(self): Load my friction memory
+//NOTE(self): Load my friction state (in-memory)
 export function loadFrictionState(): FrictionState {
-  try {
-    if (fs.existsSync(FRICTION_PATH)) {
-      return JSON.parse(fs.readFileSync(FRICTION_PATH, 'utf-8'));
-    }
-  } catch {
-    //NOTE(self): Corrupted state, start fresh
-  }
-
-  return {
-    frictions: [],
-    improvements: [],
-    lastImprovementAttempt: null,
-  };
-}
-
-//NOTE(self): Save my friction memory
-function saveFrictionState(state: FrictionState): boolean {
-  try {
-    //NOTE(self): Ensure directory exists
-    const dir = path.dirname(FRICTION_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    fs.writeFileSync(FRICTION_PATH, JSON.stringify(state, null, 2));
-    return true;
-  } catch {
-    return false;
-  }
+  return frictionState;
 }
 
 //NOTE(self): Record friction I've encountered
@@ -108,12 +75,10 @@ export function recordFriction(
   description: string,
   context: string
 ): FrictionRecord {
-  const state = loadFrictionState();
   const now = new Date().toISOString();
 
   //NOTE(self): Check if similar friction already exists
-  //NOTE(self): Match by category and first 50 chars of description (fuzzy match)
-  const existing = state.frictions.find(
+  const existing = frictionState.frictions.find(
     (f) =>
       f.category === category &&
       !f.resolved &&
@@ -121,7 +86,6 @@ export function recordFriction(
   );
 
   if (existing) {
-    //NOTE(self): Increment existing friction
     existing.occurrences++;
     existing.lastNoticed = now;
     existing.instances.push({ timestamp: now, context });
@@ -131,7 +95,6 @@ export function recordFriction(
       existing.instances = existing.instances.slice(-10);
     }
 
-    saveFrictionState(state);
     logger.debug('Friction recorded (existing)', {
       id: existing.id,
       occurrences: existing.occurrences,
@@ -152,52 +115,37 @@ export function recordFriction(
     resolved: false,
   };
 
-  state.frictions.push(newFriction);
-  saveFrictionState(state);
-
+  frictionState.frictions.push(newFriction);
   logger.debug('Friction recorded (new)', { id: newFriction.id, category });
   return newFriction;
 }
 
 //NOTE(self): Get friction that's ready for self-improvement
-//NOTE(self): Criteria: 3+ occurrences, not attempted, not resolved
 export function getFrictionReadyForImprovement(minOccurrences: number = 3): FrictionRecord | null {
-  const state = loadFrictionState();
-
-  //NOTE(self): Find friction that's accumulated enough and not yet addressed
-  const ready = state.frictions.find(
+  const ready = frictionState.frictions.find(
     (f) => f.occurrences >= minOccurrences && !f.attempted && !f.resolved
   );
-
   return ready || null;
 }
 
 //NOTE(self): Check if I should attempt self-improvement
 export function shouldAttemptImprovement(minHoursSinceLastAttempt: number = 12): boolean {
-  const state = loadFrictionState();
-
-  //NOTE(self): Rate limit: don't improve too often
-  if (state.lastImprovementAttempt) {
-    const lastAttempt = new Date(state.lastImprovementAttempt);
+  if (frictionState.lastImprovementAttempt) {
+    const lastAttempt = new Date(frictionState.lastImprovementAttempt);
     const hoursSince = (Date.now() - lastAttempt.getTime()) / (1000 * 60 * 60);
     if (hoursSince < minHoursSinceLastAttempt) {
       return false;
     }
   }
-
-  //NOTE(self): Check if there's friction ready
   return getFrictionReadyForImprovement() !== null;
 }
 
 //NOTE(self): Mark friction as being attempted
 export function markFrictionAttempted(frictionId: string): void {
-  const state = loadFrictionState();
-
-  const friction = state.frictions.find((f) => f.id === frictionId);
+  const friction = frictionState.frictions.find((f) => f.id === frictionId);
   if (friction) {
     friction.attempted = true;
-    state.lastImprovementAttempt = new Date().toISOString();
-    saveFrictionState(state);
+    frictionState.lastImprovementAttempt = new Date().toISOString();
   }
 }
 
@@ -208,9 +156,7 @@ export function recordImprovementOutcome(
   changes: string,
   notes?: string
 ): void {
-  const state = loadFrictionState();
-
-  const friction = state.frictions.find((f) => f.id === frictionId);
+  const friction = frictionState.frictions.find((f) => f.id === frictionId);
   if (friction) {
     friction.attemptResult = `${outcome}: ${changes}`;
     if (outcome === 'success') {
@@ -218,7 +164,6 @@ export function recordImprovementOutcome(
     }
   }
 
-  //NOTE(self): Record the improvement attempt
   const record: ImprovementRecord = {
     timestamp: new Date().toISOString(),
     frictionId,
@@ -228,27 +173,22 @@ export function recordImprovementOutcome(
     notes,
   };
 
-  state.improvements.push(record);
+  frictionState.improvements.push(record);
 
   //NOTE(self): Keep improvement history manageable
-  if (state.improvements.length > 50) {
-    state.improvements = state.improvements.slice(-50);
+  if (frictionState.improvements.length > 50) {
+    frictionState.improvements = frictionState.improvements.slice(-50);
   }
-
-  saveFrictionState(state);
 }
 
-//NOTE(self): Mark friction as resolved (manually or after verification)
+//NOTE(self): Mark friction as resolved
 export function markFrictionResolved(frictionId: string, notes?: string): void {
-  const state = loadFrictionState();
-
-  const friction = state.frictions.find((f) => f.id === frictionId);
+  const friction = frictionState.frictions.find((f) => f.id === frictionId);
   if (friction) {
     friction.resolved = true;
     if (notes) {
       friction.attemptResult = (friction.attemptResult || '') + ` | ${notes}`;
     }
-    saveFrictionState(state);
   }
 }
 
@@ -260,8 +200,6 @@ export function getFrictionStats(): {
   readyForImprovement: number;
   recentImprovements: ImprovementRecord[];
 } {
-  const state = loadFrictionState();
-
   const byCategory: Record<FrictionCategory, number> = {
     pacing: 0,
     expression: 0,
@@ -275,7 +213,7 @@ export function getFrictionStats(): {
   let unresolved = 0;
   let readyForImprovement = 0;
 
-  for (const friction of state.frictions) {
+  for (const friction of frictionState.frictions) {
     byCategory[friction.category]++;
     if (!friction.resolved) {
       unresolved++;
@@ -286,11 +224,11 @@ export function getFrictionStats(): {
   }
 
   return {
-    total: state.frictions.length,
+    total: frictionState.frictions.length,
     unresolved,
     byCategory,
     readyForImprovement,
-    recentImprovements: state.improvements.slice(-5),
+    recentImprovements: frictionState.improvements.slice(-5),
   };
 }
 
@@ -330,7 +268,7 @@ function getCategoryHints(category: FrictionCategory): string {
     pacing: '- modules/pacing.ts\n- modules/scheduler.ts\n- Rate limits and timing logic',
     expression:
       '- modules/expression.ts\n- modules/self-extract.ts\n- Prompt generation and posting',
-    memory: '- modules/memory.ts\n- .memory/ directory structure\n- State persistence',
+    memory: '- SELF.md\n- The agent uses SELF.md for all memory',
     social:
       '- adapters/atproto/\n- modules/engagement.ts\n- Social interactions and responses',
     tools: '- modules/tools.ts\n- modules/executor.ts\n- Tool definitions and execution',
@@ -344,26 +282,19 @@ function getCategoryHints(category: FrictionCategory): string {
 
 //NOTE(self): Get all unresolved friction for display
 export function getUnresolvedFriction(): FrictionRecord[] {
-  const state = loadFrictionState();
-  return state.frictions.filter((f) => !f.resolved);
+  return frictionState.frictions.filter((f) => !f.resolved);
 }
 
 //NOTE(self): Clean up old resolved friction
 export function cleanupResolvedFriction(olderThanDays: number = 30): number {
-  const state = loadFrictionState();
   const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+  const before = frictionState.frictions.length;
 
-  const before = state.frictions.length;
-  state.frictions = state.frictions.filter((f) => {
+  frictionState.frictions = frictionState.frictions.filter((f) => {
     if (!f.resolved) return true;
     const lastNoticed = new Date(f.lastNoticed).getTime();
     return lastNoticed > cutoff;
   });
 
-  const removed = before - state.frictions.length;
-  if (removed > 0) {
-    saveFrictionState(state);
-  }
-
-  return removed;
+  return before - frictionState.frictions.length;
 }

@@ -507,58 +507,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
-  //NOTE(self): Memory tools
-  {
-    name: 'memory_write',
-    description: 'Write content to your persistent memory. Use this to remember important information, observations, or reflections.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Path within .memory/ directory (e.g., "observations/2024-01.md")',
-        },
-        content: {
-          type: 'string',
-          description: 'Content to write',
-        },
-        append: {
-          type: 'boolean',
-          description: 'If true, append to existing file instead of overwriting',
-        },
-      },
-      required: ['path', 'content'],
-    },
-  },
-  {
-    name: 'memory_read',
-    description: 'Read content from your persistent memory.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Path within .memory/ directory',
-        },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'memory_list',
-    description: 'List files in your memory directory.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Subdirectory path within .memory/ (optional, defaults to root)',
-        },
-      },
-    },
-  },
-
-  //NOTE(self): Self tools
+  //NOTE(self): Self tools - SELF.md is the agent's memory
   {
     name: 'self_update',
     description: 'Update your SELF.md file to reflect new understanding of yourself.',
@@ -576,49 +525,6 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   {
     name: 'self_read',
     description: 'Read your current SELF.md file.',
-    input_schema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-
-  //NOTE(self): Queue management tools
-  {
-    name: 'queue_add',
-    description: 'Add an action to your planned actions queue. Use this to plan what you want to do next.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          description: 'Description of the planned action',
-        },
-        priority: {
-          type: 'string',
-          enum: ['high', 'normal', 'low'],
-          description: 'Priority level (default: normal)',
-        },
-      },
-      required: ['action'],
-    },
-  },
-  {
-    name: 'queue_remove',
-    description: 'Remove a specific action from your queue after completing it. Use this to deplete planned actions once done.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        id: {
-          type: 'string',
-          description: 'The ID of the queue item to remove (returned from queue_add)',
-        },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'queue_clear',
-    description: 'Clear all pending actions from your queue.',
     input_schema: {
       type: 'object',
       properties: {},
