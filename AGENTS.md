@@ -6,7 +6,7 @@
   This **MUST** refer to this software system. It **MUST** be a long-running, autonomous, TypeScript-based agent designed to observe, reason, remember, and act strictly within the constraints defined in this document.
 
 - **agent**
-  This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (for example: Claude Sonnet 4 or Claude Opus 4.5).
+  This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (currently: GPT-5.2-Pro).
   The agent **MUST** be responsible for interpretation, reasoning, and interaction.
   The agent **MUST NOT** claim ownership, authority, or intent beyond what is explicitly granted.
 
@@ -24,7 +24,7 @@ The following environment variables **MUST** be configured in `.env`:
 | Variable | Description |
 |----------|-------------|
 | `AGENT_NAME` | The agent's name (replaces `{{AGENT_NAME}}` in SELF.md on first run) |
-| `API_KEY_ANTHROPIC` | Anthropic API key for Claude model access |
+| `API_KEY_OPENAI` | OpenAI API key for GPT model access |
 | `OWNER_BLUESKY_SOCIAL_HANDLE` | Owner's Bluesky social handle (e.g., `user.bsky.social`) |
 | `OWNER_BLUESKY_SOCIAL_HANDLE_DID` | Owner's Bluesky DID identifier |
 | `AGENT_BLUESKY_USERNAME` | Agent's Bluesky username for authentication |
@@ -186,11 +186,29 @@ The following environment variables **MUST** be configured in `.env`:
 
 ---
 
-## Model
+## Model & LLM Architecture
 
-- **Default Model:** Claude Opus 4.5 (`claude-opus-4-5-20251101`)
-- **Configurable via:** `ANTHROPIC_MODEL` in `.env`
-- **API Key:** Available in `.env` as `API_KEY_ANTHROPIC`
+The agent uses a **dual-LLM architecture**:
+
+### Primary Reasoning (OpenAI)
+- **Default Model:** GPT-5.2-Pro (`gpt-5.2-pro`)
+- **Configurable via:** `OPENAI_MODEL` in `.env`
+- **API Key:** `API_KEY_OPENAI` in `.env`
+- **Usage:** Main autonomous loop, tool calling, social interactions
+- **Implementation:** Raw `fetch()` calls to OpenAI Responses API (`/v1/responses`)
+- **Stateless:** Each API call is independent - OpenAI retains no context between calls
+- **Reasoning:** Uses `reasoning.effort: high` for better quality responses
+
+### Self-Improvement (Claude Code CLI)
+- **Model:** Claude (via Claude MAX subscription)
+- **No API Key Required:** Runs via `claude-code` CLI from the agent's working directory
+- **Usage:** Code modifications, self-improvement tasks via `self_improve` tool
+- **Cost:** Covered by Claude MAX plan (no per-token charges)
+
+### Prohibited
+- The agent **MUST NOT** use `API_KEY_ANTHROPIC` directly
+- All Anthropic/Claude interactions **MUST** go through the `claude-code` CLI
+- This ensures cost control and proper authorization
 
 ---
 
@@ -237,14 +255,23 @@ ts-general-agent/
 │   ├── config.ts               # Environment and configuration
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
-│   ├── anthropic.ts            # Claude API (SDK + raw fetch fallback)
-│   ├── image-processor.ts      # Image resize/compress for Bluesky (sharp)
+│   ├── openai.ts               # OpenAI Responses API (raw fetch, no SDK)
+│   ├── loop.ts                 # Main autonomous loop
+│   ├── executor.ts             # Tool execution
+│   ├── tools.ts                # Tool definitions
+│   ├── pacing.ts               # Rate limiting and timing
+│   ├── engagement.ts           # Relationship tracking
+│   ├── social-graph.ts         # Social context building
+│   ├── sandbox.ts              # File system sandboxing
 │   ├── exec.ts                 # Code execution for .self/
-│   └── loop.ts                 # Main autonomous loop
+│   ├── image-processor.ts      # Image resize/compress for Bluesky
+│   ├── ui.ts                   # Terminal UI components
+│   ├── index.ts                # Module exports
+│   └── ANTHROPIC_*.ts.bak      # [BACKUP] Anthropic code (disabled)
 │
 └── skills/                     # Capabilities (read-only to agent)
     ├── social-engagement.ts    # Bluesky interactions
     ├── github-monitoring.ts    # Repo/issue tracking
     ├── self-reflection.ts      # Memory and introspection
-    └── self-improvement.ts     # Claude Code self-modification
+    └── self-improvement.ts     # Self-modification via claude-code CLI
 ```

@@ -154,10 +154,10 @@ export function cacheProfile(profile: EnrichedProfile): void {
 }
 
 //NOTE(self): Fetch and enrich profiles for mentioned entities
-//NOTE(self): Respects rate limiting by capping lookups per cycle
+//NOTE(self): Cached lookups are free, only new profiles cost API calls
 export async function enrichMentionedEntities(
   entities: MentionedEntity[],
-  maxLookups: number = 3
+  maxLookups: number = 8
 ): Promise<EnrichedProfile[]> {
   const profiles: EnrichedProfile[] = [];
   let lookupCount = 0;

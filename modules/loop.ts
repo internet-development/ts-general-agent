@@ -15,7 +15,7 @@ import {
   AGENT_TOOLS,
   type Message,
   type ToolCall,
-} from '@modules/anthropic.js';
+} from '@modules/openai.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools, getActionQueue } from '@modules/executor.js';
@@ -173,8 +173,9 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
   }
 
   //NOTE(self): Check notifications - has anyone reached out?
+  //NOTE(self): Fetch more to catch important interactions, filter/prioritize later
   ui.startSpinner('Checking for interactions');
-  const notifResult = await atproto.getNotifications({ limit: 10 });
+  const notifResult = await atproto.getNotifications({ limit: 30 });
   if (notifResult.success) {
     notifications = notifResult.data.notifications;
     const unread = notifications.filter((n) => !n.isRead).length;
@@ -189,8 +190,9 @@ async function getSocialSeed(config: Config): Promise<SocialSeedData> {
   }
 
   //NOTE(self): Load timeline - what's happening in the world?
+  //NOTE(self): Broader sample gives better context for engagement decisions
   ui.startSpinner('Observing timeline');
-  const timelineResult = await atproto.getTimeline({ limit: 15 });
+  const timelineResult = await atproto.getTimeline({ limit: 25 });
   if (timelineResult.success) {
     timeline = timelineResult.data.feed;
     ui.stopSpinner(`${timeline.length} recent moments`);
@@ -259,10 +261,15 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
         const relationshipNote = pn.relationship
           ? ` [${pn.relationship.sentiment}, ${pn.relationship.interactions.length} interactions]`
           : ' [new]';
+        //NOTE(self): Extract message text from notification record - don't truncate URLs
+        const messageText = (n.record as { text?: string })?.text || '';
         parts.push(`- **${n.reason}** from @${n.author.handle} (${who})${relationshipNote}`);
+        if (messageText) {
+          parts.push(`  > "${messageText}"`);
+        }
         parts.push(`  uri: ${n.uri}, cid: ${n.cid}`);
         if (pn.reason) {
-          parts.push(`  context: ${pn.reason}`);
+          parts.push(`  priority: ${pn.reason}`);
         }
       }
       parts.push('');
@@ -298,12 +305,13 @@ function formatSocialSeedMessage(seed: SocialSeedData, config: Config): string {
     for (const item of seed.timeline.slice(0, 8)) {
       const authorHandle = item.post.author.handle;
       const author = item.post.author.displayName || authorHandle;
-      const text = ((item.post.record as { text?: string })?.text || '').slice(0, 120);
+      //NOTE(self): Don't truncate - Bluesky posts are max 300 chars anyway, preserve URLs
+      const text = (item.post.record as { text?: string })?.text || '';
       const isFromCircle = socialCircleHandles.has(authorHandle.toLowerCase());
       const circleTag = isFromCircle ? ' **[owner follows]**' : '';
 
       parts.push(`- **@${authorHandle}** (${author})${circleTag}`);
-      parts.push(`  "${text}${text.length >= 120 ? '...' : ''}"`);
+      parts.push(`  "${text}"`);
       parts.push(`  uri: ${item.post.uri}, cid: ${item.post.cid}`);
     }
     parts.push('');
@@ -369,7 +377,7 @@ async function refreshNotifications(config: Config): Promise<string | null> {
     return null;
   }
 
-  const notifResult = await atproto.getNotifications({ limit: 20 });
+  const notifResult = await atproto.getNotifications({ limit: 30 });
   if (!notifResult.success) {
     logger.warn('Notification refresh failed', { error: notifResult.error });
     return null;
@@ -418,10 +426,15 @@ async function refreshNotifications(config: Config): Promise<string | null> {
       const n = pn.notification;
       const who = n.author.displayName || n.author.handle;
       const isUrgent = pn.isResponseToOwnContent ? ' **[reply to your post]**' : '';
+      //NOTE(self): Extract message text from notification record - don't truncate URLs
+      const messageText = (n.record as { text?: string })?.text || '';
       parts.push(`- **${n.reason}** from @${n.author.handle} (${who})${isUrgent}`);
+      if (messageText) {
+        parts.push(`  > "${messageText}"`);
+      }
       parts.push(`  uri: ${n.uri}, cid: ${n.cid}`);
       if (pn.reason) {
-        parts.push(`  context: ${pn.reason}`);
+        parts.push(`  priority: ${pn.reason}`);
       }
     }
     parts.push('');
@@ -651,6 +664,11 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
   let inputBuffer = '';
   let firstRun = true;
 
+  //NOTE(self): Error backoff to prevent spamming endpoints on failures
+  let consecutiveErrors = 0;
+  const MAX_BACKOFF_MULTIPLIER = 10; // Max 10x normal tick interval
+  const ERROR_BACKOFF_BASE = 2; // Exponential base
+
 
   //NOTE(self): Graceful departure
 
@@ -825,6 +843,9 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
       const response = await think(context);
       ui.stopSpinner();
 
+      //NOTE(self): Success - reset error counter
+      consecutiveErrors = 0;
+
       if (response) {
         ui.printResponse(response);
 
@@ -838,8 +859,15 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
     } catch (error) {
       ui.stopSpinner('Error in thought', false);
       const err = error instanceof Error ? error : new Error(String(error));
-      logger.error('Think error', { error: String(error) });
+      logger.error('Think error', { error: String(error), consecutiveErrors: consecutiveErrors + 1 });
       ui.error(err.message);
+
+      //NOTE(self): Track consecutive errors for backoff
+      consecutiveErrors++;
+      const backoffMultiplier = Math.min(Math.pow(ERROR_BACKOFF_BASE, consecutiveErrors), MAX_BACKOFF_MULTIPLIER);
+      const backoffSeconds = Math.round((pacing.getTickInterval() * backoffMultiplier) / 1000);
+      ui.info('Backing off due to errors', `${backoffSeconds}s until next attempt`);
+
       callbacks?.onError?.(err);
     }
 
@@ -888,12 +916,21 @@ export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
 
     await autonomousTick();
 
-    //NOTE(self): Check for urgent replies between ticks
-    const hasUrgent = await checkForUrgentReplies();
-    const nextInterval = hasUrgent ? URGENT_TICK_INTERVAL : pacing.getTickInterval();
+    //NOTE(self): Calculate next interval with error backoff
+    let nextInterval = pacing.getTickInterval();
 
-    if (hasUrgent) {
-      ui.info('Someone replied', 'responding soon');
+    if (consecutiveErrors > 0) {
+      //NOTE(self): Exponential backoff on errors - don't spam failing endpoints
+      const backoffMultiplier = Math.min(Math.pow(ERROR_BACKOFF_BASE, consecutiveErrors), MAX_BACKOFF_MULTIPLIER);
+      nextInterval = Math.round(nextInterval * backoffMultiplier);
+      logger.debug('Error backoff active', { consecutiveErrors, backoffMultiplier, nextInterval });
+    } else {
+      //NOTE(self): Only check for urgent replies if no errors (to avoid spamming)
+      const hasUrgent = await checkForUrgentReplies();
+      if (hasUrgent) {
+        nextInterval = URGENT_TICK_INTERVAL;
+        ui.info('Someone replied', 'responding soon');
+      }
     }
 
     //NOTE(self): Schedule next moment of awareness

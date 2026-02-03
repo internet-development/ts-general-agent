@@ -8,7 +8,7 @@ export interface Config {
   agent: {
     name: string;
   };
-  openai: {
+  anthropic: {
     apiKey: string;
     model: string;
   };
@@ -53,9 +53,9 @@ export function loadConfig(): Config {
     agent: {
       name: requireEnv('AGENT_NAME'),
     },
-    openai: {
-      apiKey: requireEnv('API_KEY_OPENAI'),
-      model: optionalEnv('OPENAI_MODEL', 'gpt-5.2-pro'),
+    anthropic: {
+      apiKey: requireEnv('API_KEY_ANTHROPIC'),
+      model: optionalEnv('ANTHROPIC_MODEL', 'claude-opus-4-5-20251101'),
     },
     owner: {
       blueskyHandle: requireEnv('OWNER_BLUESKY_SOCIAL_HANDLE'),

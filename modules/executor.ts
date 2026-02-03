@@ -393,16 +393,22 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         };
         const result = await github.listPullRequests({ owner, repo, state, per_page: limit });
         if (result.success) {
-          //NOTE(self): Simplify PR data for easier consumption
+          //NOTE(self): Simplify PR data - preserve full body, add useful metadata
           const simplified = result.data.map((pr) => ({
             number: pr.number,
             title: pr.title,
             state: pr.state,
+            draft: pr.draft,
             user: pr.user?.login,
             created_at: pr.created_at,
             updated_at: pr.updated_at,
             html_url: pr.html_url,
-            body: pr.body?.slice(0, 500),
+            body: pr.body, //NOTE(self): Don't truncate - need full context for meaningful engagement
+            comments: pr.comments,
+            review_comments: pr.review_comments,
+            additions: pr.additions,
+            deletions: pr.deletions,
+            changed_files: pr.changed_files,
           }));
           return { tool_use_id: call.id, content: JSON.stringify(simplified) };
         }

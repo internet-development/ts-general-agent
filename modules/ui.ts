@@ -265,17 +265,17 @@ export class TerminalUI {
     this.writeOutput('');
   }
 
-  //NOTE(self): Queue display
+  //NOTE(self): Queue display - show more actions with fuller descriptions
   printQueue(items: Array<{ action: string; priority: string }>): void {
     if (items.length === 0) return;
     this.writeOutput('');
     this.writeOutput(`  ${ANSI.yellow}${SYM.star} Planned Actions${ANSI.reset}`);
-    for (const item of items.slice(0, 4)) {
+    for (const item of items.slice(0, 8)) {
       const style = item.priority === 'high' ? ANSI.magenta : item.priority === 'low' ? ANSI.dim : ANSI.white;
-      this.writeOutput(`  ${style}${SYM.pointer} ${item.action.slice(0, 60)}${ANSI.reset}`);
+      this.writeOutput(`  ${style}${SYM.pointer} ${item.action.slice(0, 100)}${ANSI.reset}`);
     }
-    if (items.length > 4) {
-      this.writeOutput(`  ${ANSI.dim}+${items.length - 4} more${ANSI.reset}`);
+    if (items.length > 8) {
+      this.writeOutput(`  ${ANSI.dim}+${items.length - 8} more${ANSI.reset}`);
     }
   }
 
@@ -304,7 +304,7 @@ export class TerminalUI {
   printToolResult(toolName: string, success: boolean, detail?: string): void {
     const icon = success ? `${ANSI.green}${SYM.check}` : `${ANSI.red}${SYM.cross}`;
     const name = toolName.replace(/_/g, ' ');
-    const det = detail ? `  ${ANSI.dim}${detail.slice(0, 36)}${ANSI.reset}` : '';
+    const det = detail ? `  ${ANSI.dim}${detail.slice(0, 80)}${ANSI.reset}` : '';
     this.writeOutput(`  ${ANSI.dim}${timestamp()}${ANSI.reset}  ${icon}${ANSI.reset} ${ANSI.dim}${name}${ANSI.reset}${det}`);
   }
 
@@ -385,12 +385,46 @@ export class TerminalUI {
 
     const displayText = this.currentInputText || '';
     const textLines = wrapText(displayText, innerWidth);
-    const line1 = (textLines[0] || '').padEnd(innerWidth);
-    const line2 = (textLines[1] || '').padEnd(innerWidth);
+
+    //NOTE(self): Calculate cursor position within wrapped lines
+    //NOTE(self): We need to map cursorPos (index in original text) to (lineIndex, columnIndex)
+    let cursorLineIndex = 0;
+    let cursorColIndex = this.currentCursorPos;
+    let charsCounted = 0;
+
+    for (let i = 0; i < textLines.length; i++) {
+      const lineLen = textLines[i].length;
+      //NOTE(self): Add 1 for the space that was removed during wrapping (except last line)
+      const effectiveLen = i < textLines.length - 1 ? lineLen + 1 : lineLen;
+
+      //NOTE(self): Use > not >= so cursor at wrap boundary goes to next line
+      if (charsCounted + effectiveLen > this.currentCursorPos) {
+        cursorLineIndex = i;
+        cursorColIndex = this.currentCursorPos - charsCounted;
+        break;
+      }
+      charsCounted += effectiveLen;
+      cursorLineIndex = i + 1;
+      cursorColIndex = this.currentCursorPos - charsCounted;
+    }
+
+    //NOTE(self): Determine which 2 lines to display (scroll to show cursor)
+    let displayStartLine = 0;
+    if (cursorLineIndex >= 2) {
+      displayStartLine = cursorLineIndex - 1; //NOTE(self): Show cursor on line 2
+    }
+
+    const line1 = (textLines[displayStartLine] || '').padEnd(innerWidth);
+    const line2 = (textLines[displayStartLine + 1] || '').padEnd(innerWidth);
+
+    //NOTE(self): Show overflow indicator if there's more text
+    const hasOverflow = textLines.length > displayStartLine + 2;
+    const hasScrollUp = displayStartLine > 0;
 
     const ver = `v${this.currentVersion}`;
-    const bottomPadding = Math.max(0, width - ver.length - 5); //NOTE(self): 5 = └ + space + ver + space + ─┘
-    const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(bottomPadding)} ${ver} ${BOX.horizontal}${BOX.bottomRight}`;
+    const scrollIndicator = hasOverflow ? ' ...' : '';
+    const bottomPadding = Math.max(0, width - ver.length - scrollIndicator.length - 5);
+    const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(bottomPadding)}${scrollIndicator} ${ver} ${BOX.horizontal}${BOX.bottomRight}`;
 
     //NOTE(self): Save cursor position in scroll region
     process.stdout.write(ANSI.saveCursor);
@@ -398,8 +432,13 @@ export class TerminalUI {
     //NOTE(self): Draw input box at fixed bottom position (outside scroll region)
     const boxStartRow = height - this.inputBoxHeight + 1;
 
+    //NOTE(self): Top line with scroll-up indicator if needed
+    const topLineDisplay = hasScrollUp
+      ? `${BOX.topLeft}${BOX.horizontal} ... ${hotkeys} ${BOX.horizontal.repeat(Math.max(0, topPadding - 4))}${BOX.topRight}`
+      : topLine;
+
     process.stdout.write(CSI.moveTo(boxStartRow, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.cyan}${topLine}${ANSI.reset}`);
+    process.stdout.write(CSI.clearLine + `${ANSI.cyan}${topLineDisplay}${ANSI.reset}`);
 
     process.stdout.write(CSI.moveTo(boxStartRow + 1, 1));
     process.stdout.write(CSI.clearLine + `${ANSI.cyan}${BOX.vertical}${ANSI.reset} ${ANSI.white}${line1}${ANSI.reset} ${ANSI.cyan}${BOX.vertical}${ANSI.reset}`);
@@ -410,11 +449,11 @@ export class TerminalUI {
     process.stdout.write(CSI.moveTo(boxStartRow + 3, 1));
     process.stdout.write(CSI.clearLine + `${ANSI.cyan}${bottomLine}${ANSI.reset}`);
 
-    //NOTE(self): Position cursor in input area
-    const cursorInLine1 = this.currentCursorPos <= innerWidth;
-    const cursorRow = cursorInLine1 ? boxStartRow + 1 : boxStartRow + 2;
-    const cursorCol = cursorInLine1 ? this.currentCursorPos + 3 : (this.currentCursorPos - innerWidth) + 3;
-    process.stdout.write(CSI.moveTo(cursorRow, cursorCol));
+    //NOTE(self): Position cursor in input area based on which display line it's on
+    const cursorDisplayLine = cursorLineIndex - displayStartLine;
+    const cursorRow = boxStartRow + 1 + Math.min(cursorDisplayLine, 1);
+    const cursorCol = Math.min(cursorColIndex, innerWidth) + 3; //NOTE(self): +3 for "│ " prefix
+    process.stdout.write(CSI.moveTo(cursorRow, Math.max(3, cursorCol)));
   }
 
   //NOTE(self): Update input box content

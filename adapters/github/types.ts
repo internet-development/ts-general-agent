@@ -60,6 +60,7 @@ export interface GitHubPullRequest {
   title: string;
   body: string | null;
   state: 'open' | 'closed';
+  draft?: boolean;
   merged: boolean;
   user: {
     login: string;
@@ -82,6 +83,12 @@ export interface GitHubPullRequest {
   updated_at: string;
   merged_at: string | null;
   closed_at: string | null;
+  //NOTE(self): PR statistics from GitHub API
+  comments?: number;
+  review_comments?: number;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
 }
 
 export interface GitHubComment {
