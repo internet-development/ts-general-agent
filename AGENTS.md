@@ -39,16 +39,15 @@ The following environment variables **MUST** be configured in `.env`:
 | File | Purpose | Mutability | Token Cost |
 |------|---------|------------|------------|
 | `SOUL.md` | Core identity, immutable values | Never touched | ~500 |
-| `SELF.md` | Full self-reflection | **Agent owns completely, no limits** | Unlimited |
-| `OPERATING.md` | Working summary for routine ticks | Auto-regenerated each reflection cycle | ~200 |
+| `SELF.md` | Full self-reflection | **Agent owns completely, no limits** | Varies |
 
 **Context Loading:**
 
 | Scenario | Context Used | Tokens |
 |----------|--------------|--------|
 | Awareness check | None (API only) | 0 |
-| Expression cycle | `OPERATING.md` + prompt | ~800 |
-| Response mode | `OPERATING.md` + notifications | ~1200 |
+| Expression cycle | `SELF.md` + prompt | ~2000 |
+| Response mode | `SELF.md` + notifications | ~2500 |
 | Reflection cycle | Full `SELF.md` | ~2000 |
 | Owner speaks | Full `SELF.md` | varies |
 
@@ -85,21 +84,11 @@ The `self-extract` module can parse any of these sections to generate expression
 
 ---
 
-### `OPERATING.md`
-- This file is a **generated working summary** (~200 tokens) derived from `SELF.md`.
-- This file **MUST NOT** be manually edited - it is regenerated automatically.
-- Purpose: **Token efficiency** - reduces context consumption for routine operations.
-- The agent **MUST** use `OPERATING.md` for expression and response cycles.
-- The agent **MUST** use full `SELF.md` for reflection cycles and owner input.
-- The agent **MUST** regenerate `OPERATING.md` after every reflection cycle.
-- This file **MUST** be in `.gitignore` as it is runtime-generated.
-
----
-
 ### `.memory/`
 - This directory contains **functional runtime data only** (not agent memory).
 - **SELF.md is the agent's memory.** All persistent knowledge, reflections, and learnings go in SELF.md.
-- Runtime state (engagement, expression, friction) is **in-memory only** and resets on restart.
+- Runtime state (engagement, expression, relationships) is **in-memory only** and resets on restart.
+- Learnings are integrated into SELF.md during reflection cycles.
 
 #### `.memory/images/`
 - Temporary image storage during posting workflows.
@@ -147,7 +136,7 @@ The `self-extract` module can parse any of these sections to generate expression
 
 ## Scheduler Architecture
 
-The agent uses a **four-loop scheduler architecture** for efficient, expressive operation:
+The agent uses a **four-loop scheduler architecture** for expressive operation:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -159,22 +148,22 @@ The agent uses a **four-loop scheduler architecture** for efficient, expressive 
 │                        SELF.md                              │
 │   (Agent-owned, freely mutable, any structure)              │
 └─────────────────────────────────────────────────────────────┘
-         │                    │                      │
-         │ extract            │ compress             │ friction
-         ▼                    ▼                      ▼
-┌──────────────┐    ┌──────────────┐    ┌───────────────────┐
-│  EXPRESSION  │    │  OPERATING   │    │  FRICTION MEMORY  │
-│   PROMPTS    │    │     .md      │    │                   │
-│  (dynamic)   │    │  (~200 tok)  │    │                   │
-└──────────────┘    └──────────────┘    └───────────────────┘
-         │                    │                      │
-         ▼                    ▼                      ▼
+         │                                           │
+         │ extract                                   │ friction
+         ▼                                           ▼
+┌──────────────────────┐               ┌───────────────────┐
+│    EXPRESSION        │               │  FRICTION MEMORY  │
+│      PROMPTS         │               │                   │
+│     (dynamic)        │               │                   │
+└──────────────────────┘               └───────────────────┘
+         │                                           │
+         ▼                                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      SCHEDULER                              │
 ├─────────────┬─────────────┬─────────────┬──────────────────┤
 │  AWARENESS  │  EXPRESSION │  REFLECTION │  SELF-IMPROVE    │
 │   45 sec    │   90-120m   │    4-6h     │     12-24h       │
-│   0 tokens  │  ~800 tok   │  ~2000 tok  │  Claude Code     │
+│   0 tokens  │  ~2000 tok  │  ~2000 tok  │  Claude Code     │
 └─────────────┴─────────────┴─────────────┴──────────────────┘
 ```
 
@@ -192,11 +181,11 @@ The agent uses a **four-loop scheduler architecture** for efficient, expressive 
 - Each post is a hypothesis about identity; responses are data for growth
 
 ### Loop 3: Reflection (Deep)
-- **Interval:** 4-6 hours
+- **Interval:** 4-6 hours OR after 10+ significant events (whichever comes first)
 - **Tokens:** ~2000 per reflection
 - **Purpose:** Integrate experiences, update SELF.md
 - Reviews expression engagement, conversations, friction
-- Regenerates OPERATING.md after each reflection
+- Triggered early if many interactions occur (busy periods)
 
 ### Loop 4: Self-Improvement (Rare)
 - **Interval:** 12-24 hours minimum between attempts
@@ -209,12 +198,34 @@ The agent uses a **four-loop scheduler architecture** for efficient, expressive 
 ## Response Mode
 
 When the awareness loop detects people reaching out:
-- Loads `OPERATING.md` for context (~200 tokens)
+- Loads full `SELF.md` for context
 - Processes all pending notifications
 - Responds to each with full attention
 - Records interactions for relationship tracking
+- After 10+ significant events, triggers early reflection
 
-Owner input always gets full `SELF.md` context.
+---
+
+## Error Handling
+
+The agent handles API errors gracefully:
+
+**Transient Errors (Retry with Backoff):**
+- Rate limits (429)
+- Service unavailable (503, 502)
+- Network timeouts
+- Connection drops
+
+**Fatal Errors (Agent Exits):**
+- Insufficient credits / billing issues (402)
+- Invalid API key (401)
+- Access denied (403)
+
+When a fatal error occurs:
+1. Error is displayed clearly in the terminal
+2. Agent logs the error with details
+3. Agent exits cleanly with code 1
+4. User must fix configuration and restart
 
 ---
 
@@ -267,15 +278,21 @@ The agent uses a **dual-LLM architecture**:
 npm run agent
 ```
 
-### Flush Runtime Data
+### Walk Mode (Single Pass)
 ```bash
-npm run agent:flush
+npm run agent:walk
 ```
-Clears temp files and immediately regenerates OPERATING.md from SELF.md:
-- `.memory/images/` - temporary images
-- `OPERATING.md` - regenerated immediately
+Runs all scheduler operations once and exits. Useful for:
+- **Testing** - verify all systems work before long-running mode
+- **Self-management** - manually trigger reflection and SELF.md updates
+- **Debugging** - see what each operation does in isolation
 
-Most state is in-memory and resets on restart. SELF.md is the agent's persistent memory.
+Operations run in order:
+1. **Awareness** - check notifications, respond to people
+2. **Expression** - share a thought from SELF.md
+3. **Engagement** - check how recent posts performed
+4. **Reflection** - integrate experiences, update SELF.md
+5. **Improvement** - check for friction to fix (reports only)
 
 ### Full Reset
 ```bash
@@ -293,7 +310,6 @@ ts-general-agent/
 ├── AGENTS.md                   # System constraints (this file)
 ├── SOUL.md                     # Immutable essence (read-only)
 ├── SELF.md                     # Agent's self-reflection (agent-owned)
-├── OPERATING.md                # Generated working summary (auto-regenerated)
 ├── .memory/                    # Persistent memory (agent-writable)
 ├── .workrepos/                 # Cloned repos (agent-writable)
 │
@@ -340,12 +356,24 @@ ts-general-agent/
 
 ## Token Budget (Estimated Daily)
 
+**Context sizes** (baseline):
+- SOUL.md: ~65 tokens (immutable)
+- SELF.md: ~700-2,000 tokens (grows with learnings)
+
 | Loop | Frequency | Tokens/call | Daily Total |
 |------|-----------|-------------|-------------|
-| Awareness | 1920×/day | 0 | 0 |
-| Response | ~10 conversations | 1,200 | 12,000 |
-| Expression | ~8 posts | 800 | 6,400 |
-| Reflection | 3-4 cycles | 2,000 | 8,000 |
-| **Total** | | | **~26,400** |
+| Awareness | 1,280×/day | 0 | 0 |
+| Engagement check | 64×/day | 0 | 0 |
+| Response | ~10 conversations | 1,800 | 18,000 |
+| Expression | ~9 posts | 1,300 | 12,000 |
+| Reflection | ~5 cycles | 2,400 | 12,000 |
+| **Total** | | | **~42,000** |
 
-This is ~27x more efficient than the previous tick-based architecture while producing more expression.
+**Notes:**
+- Awareness and engagement checks use Bluesky API only (no LLM)
+- Reflection may retry once if SELF.md wasn't updated (~20% of cycles)
+- Token counts include SOUL.md + SELF.md context in every LLM call
+- Active hours: 16/day (quiet hours 11pm-7am)
+- Cost estimate at $0.01/1K tokens: **~$0.42/day** or **~$12.60/month**
+
+Uses full SELF.md context for all operations to maintain consistent identity and memory.

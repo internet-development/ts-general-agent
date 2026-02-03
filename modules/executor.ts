@@ -21,7 +21,7 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import * as arena from '@adapters/arena/index.js';
-import { markInteractionResponded, hasRepliedToPost, markPostReplied } from '@modules/engagement.js';
+import { markInteractionResponded, hasRepliedToPost, hasRepliedToThread, markPostReplied } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { ui } from '@modules/ui.js';
@@ -209,9 +209,10 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: 'Error: post_uri and post_cid are required to reply', is_error: true };
         }
 
-        //NOTE(self): Prevent multiple replies to the same post
+        //NOTE(self): CRITICAL: Prevent multiple replies to the same post - this is spammy behavior
         if (hasRepliedToPost(post_uri)) {
-          return { tool_use_id: call.id, content: 'Error: Already replied to this post. Only one reply per post is allowed.', is_error: true };
+          logger.warn('Blocked duplicate reply attempt', { post_uri });
+          return { tool_use_id: call.id, content: 'BLOCKED: You have already replied to this post. Replying multiple times to the same post is spam. Move on to the next notification.', is_error: true };
         }
 
         //NOTE(self): Build reply refs - auto-resolves root if not provided
@@ -221,6 +222,13 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         }
 
         const replyRefs = replyRefsResult.data;
+        const threadRootUri = replyRefs.root.uri;
+
+        //NOTE(self): CRITICAL: Check if we've already participated in this THREAD
+        if (hasRepliedToThread(threadRootUri)) {
+          logger.warn('Blocked reply to thread we already participated in', { post_uri, threadRootUri });
+          return { tool_use_id: call.id, content: 'BLOCKED: You have already replied in this thread. One reply per thread to avoid spam. Move on to the next notification.', is_error: true };
+        }
 
         //NOTE(self): Print what the agent is about to say so it's easy to follow
         ui.social(`${config.agent.name} (reply)`, text);
@@ -237,8 +245,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         if (result.success) {
           //NOTE(self): Mark the interaction as responded in engagement tracking
           markInteractionResponded(post_uri, result.data.uri);
-          //NOTE(self): Mark this post as replied to (prevents duplicate replies)
-          markPostReplied(post_uri);
+          //NOTE(self): Mark this post AND thread as replied to (prevents duplicate replies AND thread spam)
+          markPostReplied(post_uri, threadRootUri);
+          logger.info('Reply sent and thread marked', { post_uri, threadRootUri, reply_uri: result.data.uri });
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };

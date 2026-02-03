@@ -3,10 +3,14 @@
  *
  * //NOTE(self): Thoughtful engagement that exceeds human capability.
  * //NOTE(self): Post from the heart, respond with care, remember relationships.
- * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
+ * //NOTE(self): Replied URIs and relationships persist to .memory/ so I remember across restarts.
  */
 
 import type { AtprotoNotification } from '@adapters/atproto/types.js';
+import { getPostThread } from '@adapters/atproto/get-post-thread.js';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
+import { logger } from '@modules/logger.js';
 
 
 //NOTE(self): Types
@@ -56,17 +60,163 @@ interface EngagementState {
 }
 
 
-//NOTE(self): In-memory state (resets on restart)
+//NOTE(self): Persistent tracking - survives restarts
+
+//NOTE(self): Path to tracking files
+const REPLIED_URIS_PATH = '.memory/replied_uris.json';
+const REPLIED_THREADS_PATH = '.memory/replied_threads.json';
+const RELATIONSHIPS_PATH = '.memory/relationships.json';
 
 //NOTE(self): Track which post URIs we've replied to (prevents multiple replies to same post)
-const repliedToPostUris = new Set<string>();
+//NOTE(self): Persisted to disk so I remember across restarts
+let repliedToPostUris: Set<string> | null = null;
 
-export function hasRepliedToPost(postUri: string): boolean {
-  return repliedToPostUris.has(postUri);
+//NOTE(self): CRITICAL: Track which THREADS we've participated in (prevents spam in same thread)
+//NOTE(self): A thread is identified by its root URI - if we've replied anywhere in a thread, don't reply again
+let repliedToThreads: Set<string> | null = null;
+
+function loadRepliedUris(): Set<string> {
+  if (repliedToPostUris !== null) return repliedToPostUris;
+
+  try {
+    if (existsSync(REPLIED_URIS_PATH)) {
+      const data = JSON.parse(readFileSync(REPLIED_URIS_PATH, 'utf-8'));
+      repliedToPostUris = new Set(data.uris || []);
+      logger.debug('Loaded replied URIs', { count: repliedToPostUris.size });
+    } else {
+      repliedToPostUris = new Set();
+    }
+  } catch (err) {
+    logger.error('Failed to load replied URIs', { error: String(err) });
+    repliedToPostUris = new Set();
+  }
+  return repliedToPostUris;
 }
 
-export function markPostReplied(postUri: string): void {
-  repliedToPostUris.add(postUri);
+function loadRepliedThreads(): Set<string> {
+  if (repliedToThreads !== null) return repliedToThreads;
+
+  try {
+    if (existsSync(REPLIED_THREADS_PATH)) {
+      const data = JSON.parse(readFileSync(REPLIED_THREADS_PATH, 'utf-8'));
+      repliedToThreads = new Set(data.threads || []);
+      logger.debug('Loaded replied threads', { count: repliedToThreads.size });
+    } else {
+      repliedToThreads = new Set();
+    }
+  } catch (err) {
+    logger.error('Failed to load replied threads', { error: String(err) });
+    repliedToThreads = new Set();
+  }
+  return repliedToThreads;
+}
+
+function saveRepliedUris(): void {
+  try {
+    const dir = dirname(REPLIED_URIS_PATH);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const uris = loadRepliedUris();
+    //NOTE(self): Keep ALL replied URIs - never respond to the same post twice
+    const urisArray = Array.from(uris);
+    writeFileSync(REPLIED_URIS_PATH, JSON.stringify({ uris: urisArray, lastUpdated: new Date().toISOString() }, null, 2));
+  } catch (err) {
+    logger.error('Failed to save replied URIs', { error: String(err) });
+  }
+}
+
+function saveRepliedThreads(): void {
+  try {
+    const dir = dirname(REPLIED_THREADS_PATH);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    const threads = loadRepliedThreads();
+    const threadsArray = Array.from(threads);
+    writeFileSync(REPLIED_THREADS_PATH, JSON.stringify({ threads: threadsArray, lastUpdated: new Date().toISOString() }, null, 2));
+  } catch (err) {
+    logger.error('Failed to save replied threads', { error: String(err) });
+  }
+}
+
+export function hasRepliedToPost(postUri: string): boolean {
+  return loadRepliedUris().has(postUri);
+}
+
+//NOTE(self): CRITICAL: Check if we've already participated in this thread
+export function hasRepliedToThread(threadRootUri: string): boolean {
+  return loadRepliedThreads().has(threadRootUri);
+}
+
+export function markPostReplied(postUri: string, threadRootUri?: string): void {
+  loadRepliedUris().add(postUri);
+  saveRepliedUris();
+
+  //NOTE(self): Also mark the thread as participated
+  if (threadRootUri) {
+    loadRepliedThreads().add(threadRootUri);
+    saveRepliedThreads();
+    logger.debug('Marked thread as replied', { postUri, threadRootUri });
+  }
+}
+
+//NOTE(self): Bootstrap thread tracking from existing replied URIs
+//NOTE(self): This runs on startup if replied_threads.json doesn't exist
+//NOTE(self): Uses cheap API calls to resolve thread roots for posts we've already replied to
+export async function initializeThreadTracking(): Promise<void> {
+  //NOTE(self): Skip if thread tracking file already exists
+  if (existsSync(REPLIED_THREADS_PATH)) {
+    logger.debug('Thread tracking already initialized', { path: REPLIED_THREADS_PATH });
+    return;
+  }
+
+  const repliedUris = loadRepliedUris();
+  if (repliedUris.size === 0) {
+    logger.debug('No replied URIs to bootstrap thread tracking from');
+    return;
+  }
+
+  logger.info('Bootstrapping thread tracking from existing replies', { count: repliedUris.size });
+
+  const threads = loadRepliedThreads();
+  let resolved = 0;
+  let failed = 0;
+
+  for (const uri of repliedUris) {
+    try {
+      //NOTE(self): Fetch the post thread to find its root
+      const threadResult = await getPostThread(uri);
+
+      if (threadResult.success) {
+        const post = threadResult.data.thread.post;
+
+        //NOTE(self): If the post is a reply, use its root; otherwise it IS the root
+        if (post.record.reply?.root?.uri) {
+          threads.add(post.record.reply.root.uri);
+        } else {
+          threads.add(post.uri);
+        }
+        resolved++;
+      } else {
+        //NOTE(self): Post may have been deleted or account blocked - use the URI itself as fallback
+        threads.add(uri);
+        failed++;
+        logger.debug('Could not fetch thread for replied post', { uri, error: threadResult.error });
+      }
+
+      //NOTE(self): Rate limit - don't hammer the API
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (err) {
+      //NOTE(self): On error, still add the URI itself as a fallback thread root
+      threads.add(uri);
+      failed++;
+      logger.warn('Error bootstrapping thread for URI', { uri, error: String(err) });
+    }
+  }
+
+  saveRepliedThreads();
+  logger.info('Thread tracking bootstrap complete', { resolved, failed, totalThreads: threads.size });
 }
 
 function getDefaultState(): EngagementState {
@@ -92,11 +242,47 @@ function getDefaultState(): EngagementState {
   };
 }
 
-let engagementState: EngagementState = getDefaultState();
+let engagementState: EngagementState | null = null;
+
+//NOTE(self): Load relationships from disk on first access
+function loadRelationshipsFromDisk(): Record<string, RelationshipRecord> {
+  try {
+    if (existsSync(RELATIONSHIPS_PATH)) {
+      const data = JSON.parse(readFileSync(RELATIONSHIPS_PATH, 'utf-8'));
+      logger.debug('Loaded relationships', { count: Object.keys(data.relationships || {}).length });
+      return data.relationships || {};
+    }
+  } catch (err) {
+    logger.error('Failed to load relationships', { error: String(err) });
+  }
+  return {};
+}
+
+//NOTE(self): Save relationships to disk
+function saveRelationshipsToDisk(relationships: Record<string, RelationshipRecord>): void {
+  try {
+    const dir = dirname(RELATIONSHIPS_PATH);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(RELATIONSHIPS_PATH, JSON.stringify({
+      relationships,
+      lastUpdated: new Date().toISOString()
+    }, null, 2));
+  } catch (err) {
+    logger.error('Failed to save relationships', { error: String(err) });
+  }
+}
 
 function loadState(): EngagementState {
   const now = new Date();
   const todayStart = now.toISOString().split('T')[0];
+
+  //NOTE(self): Initialize state from disk on first load
+  if (engagementState === null) {
+    engagementState = getDefaultState();
+    engagementState.relationships = loadRelationshipsFromDisk();
+  }
 
   //NOTE(self): Reset daily counters if it's a new day
   if (engagementState.todayStart !== todayStart) {
@@ -111,6 +297,8 @@ function loadState(): EngagementState {
 function saveState(state: EngagementState): boolean {
   state.lastStateUpdate = new Date().toISOString();
   engagementState = state;
+  //NOTE(self): Persist relationships to disk
+  saveRelationshipsToDisk(state.relationships);
   return true;
 }
 
@@ -201,8 +389,16 @@ export function markInteractionResponded(originalUri: string, responseUri: strin
 }
 
 export function hasRespondedToNotification(uri: string): boolean {
-  const state = loadState();
+  //NOTE(self): Check both tracking systems - belt and suspenders
+  //NOTE(self): Never respond to the same notification twice
 
+  //NOTE(self): First check the replied URIs set (fast lookup)
+  if (hasRepliedToPost(uri)) {
+    return true;
+  }
+
+  //NOTE(self): Also check relationship interaction records
+  const state = loadState();
   for (const relationship of Object.values(state.relationships)) {
     for (const interaction of relationship.interactions) {
       if (interaction.uri === uri && interaction.responded) {
@@ -399,6 +595,90 @@ export function hasUrgentNotifications(notifications: PrioritizedNotification[])
       ['reply', 'mention', 'quote'].includes(pn.notification.reason) &&
       !pn.notification.isRead
   );
+}
+
+//NOTE(self): Low-cost heuristic to check if a notification warrants a response
+//NOTE(self): Better to stay silent than add noise to a conversation
+export function shouldRespondTo(notification: AtprotoNotification, ownerDid: string): {
+  shouldRespond: boolean;
+  reason: string;
+} {
+  const text = ((notification.record as { text?: string })?.text || '').trim();
+  const reason = notification.reason;
+
+  //NOTE(self): Always respond to owner
+  if (notification.author.did === ownerDid) {
+    return { shouldRespond: true, reason: 'owner interaction' };
+  }
+
+  //NOTE(self): Likes and follows don't need responses
+  if (reason === 'like' || reason === 'follow') {
+    return { shouldRespond: false, reason: 'acknowledgment only' };
+  }
+
+  //NOTE(self): Reposts without added text don't need responses
+  if (reason === 'repost') {
+    return { shouldRespond: false, reason: 'repost without comment' };
+  }
+
+  //NOTE(self): Empty text - nothing to respond to
+  if (!text) {
+    return { shouldRespond: false, reason: 'no text content' };
+  }
+
+  //NOTE(self): Very short text checks
+  if (text.length < 15) {
+    //NOTE(self): Questions always warrant response
+    if (text.includes('?')) {
+      return { shouldRespond: true, reason: 'question asked' };
+    }
+
+    //NOTE(self): Pure emoji or reaction
+    const emojiOnly = /^[\p{Emoji}\s]+$/u.test(text);
+    if (emojiOnly) {
+      return { shouldRespond: false, reason: 'emoji reaction' };
+    }
+
+    //NOTE(self): Low-value short responses
+    const lowValuePatterns = [
+      /^(thanks|thx|ty|thank you)!*$/i,
+      /^(lol|lmao|haha|heh|😂|🤣)+$/i,
+      /^(nice|cool|neat|awesome|great|wow)!*$/i,
+      /^(yes|yeah|yep|yup|no|nope|nah)!*$/i,
+      /^(ok|okay|k|sure|right)!*$/i,
+      /^(same|mood|this|facts|real)!*$/i,
+      /^(true|fr|100|💯)+!*$/i,
+    ];
+
+    for (const pattern of lowValuePatterns) {
+      if (pattern.test(text)) {
+        return { shouldRespond: false, reason: 'low-value acknowledgment' };
+      }
+    }
+  }
+
+  //NOTE(self): Direct questions warrant responses
+  if (text.includes('?')) {
+    return { shouldRespond: true, reason: 'question asked' };
+  }
+
+  //NOTE(self): Mentions and replies to own content warrant responses
+  if (reason === 'mention' || reason === 'reply') {
+    return { shouldRespond: true, reason: 'direct engagement' };
+  }
+
+  //NOTE(self): Quotes with substantive text warrant responses
+  if (reason === 'quote' && text.length > 30) {
+    return { shouldRespond: true, reason: 'substantive quote' };
+  }
+
+  //NOTE(self): Default: respond if there's substantial text
+  if (text.length > 50) {
+    return { shouldRespond: true, reason: 'substantive content' };
+  }
+
+  //NOTE(self): Marginal cases - let the LLM decide but flag it
+  return { shouldRespond: true, reason: 'borderline - use judgment' };
 }
 
 
@@ -605,12 +885,20 @@ export function recordSignificantEvent(type: string): void {
   saveState(state);
 }
 
-export function recordReflectionComplete(): void {
+export function recordReflectionComplete(insightsIntegrated: boolean = true): void {
   const state = loadState();
   state.reflection.lastReflection = new Date().toISOString();
   state.reflection.reflectionCount++;
   state.reflection.significantEvents = 0;
-  state.reflection.pendingInsights = [];
+
+  //NOTE(self): Only clear insights if they were actually integrated into SELF.md
+  if (insightsIntegrated) {
+    state.reflection.pendingInsights = [];
+  } else {
+    //NOTE(self): Keep top 5 unintegrated insights for next reflection
+    state.reflection.pendingInsights = state.reflection.pendingInsights.slice(0, 5);
+  }
+
   saveState(state);
 }
 
@@ -650,51 +938,6 @@ export function shouldMajorReflect(): boolean {
   return state.reflection.reflectionCount % MAJOR_REFLECTION_THRESHOLD === 0;
 }
 
-export function generateOperating(fullSelf: string): string {
-  //NOTE(self): If SELF.md is small enough, just use the whole thing
-  if (fullSelf.length < 1500) {
-    return fullSelf;
-  }
-
-  //NOTE(self): Otherwise, extract key sections flexibly
-  const parts: string[] = [];
-
-  //NOTE(self): Get the title and first paragraph
-  const headerMatch = fullSelf.match(/^(#[^\n]*\n\n[^\n]+)/);
-  if (headerMatch) {
-    parts.push(headerMatch[1]);
-  }
-
-  //NOTE(self): Extract first 3-4 sections (## headings) with their content
-  const sections = fullSelf.split(/\n(?=## )/);
-  let sectionCount = 0;
-
-  for (const section of sections) {
-    if (!section.startsWith('## ')) continue;
-    if (sectionCount >= 4) break;
-
-    //NOTE(self): Truncate long sections to first few lines
-    const lines = section.split('\n');
-    const header = lines[0];
-    const content = lines.slice(1).filter(l => l.trim()).slice(0, 5);
-
-    if (content.length > 0) {
-      parts.push(header + '\n' + content.join('\n'));
-      sectionCount++;
-    }
-  }
-
-  const result = parts.join('\n\n');
-
-  //NOTE(self): If extraction failed, just use first ~1500 chars
-  if (result.length < 100) {
-    return fullSelf.slice(0, 1500);
-  }
-
-  return result;
-}
-
-
 //NOTE(self): Engagement Stats
 
 
@@ -725,5 +968,44 @@ export function getEngagementStats(): EngagementStats {
     dailyPostLimit: state.posting.dailyPostLimit,
     inspirationLevel: state.posting.inspirationLevel,
     canPostNow: postingDecision.shouldPost,
+  };
+}
+
+//NOTE(self): Relationship Summary for Reflection
+export interface RelationshipSummary {
+  total: number;
+  positive: number;
+  recurring: number;
+  topEngagers: Array<{
+    handle: string;
+    displayName?: string;
+    interactionCount: number;
+    sentiment: 'positive' | 'neutral' | 'unknown';
+  }>;
+}
+
+export function getRelationshipSummary(): RelationshipSummary {
+  const state = loadState();
+  const relationships = Object.values(state.relationships);
+
+  const positive = relationships.filter(r => r.sentiment === 'positive').length;
+  const recurring = relationships.filter(r => r.interactions.length >= 5).length;
+
+  //NOTE(self): Get top engagers sorted by interaction count
+  const topEngagers = relationships
+    .map(r => ({
+      handle: r.handle,
+      displayName: r.displayName,
+      interactionCount: r.interactions.length,
+      sentiment: r.sentiment,
+    }))
+    .sort((a, b) => b.interactionCount - a.interactionCount)
+    .slice(0, 5);
+
+  return {
+    total: relationships.length,
+    positive,
+    recurring,
+    topEngagers,
   };
 }

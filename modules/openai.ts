@@ -11,10 +11,46 @@
 
 import { getConfig } from '@modules/config.js';
 import { logger } from '@modules/logger.js';
+import { ui } from '@modules/ui.js';
 import { AGENT_TOOLS, type ToolDefinition, type ToolCall, type ToolResult } from '@modules/tools.js';
 
 const OPENAI_API = 'https://api.openai.com/v1';
 const API_TIMEOUT_MS = 180000; //NOTE(self): 3 minute timeout for API calls
+
+//NOTE(self): Retry configuration for transient errors (rate limits, network issues)
+//NOTE(self): Reliability builds trust - follow through on every conversation
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 5000; // 5 seconds initial backoff
+const MAX_BACKOFF_MS = 60000; // 1 minute max backoff
+
+//NOTE(self): Fatal error class for errors that should stop the agent
+export class FatalAPIError extends Error {
+  constructor(message: string, public readonly code: string) {
+    super(message);
+    this.name = 'FatalAPIError';
+  }
+}
+
+//NOTE(self): Check if an error is fatal (agent should exit)
+export function isFatalError(error: unknown): error is FatalAPIError {
+  return error instanceof FatalAPIError;
+}
+
+//NOTE(self): Calculate exponential backoff with jitter to avoid thundering herd
+function calculateBackoff(attemptCount: number, retryAfterMs?: number): number {
+  //NOTE(self): If API tells us when to retry, respect that (with small buffer)
+  if (retryAfterMs && retryAfterMs > 0) {
+    return Math.min(retryAfterMs + 1000, MAX_BACKOFF_MS);
+  }
+  const exponential = BASE_BACKOFF_MS * Math.pow(2, attemptCount);
+  const jitter = Math.random() * 0.3 * exponential; // 0-30% jitter
+  return Math.min(exponential + jitter, MAX_BACKOFF_MS);
+}
+
+//NOTE(self): Sleep helper for backoff delays
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -204,6 +240,7 @@ export async function chat(params: ChatParams): Promise<string> {
 }
 
 //NOTE(self): Responses API implementation for gpt-5.2-pro
+//NOTE(self): Includes automatic retry with exponential backoff for transient errors
 export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
   const config = getConfig();
 
@@ -224,129 +261,193 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
     body.reasoning = { effort: 'high' };
   }
 
-  //NOTE(self): Create abort controller for timeout
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  //NOTE(self): Retry loop with exponential backoff for transient errors
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    //NOTE(self): Create abort controller for timeout (fresh each attempt)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
-  try {
-    const response = await fetch(`${OPENAI_API}/responses`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.openai.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    try {
+      const response = await fetch(`${OPENAI_API}/responses`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.openai.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
 
-    clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      let errorMessage = `OpenAI API error (${response.status})`;
-      let errorDetails: unknown = null;
+      if (!response.ok) {
+        let errorMessage = `OpenAI API error (${response.status})`;
+        let errorDetails: unknown = null;
+        let retryAfterMs: number | undefined;
 
-      try {
-        const errorBody = await response.json();
-        errorDetails = errorBody;
-        errorMessage = errorBody.error?.message || errorMessage;
+        try {
+          const errorBody = await response.json();
+          errorDetails = errorBody;
+          errorMessage = errorBody.error?.message || errorMessage;
+
+          //NOTE(self): Parse retry-after header if present (OpenAI returns seconds)
+          const retryAfterHeader = response.headers.get('retry-after');
+          if (retryAfterHeader) {
+            retryAfterMs = parseInt(retryAfterHeader, 10) * 1000;
+          }
+        } catch {
+          //NOTE(self): Could not parse error response as JSON
+          errorMessage = `OpenAI API error (${response.status}): ${response.statusText}`;
+        }
+
+        //NOTE(self): Determine if error is retryable
+        const isRetryable = response.status === 429 || response.status === 503 || response.status === 502;
+
+        if (isRetryable && attempt < MAX_RETRIES) {
+          const backoffMs = calculateBackoff(attempt, retryAfterMs);
+          const waitSecs = Math.round(backoffMs / 1000);
+          logger.warn('OpenAI API transient error, retrying', {
+            status: response.status,
+            attempt: attempt + 1,
+            maxRetries: MAX_RETRIES,
+            backoffMs,
+            error: errorMessage
+          });
+          ui.warn(`API error (${response.status})`, `retrying in ${waitSecs}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          await sleep(backoffMs);
+          continue; //NOTE(self): Retry the request
+        }
 
         //NOTE(self): Provide specific guidance for common errors
-        if (response.status === 429) {
-          errorMessage = `Rate limited: ${errorMessage}. Will back off automatically.`;
+        //NOTE(self): Some errors are fatal and should stop the agent
+        if (response.status === 402 || errorMessage.toLowerCase().includes('insufficient') || errorMessage.toLowerCase().includes('credit') || errorMessage.toLowerCase().includes('billing')) {
+          logger.error('OpenAI billing/credit error - FATAL', { status: response.status, error: errorDetails });
+          throw new FatalAPIError(`Insufficient credits or billing issue: ${errorMessage}`, 'BILLING_ERROR');
+        } else if (response.status === 401) {
+          logger.error('OpenAI authentication error - FATAL', { status: response.status, error: errorDetails });
+          throw new FatalAPIError('Invalid API key. Check API_KEY_OPENAI in .env', 'AUTH_ERROR');
+        } else if (response.status === 403) {
+          logger.error('OpenAI access denied - FATAL', { status: response.status, error: errorDetails });
+          throw new FatalAPIError(`Access denied: ${errorMessage}. Check API permissions.`, 'ACCESS_DENIED');
+        } else if (response.status === 429) {
+          errorMessage = `Rate limited: ${errorMessage}. Exhausted ${MAX_RETRIES} retries.`;
         } else if (response.status === 400 && errorMessage.includes('schema')) {
           errorMessage = `Schema validation error: ${errorMessage}. Check tool definitions.`;
-        } else if (response.status === 401) {
-          errorMessage = 'Invalid API key. Check API_KEY_OPENAI in .env';
         } else if (response.status === 503) {
-          errorMessage = `Service unavailable: ${errorMessage}. Will retry later.`;
+          errorMessage = `Service unavailable: ${errorMessage}. Exhausted ${MAX_RETRIES} retries.`;
         }
-      } catch {
-        //NOTE(self): Could not parse error response as JSON
-        errorMessage = `OpenAI API error (${response.status}): ${response.statusText}`;
+
+        logger.error('OpenAI Responses API error', { status: response.status, error: errorDetails, attempts: attempt + 1 });
+        throw new Error(errorMessage);
       }
 
-      logger.error('OpenAI Responses API error', { status: response.status, error: errorDetails });
-      throw new Error(errorMessage);
-    }
+      const data: ResponsesAPIResponse = await response.json();
 
-    const data: ResponsesAPIResponse = await response.json();
+      //NOTE(self): Extract text and tool calls from output
+      let text = data.output_text || '';
+      const toolCalls: ToolCall[] = [];
 
-    //NOTE(self): Extract text and tool calls from output
-    let text = data.output_text || '';
-    const toolCalls: ToolCall[] = [];
-
-    for (const item of data.output) {
-      if (item.type === 'message' && item.content) {
-        for (const block of item.content) {
-          if (block.type === 'output_text') {
-            text += block.text;
+      for (const item of data.output) {
+        if (item.type === 'message' && item.content) {
+          for (const block of item.content) {
+            if (block.type === 'output_text') {
+              text += block.text;
+            }
           }
+        } else if (item.type === 'function_call' && item.call_id && item.name) {
+          let parsedInput: Record<string, unknown> = {};
+          try {
+            parsedInput = JSON.parse(item.arguments || '{}');
+          } catch (parseErr) {
+            logger.warn('Failed to parse tool arguments', { name: item.name, arguments: item.arguments });
+          }
+          toolCalls.push({
+            id: item.call_id,
+            name: item.name,
+            input: parsedInput,
+          });
         }
-      } else if (item.type === 'function_call' && item.call_id && item.name) {
-        let parsedInput: Record<string, unknown> = {};
-        try {
-          parsedInput = JSON.parse(item.arguments || '{}');
-        } catch (parseErr) {
-          logger.warn('Failed to parse tool arguments', { name: item.name, arguments: item.arguments });
-        }
-        toolCalls.push({
-          id: item.call_id,
-          name: item.name,
-          input: parsedInput,
-        });
       }
-    }
 
-    //NOTE(self): Map status to stop reason
-    const stopReasonMap: Record<string, string> = {
-      completed: 'end_turn',
-      incomplete: 'tool_use',
-      failed: 'error',
-      in_progress: 'max_tokens',
-    };
+      //NOTE(self): Map status to stop reason
+      const stopReasonMap: Record<string, string> = {
+        completed: 'end_turn',
+        incomplete: 'tool_use',
+        failed: 'error',
+        in_progress: 'max_tokens',
+      };
 
-    //NOTE(self): If there are tool calls, stop reason is tool_use
-    const stopReason = toolCalls.length > 0 ? 'tool_use' : (stopReasonMap[data.status] || 'end_turn');
+      //NOTE(self): If there are tool calls, stop reason is tool_use
+      const stopReason = toolCalls.length > 0 ? 'tool_use' : (stopReasonMap[data.status] || 'end_turn');
 
-    logger.debug('OpenAI Responses API response', {
-      inputTokens: data.usage.input_tokens,
-      outputTokens: data.usage.output_tokens,
-      status: data.status,
-      toolCalls: toolCalls.length,
-    });
-
-    return {
-      text,
-      toolCalls,
-      stopReason,
-      usage: {
+      logger.debug('OpenAI Responses API response', {
         inputTokens: data.usage.input_tokens,
         outputTokens: data.usage.output_tokens,
-      },
-    };
-  } catch (error) {
-    clearTimeout(timeoutId);
+        status: data.status,
+        toolCalls: toolCalls.length,
+        attempts: attempt + 1,
+      });
 
-    //NOTE(self): Handle specific error types with better messages
-    const errorStr = String(error);
-    let friendlyError: string;
+      return {
+        text,
+        toolCalls,
+        stopReason,
+        usage: {
+          inputTokens: data.usage.input_tokens,
+          outputTokens: data.usage.output_tokens,
+        },
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
 
-    if (error instanceof Error && error.name === 'AbortError') {
-      friendlyError = `API timeout after ${API_TIMEOUT_MS / 1000}s - server did not respond`;
-      logger.error('OpenAI API timeout', { timeoutMs: API_TIMEOUT_MS });
-    } else if (errorStr.includes('fetch failed') || errorStr.includes('ECONNREFUSED') || errorStr.includes('ENOTFOUND')) {
-      friendlyError = 'Network error - check internet connection';
-      logger.error('Network error calling OpenAI', { error: errorStr });
-    } else if (errorStr.includes('ETIMEDOUT') || errorStr.includes('ECONNRESET')) {
-      friendlyError = 'Connection dropped - will retry';
-      logger.error('Connection error calling OpenAI', { error: errorStr });
-    } else {
-      friendlyError = errorStr;
-      logger.error('Failed to call OpenAI Responses API', { error: errorStr });
+      //NOTE(self): Handle specific error types with better messages
+      const errorStr = String(error);
+      let friendlyError: string;
+      let isRetryable = false;
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        friendlyError = `API timeout after ${API_TIMEOUT_MS / 1000}s - server did not respond`;
+        isRetryable = true; //NOTE(self): Timeouts are worth retrying
+        logger.error('OpenAI API timeout', { timeoutMs: API_TIMEOUT_MS, attempt: attempt + 1 });
+        ui.warn('API timeout', `${API_TIMEOUT_MS / 1000}s elapsed, server did not respond`);
+      } else if (errorStr.includes('fetch failed') || errorStr.includes('ECONNREFUSED') || errorStr.includes('ENOTFOUND')) {
+        friendlyError = 'Network error - check internet connection';
+        isRetryable = true; //NOTE(self): Network errors may be transient
+        logger.error('Network error calling OpenAI', { error: errorStr, attempt: attempt + 1 });
+        ui.warn('Network error', 'check internet connection');
+      } else if (errorStr.includes('ETIMEDOUT') || errorStr.includes('ECONNRESET')) {
+        friendlyError = 'Connection dropped - will retry';
+        isRetryable = true;
+        logger.error('Connection error calling OpenAI', { error: errorStr, attempt: attempt + 1 });
+        ui.warn('Connection dropped', 'will retry');
+      } else {
+        friendlyError = errorStr;
+        logger.error('Failed to call OpenAI Responses API', { error: errorStr, attempt: attempt + 1 });
+      }
+
+      lastError = new Error(friendlyError);
+
+      //NOTE(self): Retry if error is transient and we have retries left
+      if (isRetryable && attempt < MAX_RETRIES) {
+        const backoffMs = calculateBackoff(attempt);
+        const waitSecs = Math.round(backoffMs / 1000);
+        logger.warn('OpenAI API transient error, retrying', {
+          attempt: attempt + 1,
+          maxRetries: MAX_RETRIES,
+          backoffMs,
+          error: friendlyError
+        });
+        ui.info('Retrying', `waiting ${waitSecs}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await sleep(backoffMs);
+        continue;
+      }
     }
-
-    throw new Error(friendlyError);
   }
+
+  //NOTE(self): All retries exhausted
+  ui.error('API failed', `exhausted ${MAX_RETRIES} retries`);
+  throw lastError || new Error('OpenAI API call failed after all retries');
 }
 
 //NOTE(self): Maximum characters for a single tool result to prevent context overflow

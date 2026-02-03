@@ -10,16 +10,16 @@ import { logger } from '@modules/logger.js';
 import {
   chatWithTools,
   AGENT_TOOLS,
+  isFatalError,
   type Message,
 } from '@modules/openai.js';
-import { readSoul, readSelf, readOperating, writeOperating } from '@modules/memory.js';
+import { readSoul, readSelf } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools } from '@modules/executor.js';
 import { ui } from '@modules/ui.js';
 import {
   recordSignificantEvent,
   addInsight,
-  generateOperating,
 } from '@modules/engagement.js';
 import { getScheduler } from '@modules/scheduler.js';
 import { recordFriction } from '@modules/friction.js';
@@ -58,18 +58,8 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
 
   logger.info('Agent awakening (scheduler mode)');
 
-  //NOTE(self): Create OPERATING.md if it doesn't exist
-  const operating = readOperating(config.paths.operating);
-  if (!operating) {
-    const fullSelf = readSelf(config.paths.selfmd);
-    if (fullSelf) {
-      const generated = generateOperating(fullSelf);
-      writeOperating(config.paths.operating, generated);
-    }
-  }
-
   //NOTE(self): Extract identity from SELF.md
-  const selfContent = readOperating(config.paths.operating) || readSelf(config.paths.selfmd);
+  const selfContent = readSelf(config.paths.selfmd);
   const name =
     selfContent.match(/I'm\s+(\w+)/)?.[1] ||
     selfContent.match(/^#\s*(.+)$/m)?.[1]?.replace(/^(SELF|Agent Self Document)\s*/i, '').trim() ||
@@ -206,7 +196,20 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
     const soul = readSoul(config.paths.soul);
     const fullSelf = readSelf(config.paths.selfmd);
 
-    const systemPrompt = `${soul}\n\n---\n\n${fullSelf}\n\n---\n\n# Owner Communication\n\nYour owner is speaking to you directly. Give them your full attention.\nYour handle: ${config.bluesky.username}\nOwner: ${config.owner.blueskyHandle}`;
+    const systemPrompt = `${soul}\n\n---\n\n${fullSelf}\n\n---\n\n# Owner Communication
+
+Your owner is speaking. You have full agency to decide how to respond and what actions to take.
+
+You can:
+- Respond conversationally
+- Update your SELF.md (self_update) if you learn something about yourself
+- Improve your own code (self_improve) if you're inspired to grow
+- Take any action that aligns with who you are
+
+Your SELF.md defines who you are. Act from that understanding with complete freedom.
+
+Your handle: ${config.bluesky.username}
+Owner: ${config.owner.blueskyHandle}`;
 
     const messages: Message[] = [{ role: 'user', content: input }];
 
@@ -247,7 +250,16 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
     addInsight('Owner spoke - what did they need?');
   } catch (error) {
     ui.stopSpinner('Error processing input', false);
-    ui.error(String(error));
+
+    //NOTE(self): Check if this is a fatal error that should stop the agent
+    if (isFatalError(error)) {
+      ui.error('Fatal API Error', error.message);
+      ui.printResponse(`The agent must stop: ${error.message}\n\nPlease check your API configuration and restart.`);
+      logger.error('Fatal API error - shutting down', { code: error.code, message: error.message });
+      process.exit(1);
+    }
+
+    ui.error('API Error', String(error));
     recordFriction('social', 'Failed to process owner input', String(error));
   }
 }

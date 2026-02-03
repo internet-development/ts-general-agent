@@ -29,6 +29,82 @@ export interface CreatePostResponse {
   cid: string;
 }
 
+//NOTE(self): Facet for rich text (links, mentions, tags)
+interface Facet {
+  index: {
+    byteStart: number;
+    byteEnd: number;
+  };
+  features: Array<{
+    $type: string;
+    uri?: string;
+    did?: string;
+    tag?: string;
+  }>;
+}
+
+//NOTE(self): Detect URLs in text and create link facets
+function detectUrls(text: string): { url: string; start: number; end: number }[] {
+  const urlRegex = /https?:\/\/[^\s<>"\]]+/g;
+  const matches: { url: string; start: number; end: number }[] = [];
+
+  let match;
+  while ((match = urlRegex.exec(text)) !== null) {
+    matches.push({
+      url: match[0],
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+
+  return matches;
+}
+
+//NOTE(self): Convert character offset to byte offset (for UTF-8)
+function charToByteOffset(text: string, charOffset: number): number {
+  const encoder = new TextEncoder();
+  return encoder.encode(text.slice(0, charOffset)).length;
+}
+
+//NOTE(self): Check if URL is a Bluesky post URL and extract info
+function parseBskyPostUrl(url: string): { handle: string; rkey: string } | null {
+  //NOTE(self): Format: https://bsky.app/profile/{handle}/post/{rkey}
+  const match = url.match(/^https?:\/\/bsky\.app\/profile\/([^/]+)\/post\/([^/?#]+)/);
+  if (match) {
+    return { handle: match[1], rkey: match[2] };
+  }
+  return null;
+}
+
+//NOTE(self): Resolve a Bluesky post URL to its AT URI and CID
+async function resolvePostUrl(handle: string, rkey: string): Promise<{ uri: string; cid: string } | null> {
+  try {
+    //NOTE(self): First resolve handle to DID
+    const resolveResponse = await fetch(
+      `${BSKY_SERVICE}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`
+    );
+
+    if (!resolveResponse.ok) return null;
+
+    const { did } = await resolveResponse.json();
+
+    //NOTE(self): Then get the post record
+    const postResponse = await fetch(
+      `${BSKY_SERVICE}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(rkey)}`
+    );
+
+    if (!postResponse.ok) return null;
+
+    const postData = await postResponse.json();
+    return {
+      uri: postData.uri,
+      cid: postData.cid,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function createPost(
   params: CreatePostParams
 ): Promise<AtprotoResult<CreatePostResponse>> {
@@ -54,7 +130,42 @@ export async function createPost(
       };
     }
 
-    //NOTE(self): Add image embeds if provided
+    //NOTE(self): Detect URLs and create facets
+    const urls = detectUrls(params.text);
+    const facets: Facet[] = [];
+    let quoteEmbed: { uri: string; cid: string } | null = null;
+
+    for (const { url, start, end } of urls) {
+      //NOTE(self): Check if this is a Bluesky post URL
+      const bskyPost = parseBskyPostUrl(url);
+
+      if (bskyPost && !quoteEmbed) {
+        //NOTE(self): Try to resolve and embed the post (only first one)
+        const resolved = await resolvePostUrl(bskyPost.handle, bskyPost.rkey);
+        if (resolved) {
+          quoteEmbed = resolved;
+        }
+      }
+
+      //NOTE(self): Create link facet for all URLs (makes them clickable)
+      facets.push({
+        index: {
+          byteStart: charToByteOffset(params.text, start),
+          byteEnd: charToByteOffset(params.text, end),
+        },
+        features: [{
+          $type: 'app.bsky.richtext.facet#link',
+          uri: url,
+        }],
+      });
+    }
+
+    //NOTE(self): Add facets if any URLs found
+    if (facets.length > 0) {
+      record.facets = facets;
+    }
+
+    //NOTE(self): Handle embeds - images take priority, then quote posts
     if (params.images && params.images.length > 0) {
       record.embed = {
         $type: 'app.bsky.embed.images',
@@ -63,12 +174,20 @@ export async function createPost(
             alt: img.alt,
             image: img.image,
           };
-          //NOTE(self): Only include aspectRatio if provided
           if (img.aspectRatio) {
             imageEmbed.aspectRatio = img.aspectRatio;
           }
           return imageEmbed;
         }),
+      };
+    } else if (quoteEmbed) {
+      //NOTE(self): Embed the quoted post
+      record.embed = {
+        $type: 'app.bsky.embed.record',
+        record: {
+          uri: quoteEmbed.uri,
+          cid: quoteEmbed.cid,
+        },
       };
     }
 

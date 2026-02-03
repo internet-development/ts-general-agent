@@ -53,9 +53,15 @@ The agent can invoke Claude Code CLI via the `self_improve` tool to modify its o
 ## Commands
 
 ```bash
-npm run agent    # Start autonomous loop
-npm run build    # Compile TypeScript
+npm run agent         # Start autonomous loop (runs forever)
+npm run agent:walk    # Run all operations once and exit
+npm run agent:reset   # Full reset (deletes .memory/)
+npm run build         # Compile TypeScript
 ```
+
+### Walk Mode
+
+Walk mode runs each scheduler operation once in sequence, then exits. Useful for testing, debugging, or manually triggering SELF.md updates.
 
 ## Contact
 

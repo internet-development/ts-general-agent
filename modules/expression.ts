@@ -387,3 +387,87 @@ export function getExpressionStats(): {
     topSources,
   };
 }
+
+//NOTE(self): Engagement Patterns - what resonates with people?
+export interface EngagementPatterns {
+  highPerformers: Array<{ source: string; avgReplies: number; avgLikes: number; count: number }>;
+  lowPerformers: Array<{ source: string; avgReplies: number; avgLikes: number; count: number }>;
+  insights: string[];
+}
+
+export function getEngagementPatterns(): EngagementPatterns {
+  //NOTE(self): Use today's in-memory expressions for pattern analysis
+  //NOTE(self): Learnings should be integrated into SELF.md during reflection
+
+  //NOTE(self): Group by source and calculate averages
+  const sourceStats: Record<string, {
+    totalReplies: number;
+    totalLikes: number;
+    count: number;
+    withEngagement: number;
+  }> = {};
+
+  for (const record of todaysExpressions) {
+    if (!sourceStats[record.promptSource]) {
+      sourceStats[record.promptSource] = {
+        totalReplies: 0,
+        totalLikes: 0,
+        count: 0,
+        withEngagement: 0,
+      };
+    }
+
+    const stats = sourceStats[record.promptSource];
+    stats.count++;
+
+    if (record.engagement) {
+      stats.totalReplies += record.engagement.replies;
+      stats.totalLikes += record.engagement.likes;
+      stats.withEngagement++;
+    }
+  }
+
+  //NOTE(self): Calculate averages and sort by engagement
+  const performers = Object.entries(sourceStats)
+    .filter(([, stats]) => stats.withEngagement > 0)
+    .map(([source, stats]) => ({
+      source,
+      avgReplies: stats.totalReplies / stats.withEngagement,
+      avgLikes: stats.totalLikes / stats.withEngagement,
+      count: stats.count,
+    }))
+    .sort((a, b) => (b.avgReplies + b.avgLikes * 0.1) - (a.avgReplies + a.avgLikes * 0.1));
+
+  const highPerformers = performers.slice(0, 3);
+  const lowPerformers = performers.slice(-3).reverse();
+
+  //NOTE(self): Generate insights from patterns
+  const insights: string[] = [];
+
+  if (highPerformers.length > 0) {
+    const top = highPerformers[0];
+    if (top.avgReplies >= 1) {
+      insights.push(`${top.source} content resonates most - averaging ${top.avgReplies.toFixed(1)} replies`);
+    }
+  }
+
+  if (lowPerformers.length > 0 && highPerformers.length > 0) {
+    const low = lowPerformers[0];
+    const high = highPerformers[0];
+    if (low.source !== high.source && low.avgReplies < high.avgReplies * 0.3) {
+      insights.push(`${low.source} gets less engagement than ${high.source} - consider adjusting focus`);
+    }
+  }
+
+  //NOTE(self): Look for cross-pollination patterns
+  const crossPatterns = performers.filter(p => p.source.includes('+'));
+  if (crossPatterns.length > 0 && crossPatterns[0].avgReplies > 1) {
+    insights.push(`Cross-pollinated posts (${crossPatterns[0].source}) perform well`);
+  }
+
+  return {
+    highPerformers,
+    lowPerformers,
+    insights,
+  };
+}
