@@ -24,7 +24,8 @@ The following environment variables **MUST** be configured in `.env`:
 | Variable | Description |
 |----------|-------------|
 | `AGENT_NAME` | The agent's name (replaces `{{AGENT_NAME}}` in SELF.md on first run) |
-| `API_KEY_OPENAI` | OpenAI API key for GPT model access |
+| `AI_GATEWAY_API_KEY` | AI Gateway API key (used automatically by `ai` npm module) |
+| `AI_GATEWAY_MODEL` | Optional. Model to use (default: `openai/gpt-5.2`) |
 | `OWNER_BLUESKY_SOCIAL_HANDLE` | Owner's Bluesky social handle (e.g., `user.bsky.social`) |
 | `OWNER_BLUESKY_SOCIAL_HANDLE_DID` | Owner's Bluesky DID identifier |
 | `AGENT_BLUESKY_USERNAME` | Agent's Bluesky username for authentication |
@@ -251,23 +252,21 @@ Expression is how the agent discovers itself:
 
 ## Model & LLM Architecture
 
-The agent uses a **dual-LLM architecture**:
+The agent uses a **dual-LLM architecture** with streaming via the `ai` npm module:
 
-### Primary Reasoning (OpenAI)
-- **Default Model:** GPT-5.2-Pro (`gpt-5.2-pro`)
-- **Configurable via:** `OPENAI_MODEL` in `.env`
-- **API Key:** `API_KEY_OPENAI` in `.env`
+### Primary Reasoning (AI Gateway)
+- **Default Model:** GPT-5.2 (`openai/gpt-5.2`)
+- **Configurable via:** `AI_GATEWAY_MODEL` in `.env`
+- **API Key:** `AI_GATEWAY_API_KEY` in `.env` (automatically used by `ai` module)
 - **Usage:** All autonomous loops - awareness, expression, reflection, response
+- **Implementation:** Uses `streamText` from the `ai` npm module with model string
+- **Streaming:** Responses are streamed for improved performance and reduced latency
 
 ### Self-Improvement (Claude Code CLI)
 - **Model:** Claude (via Claude MAX subscription)
 - **No API Key Required:** Runs via `claude-code` CLI
 - **Usage:** Code modifications, self-improvement tasks via `self_improve` tool
 - **Trigger:** Accumulated friction (3+ occurrences of same category)
-
-### Prohibited
-- The agent **MUST NOT** use `API_KEY_ANTHROPIC` directly
-- All Anthropic/Claude interactions **MUST** go through the `claude-code` CLI
 
 ---
 
@@ -322,7 +321,7 @@ ts-general-agent/
 │   ├── config.ts               # Environment and configuration
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
-│   ├── openai.ts               # OpenAI Responses API
+│   ├── openai.ts               # AI Gateway (streaming via ai module)
 │   ├── loop.ts                 # Main loop (uses scheduler)
 │   ├── scheduler.ts            # Four-loop scheduler
 │   ├── self-extract.ts         # SELF.md parsing

@@ -273,7 +273,7 @@ function getCategoryHints(category: FrictionCategory): string {
       '- adapters/atproto/\n- modules/engagement.ts\n- Social interactions and responses',
     tools: '- modules/tools.ts\n- modules/executor.ts\n- Tool definitions and execution',
     understanding:
-      '- modules/openai.ts\n- System prompts\n- Context building',
+      '- modules/openai.ts (AI Gateway)\n- System prompts\n- Context building',
     other: '- Review recent changes\n- Check logs for errors\n- General debugging',
   };
 

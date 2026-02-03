@@ -1277,7 +1277,7 @@ Proceed thoughtfully.`;
             tool_use_id: call.id,
             content: JSON.stringify({
               success: true,
-              output: result.output?.slice(0, 2000),
+              output: result.output,
               message: 'Changes implemented. Restart to apply.',
             }),
           };

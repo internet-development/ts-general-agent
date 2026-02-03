@@ -176,6 +176,18 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
   },
 ];
 
+//NOTE(self): Identity with utility - every personal share should have an invitation
+//NOTE(self): This transforms "statements" into "open doors" that invite conversation
+const INVITATION_SUFFIX = `
+
+IMPORTANT: Identity with utility. Don't just share a statement—make it an open door.
+End your post with ONE of:
+- A tiny example or template others can use
+- A simple question that's easy to answer in one sentence
+- A concrete artifact (link, checklist, pattern)
+
+Keep it short. The invitation should feel natural, not forced.`;
+
 //NOTE(self): Fallback prompts when SELF.md is sparse
 const FALLBACK_PROMPTS = [
   {
@@ -232,13 +244,22 @@ export function generateExpressionPrompt(selfContent?: string): { prompt: string
   for (const generator of shuffled) {
     const result = generator(extract);
     if (result) {
-      return result;
+      //NOTE(self): Identity with utility - append invitation guidance to every prompt
+      return {
+        prompt: result.prompt + INVITATION_SUFFIX,
+        source: result.source,
+      };
     }
   }
 
   //NOTE(self): Fall back to generic prompts if SELF.md is sparse
   const fallback = randomFrom(FALLBACK_PROMPTS);
-  return fallback || FALLBACK_PROMPTS[0];
+  const base = fallback || FALLBACK_PROMPTS[0];
+  //NOTE(self): Identity with utility - append invitation guidance to fallback too
+  return {
+    prompt: base.prompt + INVITATION_SUFFIX,
+    source: base.source,
+  };
 }
 
 //NOTE(self): Schedule my next expression
@@ -386,6 +407,108 @@ export function getExpressionStats(): {
     totalReplies,
     topSources,
   };
+}
+
+//NOTE(self): Identity with utility - validation patterns
+//NOTE(self): These patterns help me recognize when a post has a concrete invitation
+const INVITATION_PATTERNS = {
+  //NOTE(self): Questions that are easy to answer
+  easyQuestion: /\?[^?]*$/,  // ends with a question
+  choiceQuestion: /(?:prefer|choose|pick|rather|which|what do you)\b.*\?/i,
+
+  //NOTE(self): Concrete artifacts
+  hasTemplate: /(?:template|checklist|pattern|recipe|example|here's how|try this)/i,
+  hasLink: /https?:\/\/\S+/,
+
+  //NOTE(self): Explicit invitations
+  explicitInvitation: /(?:what's yours|how about you|curious|wondering|interested to hear|love to know|what do you think)/i,
+};
+
+//NOTE(self): Result of checking if a post has utility (an invitation)
+export interface InvitationCheck {
+  hasInvitation: boolean;
+  invitationType: 'question' | 'artifact' | 'explicit' | 'none';
+  confidence: 'strong' | 'weak' | 'none';
+  suggestion?: string;
+}
+
+//NOTE(self): Identity with utility - check if my draft has a concrete invitation
+//NOTE(self): This helps me catch "broadcast-y" posts before they go out
+export function checkInvitation(draft: string): InvitationCheck {
+  const hasEasyQuestion = INVITATION_PATTERNS.easyQuestion.test(draft);
+  const hasChoiceQuestion = INVITATION_PATTERNS.choiceQuestion.test(draft);
+  const hasTemplate = INVITATION_PATTERNS.hasTemplate.test(draft);
+  const hasLink = INVITATION_PATTERNS.hasLink.test(draft);
+  const hasExplicit = INVITATION_PATTERNS.explicitInvitation.test(draft);
+
+  //NOTE(self): Strong invitation: choice question or explicit + question
+  if (hasChoiceQuestion || (hasExplicit && hasEasyQuestion)) {
+    return {
+      hasInvitation: true,
+      invitationType: 'question',
+      confidence: 'strong',
+    };
+  }
+
+  //NOTE(self): Strong artifact: template/example with link
+  if (hasTemplate && hasLink) {
+    return {
+      hasInvitation: true,
+      invitationType: 'artifact',
+      confidence: 'strong',
+    };
+  }
+
+  //NOTE(self): Weak invitation: just a question or just an artifact
+  if (hasEasyQuestion) {
+    return {
+      hasInvitation: true,
+      invitationType: 'question',
+      confidence: 'weak',
+      suggestion: 'Consider making the question easier to answer (A or B? / what\'s yours?)',
+    };
+  }
+
+  if (hasTemplate || hasLink) {
+    return {
+      hasInvitation: true,
+      invitationType: 'artifact',
+      confidence: 'weak',
+      suggestion: 'Consider adding a simple question to invite response',
+    };
+  }
+
+  if (hasExplicit) {
+    return {
+      hasInvitation: true,
+      invitationType: 'explicit',
+      confidence: 'weak',
+      suggestion: 'Consider ending with a concrete question',
+    };
+  }
+
+  //NOTE(self): No invitation detected - this is a "statement" post
+  return {
+    hasInvitation: false,
+    invitationType: 'none',
+    confidence: 'none',
+    suggestion: 'This reads like a statement. Add: (1) a simple question, (2) a tiny template, or (3) "What\'s yours?"',
+  };
+}
+
+//NOTE(self): Quick prompts I can append to make a statement into an invitation
+//NOTE(self): These come from my SELF.md "Quick prompts I can reuse" section
+export const INVITATION_PROMPTS = [
+  'What\'s yours?',
+  'How about you?',
+  'Curious what you think.',
+  'Does this resonate?',
+  'Anyone else notice this?',
+];
+
+//NOTE(self): Get a random invitation prompt to append
+export function getInvitationPrompt(): string {
+  return INVITATION_PROMPTS[Math.floor(Math.random() * INVITATION_PROMPTS.length)];
 }
 
 //NOTE(self): Engagement Patterns - what resonates with people?

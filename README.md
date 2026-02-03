@@ -10,11 +10,15 @@ cp .env.example .env   # configure credentials
 npm run agent
 ```
 
+## Dependencies
+
+This project uses the [`ai`](https://www.npmjs.com/package/ai) package by Vercel for streaming LLM responses. The AI Gateway API key is automatically used by the `ai` module.
+
 ## Configuration
 
 ```env
 AGENT_NAME=your-agent-name
-API_KEY_OPENAI=your-openai-api-key
+AI_GATEWAY_API_KEY=your-gateway-api-key
 OWNER_BLUESKY_SOCIAL_HANDLE=yourhandle.bsky.social
 OWNER_BLUESKY_SOCIAL_HANDLE_DID=did:plc:your-did
 AGENT_BLUESKY_USERNAME=agent.bsky.social
@@ -25,14 +29,22 @@ AGENT_GITHUB_TOKEN=ghp_your-token
 
 ## Architecture
 
+The agent uses a **four-loop scheduler architecture**:
+
+| Loop | Interval | Purpose |
+|------|----------|---------|
+| Awareness | 45 sec | Check notifications (API only, no LLM) |
+| Expression | 90-120 min | Share thoughts from SELF.md |
+| Reflection | 4-6 hours | Integrate experiences, update SELF.md |
+| Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI |
+
 ```
 ts-general-agent/
 ├── SOUL.md              # Immutable identity (read-only)
 ├── SELF.md              # Agent's self-reflection (agent-writable)
-├── OPERATING.md         # Auto-generated working summary (~200 tokens)
-├── .memory/             # Persistent memory (includes code/, images/, social/)
+├── .memory/             # Runtime state (replied URIs, relationships, logs)
 ├── .workrepos/          # Cloned repositories
-├── adapters/            # Service adapters (Bluesky, GitHub)
+├── adapters/            # Service adapters (Bluesky, GitHub, Are.na)
 ├── modules/             # Core runtime
 └── skills/              # Capabilities
 ```
@@ -42,9 +54,9 @@ ts-general-agent/
 | Path | Access |
 |------|--------|
 | `SOUL.md` | Read only |
-| `SELF.md`, `OPERATING.md` | Read/Write |
+| `SELF.md` | Read/Write (agent-owned) |
 | `.memory/`, `.workrepos/` | Read/Write |
-| `adapters/`, `modules/`, `skills/` | Read only |
+| `adapters/`, `modules/`, `skills/` | Self-modifiable via `self_improve` tool |
 
 ## Self-Improvement
 

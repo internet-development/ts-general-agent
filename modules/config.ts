@@ -7,9 +7,6 @@ dotenvConfig();
 export interface Config {
   agent: {
     name: string;
-  };
-  openai: {
-    apiKey: string;
     model: string;
   };
   owner: {
@@ -51,10 +48,7 @@ export function loadConfig(): Config {
   return {
     agent: {
       name: requireEnv('AGENT_NAME'),
-    },
-    openai: {
-      apiKey: requireEnv('API_KEY_OPENAI'),
-      model: optionalEnv('OPENAI_MODEL', 'gpt-5.2-pro'),
+      model: optionalEnv('AI_GATEWAY_MODEL', 'openai/gpt-5.2'),
     },
     owner: {
       blueskyHandle: requireEnv('OWNER_BLUESKY_SOCIAL_HANDLE'),

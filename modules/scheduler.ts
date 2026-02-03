@@ -13,7 +13,7 @@ import { logger } from '@modules/logger.js';
 import { ui } from '@modules/ui.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
-import { chatWithTools, AGENT_TOOLS, isFatalError, type Message } from '@modules/openai.js';
+import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, type Message } from '@modules/openai.js';
 import { executeTools } from '@modules/executor.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
@@ -52,6 +52,8 @@ import {
   updateExpressionEngagement,
   getExpressionsNeedingEngagementCheck,
   getEngagementPatterns,
+  checkInvitation,
+  getInvitationPrompt,
 } from '@modules/expression.js';
 import {
   recordFriction,
@@ -260,14 +262,24 @@ export class AgentScheduler {
       }
 
       //NOTE(self): Filter to unread conversations that need response
-      const needsResponse = prioritized.filter(
-        (pn) =>
-          !pn.notification.isRead &&
-          ['reply', 'mention', 'quote'].includes(pn.notification.reason)
-      );
+      //NOTE(self): Also exclude posts/threads we've already replied to - avoids false "Ready to respond"
+      const needsResponse = prioritized.filter((pn) => {
+        const n = pn.notification;
+        if (n.isRead) return false;
+        if (!['reply', 'mention', 'quote'].includes(n.reason)) return false;
+        if (hasRepliedToPost(n.uri)) return false;
+
+        //NOTE(self): Check thread root
+        const record = n.record as { reply?: { root?: { uri?: string } } };
+        const threadRootUri = record?.reply?.root?.uri;
+        if (threadRootUri && hasRepliedToThread(threadRootUri)) return false;
+        if (hasRepliedToThread(n.uri)) return false;
+
+        return true;
+      });
 
       if (needsResponse.length > 0) {
-        ui.info('People reaching out', `${needsResponse.length} awaiting response`);
+        ui.info('Ready to respond');
         this.state.pendingNotifications = needsResponse;
         await this.triggerResponseMode();
       }
@@ -520,11 +532,47 @@ Your handle: ${config.bluesky.username}${richnessNote}`;
 
       const messages: Message[] = [{ role: 'user', content: userMessage }];
 
-      const response = await chatWithTools({
+      let response = await chatWithTools({
         system: systemPrompt,
         messages,
         tools: AGENT_TOOLS,
       });
+
+      //NOTE(self): Identity with utility - validate invitation before posting
+      //NOTE(self): This ensures my personal shares always have a concrete invitation
+      const postCall = response.toolCalls.find((tc) => tc.name === 'bluesky_post');
+      if (postCall) {
+        const draftText = postCall.input?.text as string;
+        if (draftText) {
+          const invitationCheck = checkInvitation(draftText);
+
+          //NOTE(self): If invitation is weak or missing, ask for a revision
+          if (!invitationCheck.hasInvitation || invitationCheck.confidence === 'weak') {
+            logger.debug('Invitation check failed, requesting revision', {
+              hasInvitation: invitationCheck.hasInvitation,
+              confidence: invitationCheck.confidence,
+              suggestion: invitationCheck.suggestion,
+            });
+
+            const revisionPrompt = invitationCheck.suggestion
+              ? `Your draft: "${draftText}"\n\n${invitationCheck.suggestion}\n\nExample quick fixes: "${getInvitationPrompt()}" or "${getInvitationPrompt()}"\n\nRevise and post again.`
+              : `Your draft: "${draftText}"\n\nThis reads like a statement. Add a simple question or invitation at the end.\n\nExample: "${getInvitationPrompt()}"\n\nRevise and post again.`;
+
+            messages.push(
+              createAssistantToolUseMessage(response.text, response.toolCalls),
+              { role: 'user', content: revisionPrompt }
+            );
+
+            response = await chatWithTools({
+              system: systemPrompt,
+              messages,
+              tools: AGENT_TOOLS,
+            });
+
+            addInsight('Revised post to add stronger invitation - identity with utility in action');
+          }
+        }
+      }
 
       //NOTE(self): Execute the post
       if (response.toolCalls.length > 0) {
@@ -856,7 +904,7 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       if (result.success) {
         //NOTE(self): Extract a meaningful summary from Claude Code output
         const summary = this.extractImprovementSummary(result.output || '');
-        recordImprovementOutcome(friction.id, 'success', result.output?.slice(0, 500) || 'Changes made');
+        recordImprovementOutcome(friction.id, 'success', result.output || 'Changes made');
         addInsight(`Fixed friction: ${friction.description} - I am growing`);
         ui.stopSpinner('Self-improvement complete');
         //NOTE(self): Show what was actually done
@@ -867,8 +915,7 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
         recordImprovementOutcome(friction.id, 'failed', result.error || 'Unknown error');
         ui.stopSpinner('Self-improvement failed', false);
         //NOTE(self): Show why it failed
-        const errorSummary = (result.error || 'Unknown error').slice(0, 100);
-        ui.error('Reason', errorSummary);
+        ui.error('Reason', result.error || 'Unknown error');
       }
     } catch (error) {
       recordImprovementOutcome(friction.id, 'failed', String(error));
@@ -917,14 +964,14 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
     }
 
     if (summaryLines.length > 0) {
-      return summaryLines.join('; ').slice(0, 150);
+      return summaryLines.join('; ');
     }
 
     //NOTE(self): Fallback: take the last meaningful line as it often summarizes
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim();
       if (line.length > 20 && !line.startsWith('#') && !line.startsWith('```')) {
-        return line.slice(0, 100);
+        return line;
       }
     }
 
@@ -997,13 +1044,13 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       const memoryPath = `${repoRoot}/.memory`;
 
       //NOTE(self): Run Claude Code for aspirational growth
-      ui.info('Invoking Claude Code', aspiration.description.slice(0, 50));
+      ui.info('Invoking Claude Code', aspiration.description);
       const result = await runClaudeCode(prompt, repoRoot, memoryPath);
 
       if (result.success) {
         const summary = this.extractImprovementSummary(result.output || '');
-        recordGrowthOutcome(aspiration.id, 'success', result.output?.slice(0, 500) || 'Growth achieved');
-        addInsight(`Grew toward aspiration: ${aspiration.description.slice(0, 50)}...`);
+        recordGrowthOutcome(aspiration.id, 'success', result.output || 'Growth achieved');
+        addInsight(`Grew toward aspiration: ${aspiration.description}`);
         ui.stopSpinner('Aspirational growth complete');
         if (summary) {
           ui.info('Growth achieved', summary);
@@ -1011,8 +1058,7 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       } else {
         recordGrowthOutcome(aspiration.id, 'partial', result.error || 'Unknown issue');
         ui.stopSpinner('Growth incomplete', false);
-        const errorSummary = (result.error || 'Unknown issue').slice(0, 100);
-        ui.warn('Growth incomplete', errorSummary);
+        ui.warn('Growth incomplete', result.error || 'Unknown issue');
       }
     } catch (error) {
       recordGrowthOutcome(aspiration.id, 'partial', String(error));
