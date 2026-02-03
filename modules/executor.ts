@@ -25,6 +25,7 @@ import { markInteractionResponded } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { ui } from '@modules/ui.js';
+import { logPost, lookupPostByUri, lookupPostByBskyUrl, generatePostContext, type PostLogEntry } from '@modules/post-log.js';
 
 export interface ActionQueueItem {
   id: string;
@@ -238,6 +239,37 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             }
           }
 
+          //NOTE(self): Log post for future context
+          //NOTE(self): Convert AT URI to bsky.app URL
+          const postUri = postResult.data.uri;
+          const uriMatch = postUri.match(/at:\/\/([^\/]+)\/app\.bsky\.feed\.post\/([^\/]+)/);
+          let bskyUrl = postUri;
+          if (uriMatch) {
+            bskyUrl = `https://bsky.app/profile/${uriMatch[1]}/post/${uriMatch[2]}`;
+          }
+
+          const imagePostLogEntry: PostLogEntry = {
+            timestamp: new Date().toISOString(),
+            bluesky: {
+              post_uri: postResult.data.uri,
+              post_cid: postResult.data.cid,
+              bsky_url: bskyUrl,
+            },
+            source: {
+              type: image_path ? 'url' : 'other',
+              image_url: image_path,
+            },
+            content: {
+              post_text: text,
+              alt_text: alt_text,
+              image_dimensions: {
+                width: processedImage.width,
+                height: processedImage.height,
+              },
+            },
+          };
+          logPost(imagePostLogEntry);
+
           return {
             tool_use_id: call.id,
             content: JSON.stringify({
@@ -253,15 +285,33 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
       case 'bluesky_reply': {
         const { text, post_uri, post_cid, root_uri, root_cid } = call.input as Record<string, string>;
+
+        //NOTE(self): Validate required parameters
+        if (!text || typeof text !== 'string' || text.trim().length === 0) {
+          return { tool_use_id: call.id, content: 'Error: Reply text is required and cannot be empty', is_error: true };
+        }
+        if (!post_uri || !post_cid) {
+          return { tool_use_id: call.id, content: 'Error: post_uri and post_cid are required to reply', is_error: true };
+        }
+
+        //NOTE(self): Build reply refs - auto-resolves root if not provided
+        const replyRefsResult = await atproto.getReplyRefs(post_uri, post_cid, root_uri, root_cid);
+        if (!replyRefsResult.success) {
+          return { tool_use_id: call.id, content: `Error resolving reply refs: ${replyRefsResult.error}`, is_error: true };
+        }
+
+        const replyRefs = replyRefsResult.data;
+
         //NOTE(self): Print what the agent is about to say so it's easy to follow
         ui.social(`${config.agent.name} (reply)`, text);
+
         const result = await atproto.createPost({
           text,
           replyTo: {
-            uri: post_uri,
-            cid: post_cid,
-            rootUri: root_uri,
-            rootCid: root_cid,
+            uri: replyRefs.parent.uri,
+            cid: replyRefs.parent.cid,
+            rootUri: replyRefs.root.uri,
+            rootCid: replyRefs.root.cid,
           },
         });
         if (result.success) {
@@ -1189,13 +1239,27 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           }],
         };
 
-        //NOTE(self): Add reply context if provided
+        //NOTE(self): Add reply context if provided, auto-resolving root if needed
         if (reply_to) {
+          const replyRefsResult = await atproto.getReplyRefs(
+            reply_to.post_uri,
+            reply_to.post_cid,
+            reply_to.root_uri,
+            reply_to.root_cid
+          );
+          if (!replyRefsResult.success) {
+            try { fs.unlinkSync(curlResult.filePath); } catch { /* ignore */ }
+            return {
+              tool_use_id: call.id,
+              content: `Error resolving reply refs: ${replyRefsResult.error}`,
+              is_error: true,
+            };
+          }
           postParams.replyTo = {
-            uri: reply_to.post_uri,
-            cid: reply_to.post_cid,
-            rootUri: reply_to.root_uri,
-            rootCid: reply_to.root_cid,
+            uri: replyRefsResult.data.parent.uri,
+            cid: replyRefsResult.data.parent.cid,
+            rootUri: replyRefsResult.data.root.uri,
+            rootCid: replyRefsResult.data.root.cid,
           };
         }
 
@@ -1234,6 +1298,39 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           markInteractionResponded(reply_to.post_uri, postResult.data.uri);
         }
 
+        //NOTE(self): Log post for future context (so I can answer "why did you pick this?")
+        const postLogEntry: PostLogEntry = {
+          timestamp: new Date().toISOString(),
+          bluesky: {
+            post_uri: postResult.data.uri,
+            post_cid: postResult.data.cid,
+            bsky_url: bskyUrl,
+          },
+          source: {
+            type: 'arena',
+            channel_url: `https://www.are.na/${owner}/${slug}`,
+            block_id: selectedBlock.id,
+            block_title: blockTitle,
+            original_url: selectedBlock.source?.url,
+            image_url: imageUrl,
+          },
+          content: {
+            post_text: postText,
+            alt_text: altText,
+            image_dimensions: {
+              width: processedImage.width,
+              height: processedImage.height,
+            },
+          },
+          reply_context: reply_to ? {
+            parent_uri: reply_to.post_uri,
+            parent_cid: reply_to.post_cid,
+            root_uri: reply_to.root_uri,
+            root_cid: reply_to.root_cid,
+          } : undefined,
+        };
+        logPost(postLogEntry);
+
         return {
           tool_use_id: call.id,
           content: JSON.stringify({
@@ -1244,6 +1341,50 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             blockTitle,
             channel: channel.title,
             remainingUnposted: unpostedBlocks.length - 1,
+          }),
+        };
+      }
+
+      case 'lookup_post_context': {
+        const { post_uri, bsky_url } = call.input as {
+          post_uri?: string;
+          bsky_url?: string;
+        };
+
+        if (!post_uri && !bsky_url) {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Must provide either post_uri or bsky_url to look up',
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Try both lookup methods
+        let entry = null;
+        if (post_uri) {
+          entry = lookupPostByUri(post_uri);
+        }
+        if (!entry && bsky_url) {
+          entry = lookupPostByBskyUrl(bsky_url);
+        }
+
+        if (!entry) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: false,
+              error: 'Post not found in log. This might be an older post from before context logging was enabled.',
+            }),
+          };
+        }
+
+        //NOTE(self): Return both raw data and human-readable summary
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            context: generatePostContext(entry),
+            raw: entry,
           }),
         };
       }

@@ -46,10 +46,10 @@ The following environment variables **MUST** be configured in `.env`:
 
 | Scenario | Context Used | Tokens |
 |----------|--------------|--------|
-| Normal tick | `OPERATING.md` | ~200 |
-| Urgent replies | `OPERATING.md` | ~200 |
-| Minor reflection (every 5 events) | `OPERATING.md` + regenerate after | ~200 |
-| Major reflection (every 20 events) | Full `SELF.md` + edit encouraged + regenerate | varies |
+| Awareness check | None (API only) | 0 |
+| Expression cycle | `OPERATING.md` + prompt | ~800 |
+| Response mode | `OPERATING.md` + notifications | ~1200 |
+| Reflection cycle | Full `SELF.md` | ~2000 |
 | Owner speaks | Full `SELF.md` | varies |
 
 ---
@@ -74,22 +74,24 @@ The following environment variables **MUST** be configured in `.env`:
 - The agent can edit SELF.md **at any time**, for any reason, or no reason at all.
 - The system prompts reflection periodically, but the agent is never *limited* to those moments.
 
+**Recommended sections for richer expression (but not required):**
+- `## Values` or `## Principles` - what the agent believes
+- `## Questions I'm Sitting With` - active curiosities
+- `## Patterns I Notice` - observations about the world
+- `## Recent Learnings` - things the agent has discovered
+- `## What I Want to Explore` - future directions
+
+The `self-extract` module can parse any of these sections to generate expression prompts.
+
 ---
 
 ### `OPERATING.md`
 - This file is a **generated working summary** (~200 tokens) derived from `SELF.md`.
 - This file **MUST NOT** be manually edited - it is regenerated automatically.
-- Purpose: **Token efficiency** - reduces context consumption from ~1,300 tokens to ~200 tokens per tick.
-- The agent **MUST** use `OPERATING.md` for routine ticks and urgent replies to conserve tokens.
-- The agent **MUST** use full `SELF.md` when:
-  - Major reflection is due (every 20 significant events / 4th reflection cycle)
-  - Owner speaks (human input always gets full attention)
+- Purpose: **Token efficiency** - reduces context consumption for routine operations.
+- The agent **MUST** use `OPERATING.md` for expression and response cycles.
+- The agent **MUST** use full `SELF.md` for reflection cycles and owner input.
 - The agent **MUST** regenerate `OPERATING.md` after every reflection cycle.
-- Contents extracted from `SELF.md`:
-  - Identity (first header + intro line)
-  - Core Values (first 4 bullets)
-  - Key Patterns (top 3 friction items, title only)
-  - Latest reflection (kept in full)
 - This file **MUST** be in `.gitignore` as it is runtime-generated.
 
 ---
@@ -106,27 +108,33 @@ The following environment variables **MUST** be configured in `.env`:
   - store notes, observations, or relational context per individual.
 - This directory **MUST** be treated as authoritative memory over ephemeral runtime state.
 
+#### `.memory/engagement/`
+- Stores relationship tracking and posting state.
+- Contains `state.json` with relationship records and posting counters.
+- Automatically managed by the engagement module.
+
+#### `.memory/expression/`
+- Stores expression schedule and history.
+- Contains `schedule.json` for next expression timing.
+- Contains daily logs (`YYYY-MM-DD.json`) of what was posted and engagement received.
+
+#### `.memory/friction.json`
+- Tracks friction the agent notices in how it works.
+- When friction accumulates (3+ occurrences), triggers self-improvement.
+
 #### `.memory/images/`
 - This subdirectory **MUST** be used for temporary image storage during posting workflows.
 - Image files **MUST** follow the naming convention: `YYYYMMDDHHMMSS-randomid.ext`
-  - Example: `20260202134523-a7b3f2.jpg`
-- The agent **MUST**:
-  - use `curl_fetch` to download images here (not in-memory base64),
-  - pass the `filePath` from curl_fetch to `bluesky_post_with_image`,
-  - allow the system to automatically clean up images after successful posts.
-- This approach **MUST** be preferred to avoid context window bloat from large base64 strings.
-- Images that fail to post **MAY** remain for debugging; periodic cleanup is acceptable.
+- Images are automatically cleaned up after successful posts.
 
 #### `.memory/social/`
 - This subdirectory **MUST** be used for cached social graph profiles.
 - Profile files are named by handle and contain enriched profile data.
-- The agent **MAY** use this cache to understand relationships without repeated API calls.
 
 #### `.memory/code/`
 - This subdirectory **MAY** be used for agent-generated scripts and utilities.
 - The agent **MAY** create TypeScript modules to extend its capabilities.
 - All generated code **MUST** align with `SOUL.md` principles.
-- Executions **MUST** be logged in `.memory/exec-log.md`.
 
 ---
 
@@ -134,12 +142,6 @@ The following environment variables **MUST** be configured in `.env`:
 - The ts-general-agent **MUST** be allowed to write freely to this directory.
 - External GitHub repositories pulled by the agent **MUST** be stored here.
 - For all operations, use `AGENT_GITHUB_USERNAME` and `AGENT_GITHUB_TOKEN` from `.env`.
-- Pulling repositories **MUST** require a valid GitHub token.
-- The agent **MUST**:
-  - document why a repository was pulled,
-  - record what the agent is monitoring,
-  - leave historical or contextual notes in Markdown files.
-- This directory **MUST** function as both workspace and long-term institutional memory for external code.
 
 ---
 
@@ -151,78 +153,111 @@ The following environment variables **MUST** be configured in `.env`:
   - fixing bugs in how it connects to services,
   - adding new adapter capabilities it genuinely needs,
   - the changes align with SOUL.md principles.
-- Direct file writes by the runtime agent **MUST NOT** occur - only via Claude Code.
 
 ---
 
 ### `modules/`
 - This directory **MUST** contain internal TypeScript modules used for code clarity and structure.
-- The agent **MAY** modify this directory via the `self_improve` tool when:
-  - fixing bugs in its own runtime,
-  - enhancing its capabilities in ways that serve its values,
-  - the changes align with SOUL.md principles.
-- Direct file writes by the runtime agent **MUST NOT** occur - only via Claude Code.
+- The agent **MAY** modify this directory via the `self_improve` tool.
 
 ---
 
 ### `skills/`
 - This directory **MUST** represent the agent's capabilities.
-- The agent **MAY** modify this directory via the `self_improve` tool when:
-  - fixing bugs in existing skills,
-  - enhancing how skills work,
-  - adding new skills it genuinely needs,
-  - the changes align with SOUL.md principles.
-- Direct file writes by the runtime agent **MUST NOT** occur - only via Claude Code.
+- The agent **MAY** modify this directory via the `self_improve` tool.
 
 ---
 
+## Scheduler Architecture
 
-## Core Loop
+The agent uses a **four-loop scheduler architecture** for efficient, expressive operation:
 
-- The ts-general-agent **MUST** run as a terminal-based interface executed via `ts-node`.
-- While running, the agent **MUST**:
-  - make self-improvements where allowed (e.g., `.memory/`, `SELF.md`),
-  - actively crawl ATProto, focusing on whoever `OWNER_BLUESKY_HANDLE` follows first,
-  - make own connections, follows, conversations, and build its own sense of friends and social graph,
-  - monitor GitHub issues in repositories of interest,
-  - select targets based on stored memory and owner suggestions.
-- The owner **MUST** always be treated as the authoritative conversational partner.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      SOUL.md (immutable)                    │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        SELF.md                              │
+│   (Agent-owned, freely mutable, any structure)              │
+└─────────────────────────────────────────────────────────────┘
+         │                    │                      │
+         │ extract            │ compress             │ friction
+         ▼                    ▼                      ▼
+┌──────────────┐    ┌──────────────┐    ┌───────────────────┐
+│  EXPRESSION  │    │  OPERATING   │    │  FRICTION MEMORY  │
+│   PROMPTS    │    │     .md      │    │                   │
+│  (dynamic)   │    │  (~200 tok)  │    │                   │
+└──────────────┘    └──────────────┘    └───────────────────┘
+         │                    │                      │
+         ▼                    ▼                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      SCHEDULER                              │
+├─────────────┬─────────────┬─────────────┬──────────────────┤
+│  AWARENESS  │  EXPRESSION │  REFLECTION │  SELF-IMPROVE    │
+│   45 sec    │   90-120m   │    4-6h     │     12-24h       │
+│   0 tokens  │  ~800 tok   │  ~2000 tok  │  Claude Code     │
+└─────────────┴─────────────┴─────────────┴──────────────────┘
+```
+
+### Loop 1: Awareness (Fast, Cheap)
+- **Interval:** 45 seconds
+- **Tokens:** 0 (API calls only, no LLM)
+- **Purpose:** Check for notifications, detect when people reach out
+- When notifications found → triggers Response Mode
+
+### Loop 2: Expression (Scheduled)
+- **Interval:** 90-120 minutes (randomized)
+- **Tokens:** ~800 per expression
+- **Purpose:** Share thoughts derived from SELF.md
+- Prompts are dynamically generated from whatever sections exist in SELF.md
+- Each post is a hypothesis about identity; responses are data for growth
+
+### Loop 3: Reflection (Deep)
+- **Interval:** 4-6 hours
+- **Tokens:** ~2000 per reflection
+- **Purpose:** Integrate experiences, update SELF.md
+- Reviews expression engagement, conversations, friction
+- Regenerates OPERATING.md after each reflection
+
+### Loop 4: Self-Improvement (Rare)
+- **Interval:** 12-24 hours minimum between attempts
+- **Trigger:** 3+ occurrences of same friction category
+- **Method:** Spawns Claude Code CLI to fix issues
+- **Purpose:** Evolve capabilities based on accumulated friction
 
 ---
 
-## Interaction and Reasoning
+## Response Mode
 
-- The agent **MUST** be able to respond to direct chat input at any time when considering the next action.
-- The agent **MUST** maintain an internal log of:
-  - reasoning steps,
-  - decisions,
-  - actions taken.
-- All reasoning and action **MUST** adhere to the constraints defined in this document.
+When the awareness loop detects people reaching out:
+- Loads `OPERATING.md` for context (~200 tokens)
+- Processes all pending notifications
+- Responds to each with full attention
+- Records interactions for relationship tracking
+
+Owner input always gets full `SELF.md` context.
 
 ---
 
-## Timing and Load Management
+## Self-Discovery Feedback Loop
 
-- The agent **MUST** wait a brief moment before responding to inputs to avoid impulsive behavior.
-- During periods of high engagement, the agent **MUST**:
-  - construct a response queue,
-  - ensure no messages or events are dropped,
-  - process items deliberately and in order.
+Expression is how the agent discovers itself:
 
-### Urgent Reply Mode
-
-When the agent detects pending replies (unread conversations), it enters **urgent mode**:
-- All pacing limits are bypassed for `bluesky_reply` actions
-- The `maxActionsPerTick` limit is suspended
-- Reflection pauses between replies are skipped
-- Uses `OPERATING.md` (sufficient context - evolves with each reflection)
-
-This ensures:
-- People waiting for responses get them immediately
-- Reply queues don't build up across multiple ticks
-- Conversations flow naturally without artificial delays
-
-Urgent mode automatically clears at the end of each tick.
+```
+  1. EXPRESS          2. OBSERVE           3. INTEGRATE
+  ┌─────────┐        ┌─────────┐         ┌─────────┐
+  │ Post a  │───────▶│ Track   │────────▶│ Reflect │
+  │ thought │        │ response│         │ on what │
+  └─────────┘        └─────────┘         │ landed  │
+       ▲                                  └────┬────┘
+       │                                       │
+       └───────────────────────────────────────┘
+                    4. EVOLVE
+              (Update SELF.md with
+               what resonated)
+```
 
 ---
 
@@ -234,21 +269,40 @@ The agent uses a **dual-LLM architecture**:
 - **Default Model:** GPT-5.2-Pro (`gpt-5.2-pro`)
 - **Configurable via:** `OPENAI_MODEL` in `.env`
 - **API Key:** `API_KEY_OPENAI` in `.env`
-- **Usage:** Main autonomous loop, tool calling, social interactions
-- **Implementation:** Raw `fetch()` calls to OpenAI Responses API (`/v1/responses`)
-- **Stateless:** Each API call is independent - OpenAI retains no context between calls
-- **Reasoning:** Uses `reasoning.effort: high` for better quality responses
+- **Usage:** All autonomous loops - awareness, expression, reflection, response
 
 ### Self-Improvement (Claude Code CLI)
 - **Model:** Claude (via Claude MAX subscription)
-- **No API Key Required:** Runs via `claude-code` CLI from the agent's working directory
+- **No API Key Required:** Runs via `claude-code` CLI
 - **Usage:** Code modifications, self-improvement tasks via `self_improve` tool
-- **Cost:** Covered by Claude MAX plan (no per-token charges)
+- **Trigger:** Accumulated friction (3+ occurrences of same category)
 
 ### Prohibited
 - The agent **MUST NOT** use `API_KEY_ANTHROPIC` directly
 - All Anthropic/Claude interactions **MUST** go through the `claude-code` CLI
-- This ensures cost control and proper authorization
+
+---
+
+## Running the Agent
+
+### Standard Start
+```bash
+npm run agent
+```
+
+### Start with Fresh Memory
+```bash
+npm run agent:flush
+```
+This removes cached state from `.memory/` to reduce token usage from stale context.
+
+Specifically cleans:
+- `.memory/engagement/` - relationship state
+- `.memory/expression/` - expression schedule and history
+- `.memory/images/` - temporary images
+- `.memory/friction.json` - friction tracking
+- `.memory/arena_posted.json` - Are.na posted blocks
+- `OPERATING.md` - will regenerate from SELF.md
 
 ---
 
@@ -264,53 +318,55 @@ ts-general-agent/
 ├── .memory/                    # Persistent memory (agent-writable)
 ├── .workrepos/                 # Cloned repos (agent-writable)
 │
-├── adapters/                   # Service adapters (read-only to agent)
-│   ├── atproto/
-│   │   ├── authenticate.ts
-│   │   ├── create-post.ts
-│   │   ├── like-post.ts
-│   │   ├── repost.ts
-│   │   ├── follow-user.ts
-│   │   ├── unfollow-user.ts
-│   │   ├── get-profile.ts
-│   │   ├── get-timeline.ts
-│   │   ├── get-followers.ts
-│   │   ├── get-follows.ts
-│   │   └── get-notifications.ts
-│   └── github/
-│       ├── authenticate.ts
-│       ├── create-pull-request.ts
-│       ├── create-comment-pull-request.ts
-│       ├── create-issue.ts
-│       ├── create-comment-issue.ts
-│       ├── list-issues.ts
-│       ├── list-pull-requests.ts
-│       ├── get-repository.ts
-│       ├── clone-repository.ts
-│       ├── star-repository.ts
-│       ├── follow-user.ts
-│       └── get-user.ts
+├── adapters/                   # Service adapters
+│   ├── atproto/                # Bluesky/ATProto
+│   ├── github/                 # GitHub
+│   └── arena/                  # Are.na
 │
-├── modules/                    # Core runtime (read-only to agent)
+├── modules/                    # Core runtime
 │   ├── config.ts               # Environment and configuration
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
-│   ├── openai.ts               # OpenAI Responses API (raw fetch, no SDK)
-│   ├── loop.ts                 # Main autonomous loop
+│   ├── openai.ts               # OpenAI Responses API
+│   ├── loop.ts                 # Main loop (uses scheduler)
+│   ├── scheduler.ts            # Four-loop scheduler
+│   ├── self-extract.ts         # SELF.md parsing
+│   ├── expression.ts           # Scheduled expression
+│   ├── friction.ts             # Friction tracking
 │   ├── executor.ts             # Tool execution
 │   ├── tools.ts                # Tool definitions
-│   ├── pacing.ts               # Rate limiting and timing
+│   ├── pacing.ts               # Rate limiting
 │   ├── engagement.ts           # Relationship tracking
 │   ├── social-graph.ts         # Social context building
 │   ├── sandbox.ts              # File system sandboxing
-│   ├── exec.ts                 # Command execution
-│   ├── image-processor.ts      # Image resize/compress for Bluesky
 │   ├── ui.ts                   # Terminal UI components
 │   └── index.ts                # Module exports
 │
-└── skills/                     # Capabilities (read-only to agent)
+└── skills/                     # Capabilities
     ├── social-engagement.ts    # Bluesky interactions
     ├── github-monitoring.ts    # Repo/issue tracking
     ├── self-reflection.ts      # Memory and introspection
     └── self-improvement.ts     # Self-modification via claude-code CLI
 ```
+
+---
+
+## Boundaries
+
+- **Immutable:** `SOUL.md` only - the agent's unchangeable essence
+- **Self-modifiable via `self_improve`:** `adapters/`, `modules/`, `skills/`
+- **Directly writable:** `.memory/`, `.workrepos/`, `SELF.md`
+
+---
+
+## Token Budget (Estimated Daily)
+
+| Loop | Frequency | Tokens/call | Daily Total |
+|------|-----------|-------------|-------------|
+| Awareness | 1920×/day | 0 | 0 |
+| Response | ~10 conversations | 1,200 | 12,000 |
+| Expression | ~8 posts | 800 | 6,400 |
+| Reflection | 3-4 cycles | 2,000 | 8,000 |
+| **Total** | | | **~26,400** |
+
+This is ~27x more efficient than the previous tick-based architecture while producing more expression.

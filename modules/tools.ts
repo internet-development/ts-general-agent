@@ -60,7 +60,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'bluesky_reply',
-    description: 'Reply to an existing post on Bluesky.',
+    description: 'Reply to an existing post on Bluesky. Thread root is auto-resolved if not provided - just supply the parent post URI and CID.',
     input_schema: {
       type: 'object',
       properties: {
@@ -70,7 +70,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         },
         post_uri: {
           type: 'string',
-          description: 'The AT URI of the post to reply to',
+          description: 'The AT URI of the post to reply to (e.g., at://did:plc:.../app.bsky.feed.post/...)',
         },
         post_cid: {
           type: 'string',
@@ -78,11 +78,11 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         },
         root_uri: {
           type: 'string',
-          description: 'The AT URI of the thread root (optional, for nested replies)',
+          description: 'Optional: AT URI of the thread root. If omitted, automatically resolved from the parent post.',
         },
         root_cid: {
           type: 'string',
-          description: 'The CID of the thread root (optional)',
+          description: 'Optional: CID of the thread root. If omitted, automatically resolved from the parent post.',
         },
       },
       required: ['text', 'post_uri', 'post_cid'],
@@ -682,6 +682,24 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         },
       },
       required: ['channel_url'],
+    },
+  },
+  {
+    name: 'lookup_post_context',
+    description: 'Look up the context/metadata for a post I made. Returns source information (Are.na channel, block title, original URL), alt text, and when I posted it. Useful for answering questions like "why did you pick this?" or "where is this from?" when someone asks about an image I posted.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_uri: {
+          type: 'string',
+          description: 'AT URI of the post (at://did:plc:.../app.bsky.feed.post/...)',
+        },
+        bsky_url: {
+          type: 'string',
+          description: 'Bluesky URL of the post (https://bsky.app/profile/.../post/...)',
+        },
+      },
+      required: [],
     },
   },
 ];

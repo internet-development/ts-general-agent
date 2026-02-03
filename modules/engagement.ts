@@ -59,6 +59,7 @@ interface EngagementState {
 }
 
 //NOTE(self): Default state for fresh starts
+//NOTE(self): dailyPostLimit increased - scheduler handles pacing, not arbitrary limits
 function getDefaultState(): EngagementState {
   return {
     relationships: {},
@@ -66,8 +67,8 @@ function getDefaultState(): EngagementState {
       lastOriginalPost: null,
       lastReflection: null,
       postsToday: 0,
-      dailyPostLimit: 5,
-      inspirationLevel: 50,
+      dailyPostLimit: 12, //NOTE(self): ~8-10 during waking hours is reasonable
+      inspirationLevel: 50, //NOTE(self): Kept for backward compat, not used for gating
     },
     reflection: {
       lastReflection: null,
@@ -281,6 +282,7 @@ export function getPendingResponses(): Array<{ handle: string; interactions: Int
 
 
 //NOTE(self): Posting Intelligence - When and what to share
+//NOTE(self): Simplified for scheduler-based expression - no more inspiration gating
 
 
 export interface PostingDecision {
@@ -290,12 +292,14 @@ export interface PostingDecision {
   inspirationSource?: string;
 }
 
+//NOTE(self): Simplified posting check - scheduler handles timing now
+//NOTE(self): This is kept for backward compatibility and manual posting checks
 export function canPostOriginal(): PostingDecision {
   const state = loadState();
   const posting = state.posting;
   const now = new Date();
 
-  //NOTE(self): Check daily limit - better than humans who over-post
+  //NOTE(self): Check daily limit - reasonable cap
   if (posting.postsToday >= posting.dailyPostLimit) {
     return {
       shouldPost: false,
@@ -303,7 +307,7 @@ export function canPostOriginal(): PostingDecision {
     };
   }
 
-  //NOTE(self): Time-based wisdom - humans don't post at 3am
+  //NOTE(self): Time-based wisdom - quiet hours
   const hour = now.getHours();
   const isQuietHours = hour >= 23 || hour < 7;
   if (isQuietHours) {
@@ -312,27 +316,6 @@ export function canPostOriginal(): PostingDecision {
       reason: 'Quiet hours - resting and observing.',
       suggestedTone: 'quiet',
     };
-  }
-
-  //NOTE(self): Check inspiration level - don't post without something meaningful
-  if (posting.inspirationLevel < 30) {
-    return {
-      shouldPost: false,
-      reason: 'Waiting for genuine inspiration. Forced posts lack soul.',
-      suggestedTone: 'quiet',
-    };
-  }
-
-  //NOTE(self): Minimum gap between original posts (4 hours)
-  if (posting.lastOriginalPost) {
-    const lastPost = new Date(posting.lastOriginalPost);
-    const hoursSincePost = (now.getTime() - lastPost.getTime()) / (1000 * 60 * 60);
-    if (hoursSincePost < 4) {
-      return {
-        shouldPost: false,
-        reason: `Last shared ${hoursSincePost.toFixed(1)} hours ago. Letting it breathe.`,
-      };
-    }
   }
 
   //NOTE(self): Determine tone based on time of day
@@ -347,9 +330,10 @@ export function canPostOriginal(): PostingDecision {
     suggestedTone = 'celebratory';
   }
 
+  //NOTE(self): Ready to share - scheduler handles pacing
   return {
     shouldPost: true,
-    reason: 'Inspired and ready to share.',
+    reason: 'Ready to share.',
     suggestedTone,
   };
 }
@@ -494,6 +478,169 @@ export function hasUrgentNotifications(notifications: PrioritizedNotification[])
   );
 
   return hasUnreadConversations;
+}
+
+
+//NOTE(self): Notification Triage - Group and sort for efficient processing
+
+
+export interface TriagedThread {
+  rootUri: string;
+  notifications: PrioritizedNotification[];
+  highestPriority: number;
+  isOwnerThread: boolean;
+  hasRecurringEngager: boolean;
+  oldestTimestamp: string;
+  notificationCount: number;
+}
+
+/**
+ * Extract thread root URI from a notification
+ * Falls back to the notification's own URI if no root is available
+ */
+function getThreadRootUri(notification: AtprotoNotification): string {
+  const record = notification.record as {
+    reply?: {
+      root?: { uri?: string };
+      parent?: { uri?: string };
+    };
+  };
+
+  //NOTE(self): For replies, use the root of the thread
+  if (record?.reply?.root?.uri) {
+    return record.reply.root.uri;
+  }
+
+  //NOTE(self): Fall back to parent URI if root isn't available
+  if (record?.reply?.parent?.uri) {
+    return record.reply.parent.uri;
+  }
+
+  //NOTE(self): For non-replies (mentions, quotes), use the notification's own URI
+  return notification.uri;
+}
+
+/**
+ * Triage notifications into threads, sorted by priority
+ *
+ * Sorting order:
+ * 1. Owner threads first
+ * 2. Recurring engagers (5+ interactions)
+ * 3. Oldest-first within each thread (to maintain conversation flow)
+ *
+ * This prevents notification backlog from causing half-answered threads
+ */
+export function triageNotifications(
+  notifications: PrioritizedNotification[],
+  ownerDid: string
+): TriagedThread[] {
+  const state = loadState();
+  const threadMap = new Map<string, TriagedThread>();
+
+  //NOTE(self): Group notifications by thread root
+  for (const pn of notifications) {
+    const rootUri = getThreadRootUri(pn.notification);
+
+    if (!threadMap.has(rootUri)) {
+      threadMap.set(rootUri, {
+        rootUri,
+        notifications: [],
+        highestPriority: 0,
+        isOwnerThread: false,
+        hasRecurringEngager: false,
+        oldestTimestamp: pn.notification.indexedAt,
+        notificationCount: 0,
+      });
+    }
+
+    const thread = threadMap.get(rootUri)!;
+    thread.notifications.push(pn);
+    thread.notificationCount++;
+
+    //NOTE(self): Track thread metadata
+    if (pn.priority > thread.highestPriority) {
+      thread.highestPriority = pn.priority;
+    }
+
+    if (pn.notification.author.did === ownerDid) {
+      thread.isOwnerThread = true;
+    }
+
+    const relationship = state.relationships[pn.notification.author.handle];
+    if (relationship && relationship.interactions.length >= 5) {
+      thread.hasRecurringEngager = true;
+    }
+
+    //NOTE(self): Track oldest notification in thread
+    if (pn.notification.indexedAt < thread.oldestTimestamp) {
+      thread.oldestTimestamp = pn.notification.indexedAt;
+    }
+  }
+
+  //NOTE(self): Sort notifications within each thread by time (oldest first for conversation flow)
+  for (const thread of threadMap.values()) {
+    thread.notifications.sort(
+      (a, b) =>
+        new Date(a.notification.indexedAt).getTime() -
+        new Date(b.notification.indexedAt).getTime()
+    );
+  }
+
+  //NOTE(self): Convert to array and sort threads
+  const threads = Array.from(threadMap.values());
+
+  return threads.sort((a, b) => {
+    //NOTE(self): Owner threads always first
+    if (a.isOwnerThread && !b.isOwnerThread) return -1;
+    if (!a.isOwnerThread && b.isOwnerThread) return 1;
+
+    //NOTE(self): Then recurring engagers
+    if (a.hasRecurringEngager && !b.hasRecurringEngager) return -1;
+    if (!a.hasRecurringEngager && b.hasRecurringEngager) return 1;
+
+    //NOTE(self): Then by highest priority in thread
+    if (a.highestPriority !== b.highestPriority) {
+      return b.highestPriority - a.highestPriority;
+    }
+
+    //NOTE(self): Finally, oldest threads first (FIFO for fairness)
+    return new Date(a.oldestTimestamp).getTime() - new Date(b.oldestTimestamp).getTime();
+  });
+}
+
+/**
+ * Get a flat list of notifications from triaged threads
+ * Maintains the triage order but flattens for processing
+ */
+export function flattenTriagedNotifications(threads: TriagedThread[]): PrioritizedNotification[] {
+  const result: PrioritizedNotification[] = [];
+
+  for (const thread of threads) {
+    result.push(...thread.notifications);
+  }
+
+  return result;
+}
+
+/**
+ * Deduplicate notifications by URI
+ * Keeps the highest-priority version if duplicates exist
+ */
+export function deduplicateNotifications(
+  notifications: PrioritizedNotification[]
+): PrioritizedNotification[] {
+  const seen = new Map<string, PrioritizedNotification>();
+
+  for (const pn of notifications) {
+    const uri = pn.notification.uri;
+    const existing = seen.get(uri);
+
+    if (!existing || pn.priority > existing.priority) {
+      seen.set(uri, pn);
+    }
+  }
+
+  return Array.from(seen.values());
 }
 
 
