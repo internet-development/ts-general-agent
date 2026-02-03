@@ -603,6 +603,20 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'queue_remove',
+    description: 'Remove a specific action from your queue after completing it. Use this to deplete planned actions once done.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'The ID of the queue item to remove (returned from queue_add)',
+        },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'queue_clear',
     description: 'Clear all pending actions from your queue.',
     input_schema: {

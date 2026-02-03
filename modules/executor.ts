@@ -23,6 +23,7 @@ import * as github from '@adapters/github/index.js';
 import { markInteractionResponded } from '@modules/engagement.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
+import { ui } from '@modules/ui.js';
 
 export interface ActionQueueItem {
   id: string;
@@ -42,7 +43,48 @@ export function clearActionQueue(): void {
   actionQueue = [];
 }
 
-export function addToQueue(action: string, priority: 'high' | 'normal' | 'low' = 'normal'): string {
+//NOTE(self): Check if an action is similar to existing queue items
+//NOTE(self): Uses word overlap to detect duplicates
+function isDuplicateAction(newAction: string): ActionQueueItem | null {
+  const newWords = new Set(
+    newAction.toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 3) //NOTE(self): Ignore short words
+  );
+
+  if (newWords.size === 0) return null;
+
+  for (const item of actionQueue) {
+    const existingWords = new Set(
+      item.action.toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length > 3)
+    );
+
+    //NOTE(self): Count overlapping meaningful words
+    let overlap = 0;
+    for (const word of newWords) {
+      if (existingWords.has(word)) overlap++;
+    }
+
+    //NOTE(self): If more than 50% of words overlap, consider it a duplicate
+    const overlapRatio = overlap / Math.min(newWords.size, existingWords.size);
+    if (overlapRatio > 0.5) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+export function addToQueue(action: string, priority: 'high' | 'normal' | 'low' = 'normal'): { id: string; duplicate: boolean; existingId?: string } {
+  //NOTE(self): Check for duplicates before adding
+  const existing = isDuplicateAction(action);
+  if (existing) {
+    logger.debug('Duplicate action detected, not adding', { action, existingId: existing.id });
+    return { id: existing.id, duplicate: true, existingId: existing.id };
+  }
+
   const id = `action-${++queueIdCounter}`;
   actionQueue.push({
     id,
@@ -55,7 +97,17 @@ export function addToQueue(action: string, priority: 'high' | 'normal' | 'low' =
   const priorityOrder = { high: 0, normal: 1, low: 2 };
   actionQueue.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
 
-  return id;
+  return { id, duplicate: false };
+}
+
+export function removeFromQueue(id: string): boolean {
+  const index = actionQueue.findIndex((item) => item.id === id);
+  if (index !== -1) {
+    actionQueue.splice(index, 1);
+    logger.debug('Removed from queue', { id });
+    return true;
+  }
+  return false;
 }
 
 export async function executeTool(call: ToolCall): Promise<ToolResult> {
@@ -69,6 +121,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       //NOTE(self): Bluesky tools
       case 'bluesky_post': {
         const text = call.input.text as string;
+        //NOTE(self): Print what the agent is about to say so it's easy to follow
+        ui.social(`${config.agent.name}`, text);
         const result = await atproto.createPost({ text });
         if (result.success) {
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
@@ -84,6 +138,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           image_mime_type?: string;
           alt_text: string;
         };
+
+        //NOTE(self): Print what the agent is about to say so it's easy to follow
+        ui.social(`${config.agent.name} (with image)`, text);
 
         //NOTE(self): Validate we have image data via either method
         if (!image_path && (!image_base64 || image_base64.length === 0)) {
@@ -195,6 +252,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
       case 'bluesky_reply': {
         const { text, post_uri, post_cid, root_uri, root_cid } = call.input as Record<string, string>;
+        //NOTE(self): Print what the agent is about to say so it's easy to follow
+        ui.social(`${config.agent.name} (reply)`, text);
         const result = await atproto.createPost({
           text,
           replyTo: {
@@ -831,8 +890,29 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           action: string;
           priority?: 'high' | 'normal' | 'low';
         };
-        const id = addToQueue(action, priority);
-        return { tool_use_id: call.id, content: JSON.stringify({ success: true, id, queueLength: actionQueue.length }) };
+        const result = addToQueue(action, priority);
+        if (result.duplicate) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              id: result.existingId,
+              duplicate: true,
+              message: 'Similar action already in queue',
+              queueLength: actionQueue.length,
+            }),
+          };
+        }
+        return { tool_use_id: call.id, content: JSON.stringify({ success: true, id: result.id, queueLength: actionQueue.length }) };
+      }
+
+      case 'queue_remove': {
+        const { id } = call.input as { id: string };
+        const removed = removeFromQueue(id);
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({ success: removed, queueLength: actionQueue.length }),
+        };
       }
 
       case 'queue_clear': {

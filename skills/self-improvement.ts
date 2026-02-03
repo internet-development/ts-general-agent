@@ -1,7 +1,5 @@
 //NOTE(self): Skill for running Claude Code to make self-improvements
 import { spawn } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
 import { execCommand } from '@modules/exec.js';
 import { logger } from '@modules/logger.js';
 import { createMemory } from '@modules/memory.js';
@@ -135,17 +133,8 @@ ${prompt}
 \`\`\`
 `);
 
-  //NOTE(self): Write prompt to a temp file to avoid shell escaping issues with complex prompts
-  const promptFile = path.join(memoryPath, `.prompt-${execId}.txt`);
-  try {
-    fs.writeFileSync(promptFile, prompt, 'utf-8');
-  } catch (writeErr) {
-    const errorMsg = `Failed to write prompt file: ${writeErr}`;
-    memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
-    return { success: false, error: errorMsg };
-  }
-
   //NOTE(self): Run Claude Code with spawn for long-running tasks
+  //NOTE(self): Pass prompt as argument, just like typing "claude 'prompt'" in terminal
   //NOTE(self): Wrap in try-catch because spawn() can throw synchronously
   return new Promise((resolve) => {
     let child;
@@ -153,15 +142,14 @@ ${prompt}
       child = spawn(finalClaudePath, [
         '--print',
         '--dangerously-skip-permissions',
-        '--input-file', promptFile, //NOTE(self): Use file to avoid shell escaping issues
+        prompt, //NOTE(self): Prompt as positional argument
       ], {
         cwd: workingDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'], //NOTE(self): No stdin needed
         env: { ...process.env }, //NOTE(self): Inherit environment for PATH etc.
       });
     } catch (spawnErr) {
-      //NOTE(self): spawn() threw synchronously - clean up and return error
-      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+      //NOTE(self): spawn() threw synchronously - return error
       const errorMsg = `Spawn failed: ${spawnErr instanceof Error ? spawnErr.message : String(spawnErr)}`;
       memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
       logger.error('Claude Code spawn failed synchronously', { error: errorMsg });
@@ -190,9 +178,6 @@ ${prompt}
     child.on('close', (code: number | null) => {
       clearTimeout(timeout);
 
-      //NOTE(self): Cleanup prompt file
-      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-
       if (timedOut) {
         const errorMsg = 'Claude Code execution timed out after 10 minutes';
         memory.append('exec-log.md', `**Result:** Timeout\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
@@ -215,8 +200,6 @@ ${prompt}
 
     child.on('error', (err: Error) => {
       clearTimeout(timeout);
-      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-
       const errorMsg = `Spawn error: ${err.message}`;
       memory.append('exec-log.md', `**Result:** Error\n**Error:**\n\`\`\`\n${errorMsg}\n\`\`\`\n\n---\n`);
       logger.error('Claude Code spawn error', { error: err.message });
