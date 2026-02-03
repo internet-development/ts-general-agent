@@ -842,7 +842,7 @@ export function generateExpressionPrompts(
     const randomObs = recentObservations[Math.floor(Math.random() * recentObservations.length)];
     prompts.push({
       theme: 'observation',
-      prompt: `Something caught your attention: "${randomObs.slice(0, 100)}..."`,
+      prompt: `Something caught your attention: "${randomObs}"`,
       tone: 'curious',
     });
   }

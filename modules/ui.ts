@@ -297,7 +297,7 @@ export class TerminalUI {
     this.writeOutput(`  ${ANSI.red}${SYM.star} Planned Actions${ANSI.reset}`);
     for (const item of items.slice(0, 8)) {
       const style = item.priority === 'high' ? ANSI.red : item.priority === 'low' ? ANSI.dim : ANSI.white;
-      this.writeOutput(`  ${style}${SYM.pointer} ${item.action.slice(0, 100)}${ANSI.reset}`);
+      this.writeOutput(`  ${style}${SYM.pointer} ${item.action}${ANSI.reset}`);
     }
     if (items.length > 8) {
       this.writeOutput(`  ${ANSI.dim}+${items.length - 8} more${ANSI.reset}`);
@@ -329,7 +329,7 @@ export class TerminalUI {
   printToolResult(toolName: string, success: boolean, detail?: string): void {
     const icon = success ? `${ANSI.red}${SYM.check}` : `${ANSI.red}${SYM.cross}`;
     const name = toolName.replace(/_/g, ' ');
-    const det = detail ? `  ${ANSI.dim}${detail.slice(0, 80)}${ANSI.reset}` : '';
+    const det = detail ? `  ${ANSI.dim}${detail}${ANSI.reset}` : '';
     this.writeOutput(`  ${ANSI.dim}${timestamp()}${ANSI.reset}  ${icon}${ANSI.reset} ${ANSI.dim}${name}${ANSI.reset}${det}`);
   }
 

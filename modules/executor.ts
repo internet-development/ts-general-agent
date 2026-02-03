@@ -25,7 +25,18 @@ import { markInteractionResponded, hasRepliedToPost, hasRepliedToThread, markPos
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { ui } from '@modules/ui.js';
-import { logPost, lookupPostByUri, lookupPostByBskyUrl, generatePostContext, type PostLogEntry } from '@modules/post-log.js';
+import {
+  logPost,
+  lookupPostByUri,
+  lookupPostByBskyUrl,
+  generatePostContext,
+  formatSourceAttribution,
+  hasCompleteAttribution,
+  getPostsNeedingAttributionFollowup,
+  markPostNeedsAttributionFollowup,
+  updatePostAttribution,
+  type PostLogEntry,
+} from '@modules/post-log.js';
 
 export async function executeTool(call: ToolCall): Promise<ToolResult> {
   const config = getConfig();
@@ -1149,6 +1160,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         }
 
         //NOTE(self): Log post for future context (so I can answer "why did you pick this?")
+        //NOTE(self): Credit + traceability - capture exact block URL, filename, and flag missing attribution
+        const hasOriginalSource = !!selectedBlock.source?.url;
         const postLogEntry: PostLogEntry = {
           timestamp: new Date().toISOString(),
           bluesky: {
@@ -1160,9 +1173,22 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             type: 'arena',
             channel_url: `https://www.are.na/${owner}/${slug}`,
             block_id: selectedBlock.id,
+            //NOTE(self): Direct link to exact Are.na block for clean traceability
+            block_url: `https://www.are.na/block/${selectedBlock.id}`,
             block_title: blockTitle,
+            //NOTE(self): Original filename often contains creator hints (e.g., "dribbble-shot-by-artist.png")
+            filename: selectedBlock.filename,
             original_url: selectedBlock.source?.url,
+            //NOTE(self): Provider helps trace origins (e.g., "Dribbble", "Behance", "Twitter")
+            source_provider: selectedBlock.source?.provider?.name,
             image_url: imageUrl,
+            //NOTE(self): Capture who added this to Are.na for potential follow-up
+            arena_user: selectedBlock.user ? {
+              username: selectedBlock.user.username,
+              full_name: selectedBlock.user.full_name,
+            } : undefined,
+            //NOTE(self): Flag posts without original source so I can circle back to find creators
+            needs_attribution_followup: !hasOriginalSource,
           },
           content: {
             post_text: postText,
@@ -1235,6 +1261,161 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             success: true,
             context: generatePostContext(entry),
             raw: entry,
+          }),
+        };
+      }
+
+      //NOTE(self): Credit + traceability tools - for finding and crediting original creators
+      case 'get_posts_needing_attribution': {
+        const { limit = 10 } = call.input as { limit?: number };
+
+        const posts = getPostsNeedingAttributionFollowup(limit);
+
+        if (posts.length === 0) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              message: 'No posts currently need attribution follow-up. All sources are properly credited!',
+              count: 0,
+              posts: [],
+            }),
+          };
+        }
+
+        //NOTE(self): Return summary with actionable info for each post
+        const summaries = posts.map(post => ({
+          bsky_url: post.bluesky.bsky_url,
+          post_uri: post.bluesky.post_uri,
+          posted_at: post.timestamp,
+          block_title: post.source.block_title,
+          block_url: post.source.block_url,
+          filename: post.source.filename,
+          arena_user: post.source.arena_user,
+          source_provider: post.source.source_provider,
+          notes: post.source.attribution_notes,
+        }));
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            count: posts.length,
+            posts: summaries,
+          }),
+        };
+      }
+
+      case 'mark_attribution_followup': {
+        const { post_uri, needs_followup, notes } = call.input as {
+          post_uri: string;
+          needs_followup: boolean;
+          notes?: string;
+        };
+
+        const success = markPostNeedsAttributionFollowup(post_uri, needs_followup, notes);
+
+        if (!success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: false,
+              error: 'Post not found in log',
+            }),
+          };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            message: needs_followup
+              ? 'Marked for attribution follow-up'
+              : 'Attribution follow-up cleared',
+          }),
+        };
+      }
+
+      case 'update_post_attribution': {
+        const { post_uri, original_url, notes } = call.input as {
+          post_uri: string;
+          original_url: string;
+          notes?: string;
+        };
+
+        const success = updatePostAttribution(post_uri, original_url, notes);
+
+        if (!success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: false,
+              error: 'Post not found in log',
+            }),
+          };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            message: `Attribution updated to: ${original_url}`,
+          }),
+        };
+      }
+
+      //NOTE(self): Credit + traceability - format clean source attribution for sharing
+      case 'format_source_attribution': {
+        const { post_uri, bsky_url } = call.input as {
+          post_uri?: string;
+          bsky_url?: string;
+        };
+
+        if (!post_uri && !bsky_url) {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Must provide either post_uri or bsky_url to look up',
+            is_error: true,
+          };
+        }
+
+        //NOTE(self): Try both lookup methods
+        let entry = null;
+        if (post_uri) {
+          entry = lookupPostByUri(post_uri);
+        }
+        if (!entry && bsky_url) {
+          entry = lookupPostByBskyUrl(bsky_url);
+        }
+
+        if (!entry) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: false,
+              error: 'Post not found in log',
+            }),
+          };
+        }
+
+        //NOTE(self): Return formatted attribution and metadata
+        const attribution = formatSourceAttribution(entry);
+        const complete = hasCompleteAttribution(entry);
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            attribution,
+            has_complete_attribution: complete,
+            //NOTE(self): Include raw source data for additional context if needed
+            block_url: entry.source.block_url,
+            original_url: entry.source.original_url,
+            filename: entry.source.filename,
+            source_provider: entry.source.source_provider,
+            arena_user: entry.source.arena_user,
+            //NOTE(self): Helpful hint if attribution is incomplete
+            note: complete ? null : 'Original creator not yet found. Consider using get_posts_needing_attribution to work on attribution backlog.',
           }),
         };
       }
@@ -1315,7 +1496,11 @@ export async function executeTools(calls: ToolCall[]): Promise<ToolResult[]> {
 
   for (const call of calls) {
     const result = await executeTool(call);
-    results.push(result);
+    //NOTE(self): Ensure tool_name is included for AI SDK compliance
+    results.push({
+      ...result,
+      tool_name: call.name,
+    });
   }
 
   return results;

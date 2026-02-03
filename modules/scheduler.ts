@@ -13,7 +13,7 @@ import { logger } from '@modules/logger.js';
 import { ui } from '@modules/ui.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
-import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, type Message } from '@modules/openai.js';
+import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
 import { executeTools } from '@modules/executor.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
@@ -417,14 +417,9 @@ Review each notification. Respond as yourself - your SELF.md guides when and how
           }
         }
 
-        messages.push({
-          role: 'assistant',
-          content: response.text || '',
-        });
-        messages.push({
-          role: 'user',
-          content: `Tool results: ${JSON.stringify(results)}`,
-        });
+        //NOTE(self): Format messages correctly for the AI SDK
+        messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+        messages.push(createToolResultMessage(results));
 
         response = await chatWithTools({
           system: systemPrompt,
@@ -558,8 +553,11 @@ Your handle: ${config.bluesky.username}${richnessNote}`;
               ? `Your draft: "${draftText}"\n\n${invitationCheck.suggestion}\n\nExample quick fixes: "${getInvitationPrompt()}" or "${getInvitationPrompt()}"\n\nRevise and post again.`
               : `Your draft: "${draftText}"\n\nThis reads like a statement. Add a simple question or invitation at the end.\n\nExample: "${getInvitationPrompt()}"\n\nRevise and post again.`;
 
+            //NOTE(self): Don't include tool_use blocks when asking for revision - the AI SDK
+            //NOTE(self): requires tool results after tool calls. Since we're not executing the
+            //NOTE(self): tool (we want a revision), just include the text response and ask again.
             messages.push(
-              createAssistantToolUseMessage(response.text, response.toolCalls),
+              { role: 'assistant', content: response.text || `I'd like to post: "${draftText}"` },
               { role: 'user', content: revisionPrompt }
             );
 
@@ -757,6 +755,10 @@ Reflect as yourself. You MUST use self_update to add at least one learning to SE
       if (response.toolCalls.length > 0) {
         const results = await executeTools(response.toolCalls);
 
+        //NOTE(self): Update messages with tool calls and results for proper context
+        messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+        messages.push(createToolResultMessage(results));
+
         for (const tc of response.toolCalls) {
           if (tc.name === 'self_update') {
             selfUpdated = true;
@@ -769,10 +771,13 @@ Reflect as yourself. You MUST use self_update to add at least one learning to SE
       if (!selfUpdated && insights.length > 0) {
         logger.debug('SELF.md not updated despite insights - prompting again');
 
-        messages.push({
-          role: 'assistant',
-          content: response.text || '',
-        });
+        //NOTE(self): If no tool calls were made, add the assistant's text response
+        if (response.toolCalls.length === 0) {
+          messages.push({
+            role: 'assistant',
+            content: response.text || '',
+          });
+        }
         messages.push({
           role: 'user',
           content: `You reflected but didn't update SELF.md. Please use self_update to integrate at least one learning.

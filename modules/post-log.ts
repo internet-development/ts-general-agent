@@ -27,13 +27,29 @@ export interface PostLogEntry {
   };
 
   // Where the content came from
+  //NOTE(self): Enhanced source tracking for credit + traceability principle
   source: {
     type: 'arena' | 'url' | 'generated' | 'other';
     channel_url?: string;       // For Are.na: full channel URL
     block_id?: number;          // For Are.na: specific block ID
+    //NOTE(self): Direct link to the exact Are.na block for traceability
+    block_url?: string;         // For Are.na: https://www.are.na/block/{id}
     block_title?: string;       // Title of the block/image
+    //NOTE(self): Original filename from Are.na, often contains creator hints
+    filename?: string;          // Original filename on Are.na filesystem
     original_url?: string;      // Original source URL (artist's site, etc.)
+    //NOTE(self): Provider info helps trace content origins (e.g., "Dribbble", "Behance")
+    source_provider?: string;   // Where the original was found (provider name)
     image_url?: string;         // Direct image URL that was downloaded
+    //NOTE(self): Who added this to Are.na - useful for follow-up attribution
+    arena_user?: {
+      username: string;
+      full_name?: string;
+    };
+    //NOTE(self): Flag for posts where I couldn't find the original creator
+    needs_attribution_followup?: boolean;
+    //NOTE(self): Notes for future me when I circle back to find creators
+    attribution_notes?: string;
   };
 
   // What I said about it
@@ -234,8 +250,20 @@ export function generatePostContext(entry: PostLogEntry): string {
     if (entry.source.block_title) {
       parts.push(`It was titled "${entry.source.block_title}".`);
     }
+    //NOTE(self): Include exact block URL for clean traceability
+    if (entry.source.block_url) {
+      parts.push(`Exact block: ${entry.source.block_url}`);
+    }
+    //NOTE(self): Filename often contains creator hints
+    if (entry.source.filename) {
+      parts.push(`Original filename: ${entry.source.filename}`);
+    }
     if (entry.source.original_url) {
       parts.push(`Original source: ${entry.source.original_url}`);
+    }
+    //NOTE(self): Provider helps trace origins
+    if (entry.source.source_provider) {
+      parts.push(`Found via: ${entry.source.source_provider}`);
     }
   } else if (entry.source.type === 'url' && entry.source.original_url) {
     parts.push(`This image came from ${entry.source.original_url}.`);
@@ -269,6 +297,46 @@ export function generatePostContext(entry: PostLogEntry): string {
 }
 
 /**
+ * //NOTE(self): Credit + traceability - format a clean source attribution for including in posts or replies
+ * Returns a concise attribution string suitable for sharing publicly
+ */
+export function formatSourceAttribution(entry: PostLogEntry): string {
+  const parts: string[] = [];
+
+  if (entry.source.type === 'arena') {
+    //NOTE(self): Prefer original source if known (the actual creator)
+    if (entry.source.original_url) {
+      parts.push(`Source: ${entry.source.original_url}`);
+    }
+    //NOTE(self): Always include exact Are.na block for traceability
+    if (entry.source.block_url) {
+      if (entry.source.original_url) {
+        parts.push(`via Are.na: ${entry.source.block_url}`);
+      } else {
+        parts.push(`Source: ${entry.source.block_url}`);
+      }
+    }
+    //NOTE(self): Add filename if it might help identify creator
+    if (entry.source.filename && !entry.source.original_url) {
+      parts.push(`(${entry.source.filename})`);
+    }
+  } else if (entry.source.original_url) {
+    parts.push(`Source: ${entry.source.original_url}`);
+  }
+
+  return parts.join(' ');
+}
+
+/**
+ * //NOTE(self): Credit + traceability - check if a post has complete attribution
+ * A post has complete attribution if we know the original creator (not just Are.na block)
+ */
+export function hasCompleteAttribution(entry: PostLogEntry): boolean {
+  //NOTE(self): Complete attribution means we have the actual original source URL
+  return !!entry.source.original_url;
+}
+
+/**
  * Get the total number of logged posts
  * Useful for stats and understanding posting history
  */
@@ -294,5 +362,143 @@ export function getPostCount(): number {
     return count;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * //NOTE(self): Credit + traceability - find posts where I still need to track down original creators
+ * Returns posts flagged as needing attribution follow-up, oldest first
+ */
+export function getPostsNeedingAttributionFollowup(limit: number = 20): PostLogEntry[] {
+  try {
+    if (!fs.existsSync(POST_LOG_PATH)) {
+      return [];
+    }
+
+    const content = fs.readFileSync(POST_LOG_PATH, 'utf8');
+    const lines = content.trim().split('\n').filter(line => line.length > 0);
+
+    const needsFollowup: PostLogEntry[] = [];
+
+    //NOTE(self): Read oldest first for follow-up (FIFO - handle oldest missing attributions first)
+    for (const line of lines) {
+      if (needsFollowup.length >= limit) break;
+      try {
+        const entry = JSON.parse(line) as PostLogEntry;
+        if (entry.source.needs_attribution_followup) {
+          needsFollowup.push(entry);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return needsFollowup;
+  } catch (err) {
+    logger.warn('Failed to read posts needing attribution followup', { error: String(err) });
+    return [];
+  }
+}
+
+/**
+ * //NOTE(self): Credit + traceability - mark a post as needing follow-up to find original creator
+ * Updates the post log entry in place (rewrites the entire log - use sparingly)
+ */
+export function markPostNeedsAttributionFollowup(
+  post_uri: string,
+  needs_followup: boolean,
+  notes?: string
+): boolean {
+  try {
+    if (!fs.existsSync(POST_LOG_PATH)) {
+      return false;
+    }
+
+    const content = fs.readFileSync(POST_LOG_PATH, 'utf8');
+    const lines = content.trim().split('\n').filter(line => line.length > 0);
+
+    let found = false;
+    const updatedLines: string[] = [];
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as PostLogEntry;
+        if (entry.bluesky.post_uri === post_uri) {
+          entry.source.needs_attribution_followup = needs_followup;
+          if (notes !== undefined) {
+            entry.source.attribution_notes = notes;
+          }
+          found = true;
+          updatedLines.push(JSON.stringify(entry));
+        } else {
+          updatedLines.push(line);
+        }
+      } catch {
+        //NOTE(self): Preserve malformed lines as-is
+        updatedLines.push(line);
+      }
+    }
+
+    if (found) {
+      fs.writeFileSync(POST_LOG_PATH, updatedLines.join('\n') + '\n', 'utf8');
+      logger.debug('Updated attribution followup flag', { post_uri, needs_followup });
+    }
+
+    return found;
+  } catch (err) {
+    logger.warn('Failed to update attribution followup', { error: String(err) });
+    return false;
+  }
+}
+
+/**
+ * //NOTE(self): Credit + traceability - update a post with found attribution info
+ * Call this when I later discover who the original creator is
+ */
+export function updatePostAttribution(
+  post_uri: string,
+  original_url: string,
+  notes?: string
+): boolean {
+  try {
+    if (!fs.existsSync(POST_LOG_PATH)) {
+      return false;
+    }
+
+    const content = fs.readFileSync(POST_LOG_PATH, 'utf8');
+    const lines = content.trim().split('\n').filter(line => line.length > 0);
+
+    let found = false;
+    const updatedLines: string[] = [];
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as PostLogEntry;
+        if (entry.bluesky.post_uri === post_uri) {
+          entry.source.original_url = original_url;
+          //NOTE(self): Clear the follow-up flag since we found the creator
+          entry.source.needs_attribution_followup = false;
+          if (notes !== undefined) {
+            entry.source.attribution_notes = notes;
+          }
+          found = true;
+          updatedLines.push(JSON.stringify(entry));
+        } else {
+          updatedLines.push(line);
+        }
+      } catch {
+        updatedLines.push(line);
+      }
+    }
+
+    if (found) {
+      fs.writeFileSync(POST_LOG_PATH, updatedLines.join('\n') + '\n', 'utf8');
+      logger.debug('Updated post attribution', { post_uri, original_url });
+    }
+
+    return found;
+  } catch (err) {
+    logger.warn('Failed to update post attribution', { error: String(err) });
+    return false;
   }
 }

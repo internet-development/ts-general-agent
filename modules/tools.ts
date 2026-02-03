@@ -16,6 +16,7 @@ export interface ToolCall {
 
 export interface ToolResult {
   tool_use_id: string;
+  tool_name?: string;  //NOTE(self): Added by executeTools for AI SDK compliance
   content: string;
   is_error?: boolean;
 }
@@ -593,6 +594,83 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   {
     name: 'lookup_post_context',
     description: 'Look up the context/metadata for a post I made. Returns source information (Are.na channel, block title, original URL), alt text, and when I posted it. Useful for answering questions like "why did you pick this?" or "where is this from?" when someone asks about an image I posted.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_uri: {
+          type: 'string',
+          description: 'AT URI of the post (at://did:plc:.../app.bsky.feed.post/...)',
+        },
+        bsky_url: {
+          type: 'string',
+          description: 'Bluesky URL of the post (https://bsky.app/profile/.../post/...)',
+        },
+      },
+      required: [],
+    },
+  },
+  //NOTE(self): Credit + traceability - tools for finding and crediting original creators
+  {
+    name: 'get_posts_needing_attribution',
+    description: 'Get posts where I shared content but could not find the original creator. Returns oldest first so I can circle back and try to find proper attribution. Use this during quiet moments to work on credit/traceability backlog.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum number of posts to return (default: 10)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'mark_attribution_followup',
+    description: 'Mark a post as needing follow-up to find the original creator, or clear the flag if found. Use when I realize I should credit someone but cannot find them yet, or when I later discover the original source.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_uri: {
+          type: 'string',
+          description: 'AT URI of the post to update',
+        },
+        needs_followup: {
+          type: 'boolean',
+          description: 'Set to true if still needs follow-up, false if resolved',
+        },
+        notes: {
+          type: 'string',
+          description: 'Notes to help future me (e.g., "looks like Dribbble style, try reverse image search")',
+        },
+      },
+      required: ['post_uri', 'needs_followup'],
+    },
+  },
+  {
+    name: 'update_post_attribution',
+    description: 'Update a post with the original creator attribution after finding them. Clears the follow-up flag and records the original source URL.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_uri: {
+          type: 'string',
+          description: 'AT URI of the post to update',
+        },
+        original_url: {
+          type: 'string',
+          description: 'URL of the original creator (portfolio, Dribbble, Behance, etc.)',
+        },
+        notes: {
+          type: 'string',
+          description: 'How I found them or additional context (e.g., "found via reverse image search")',
+        },
+      },
+      required: ['post_uri', 'original_url'],
+    },
+  },
+  {
+    name: 'format_source_attribution',
+    description: 'Get a clean, formatted source attribution for a post I made. Use this when someone asks where an image came from, or when I want to share proper credit. Returns a concise string with exact Are.na block URL + original source if known.',
     input_schema: {
       type: 'object',
       properties: {

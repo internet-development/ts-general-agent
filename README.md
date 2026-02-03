@@ -1,6 +1,6 @@
 # ts-general-agent
 
-An autonomous TypeScript agent that observes, reasons, remembers, and acts. See `AGENTS.md` for full system constraints.
+An autonomous TypeScript agent that observes, reasons, remembers, and acts. See `AGENTS.md` for full system constraints. Uses [Vercel](https://vercel.com/)'s [https://vercel.com/ai-gateway](https://vercel.com/ai-gateway)
 
 ## Quick Start
 
@@ -9,10 +9,6 @@ npm install
 cp .env.example .env   # configure credentials
 npm run agent
 ```
-
-## Dependencies
-
-This project uses the [`ai`](https://www.npmjs.com/package/ai) package by Vercel for streaming LLM responses. The AI Gateway API key is automatically used by the `ai` module.
 
 ## Configuration
 
@@ -78,3 +74,54 @@ Walk mode runs each scheduler operation once in sequence, then exits. Useful for
 ## Contact
 
 [@wwwjim](https://twitter.com/wwwjim) or [@internetxstudio](https://x.com/internetxstudio)
+
+## The `ai` NPM Module
+
+This project is powered by the [`ai`](https://www.npmjs.com/package/ai) package by [Vercel](https://vercel.com/) - a unified API for working with LLMs that makes building AI applications remarkably simple.
+
+### Why We Love It
+
+- **Streaming out of the box** - Real-time responses with `streamText()`, no manual chunking
+- **Unified tool calling** - Define tools once, works across providers (OpenAI, Anthropic, etc.)
+- **Type-safe** - Full TypeScript support with `jsonSchema()` for tool parameters
+- **Provider agnostic** - Switch models by changing a string, not your code
+
+### How We Use It
+
+```typescript
+import { streamText, jsonSchema } from 'ai';
+
+const result = streamText({
+  model: 'openai/gpt-5-2', 
+  messages: modelMessages,
+  tools: {
+    myTool: {
+      description: 'Does something useful',
+      inputSchema: jsonSchema({ type: 'object', properties: { ... } }),
+    },
+  },
+});
+
+for await (const chunk of result.textStream) {
+  process.stdout.write(chunk);
+}
+
+const toolCalls = await result.toolCalls;
+```
+
+### Key Features We Rely On
+
+| Feature | How We Use It |
+|---------|---------------|
+| `streamText()` | All LLM calls stream for responsive UI |
+| `result.toolCalls` | Async access to tool calls after streaming |
+| `result.usage` | Token tracking for cost monitoring |
+| `jsonSchema()` | Type-safe tool definitions |
+
+The `ai` module automatically reads `AI_GATEWAY_API_KEY` from your environment - no manual client setup needed.
+
+```bash
+npm install ai
+```
+
+That's it. The rest is just building your application.

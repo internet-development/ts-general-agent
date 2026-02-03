@@ -11,6 +11,8 @@ import {
   chatWithTools,
   AGENT_TOOLS,
   isFatalError,
+  createAssistantToolUseMessage,
+  createToolResultMessage,
   type Message,
 } from '@modules/openai.js';
 import { readSoul, readSelf } from '@modules/memory.js';
@@ -223,14 +225,9 @@ Owner: ${config.owner.blueskyHandle}`;
     while (response.toolCalls.length > 0) {
       const results = await executeTools(response.toolCalls);
 
-      messages.push({
-        role: 'assistant',
-        content: response.text || '',
-      });
-      messages.push({
-        role: 'user',
-        content: `Tool results: ${JSON.stringify(results)}`,
-      });
+      //NOTE(self): Format messages correctly for the AI SDK
+      messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+      messages.push(createToolResultMessage(results));
 
       response = await chatWithTools({
         system: systemPrompt,

@@ -112,6 +112,7 @@ function convertMessages(
         const textBlocks = msg.content.filter((c) => c.type === 'text');
 
         //NOTE(self): Add tool results as tool messages
+        //NOTE(self): AI SDK expects: toolCallId, toolName, output: { type: 'text', value: string }
         for (const tr of toolResults) {
           if (tr.tool_use_id && tr.content !== undefined) {
             result.push({
@@ -120,9 +121,10 @@ function convertMessages(
                 type: 'tool-result',
                 toolCallId: tr.tool_use_id,
                 toolName: tr.name || 'unknown',
-                output: tr.is_error
-                  ? { type: 'error-text', value: tr.content }
-                  : { type: 'text', value: tr.content },
+                output: {
+                  type: 'text',
+                  value: tr.content,
+                },
               }],
             });
           }
@@ -408,6 +410,7 @@ export function createToolResultMessage(results: ToolResult[]): Message {
     content: results.map((r) => ({
       type: 'tool_result' as const,
       tool_use_id: r.tool_use_id,
+      name: r.tool_name,  //NOTE(self): Required by AI SDK for proper tool result correlation
       content: truncateToolResult(r.content),
       is_error: r.is_error,
     })),

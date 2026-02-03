@@ -216,7 +216,7 @@ async function walk(): Promise<void> {
   //NOTE(self): Then check for aspirations (proactive - growth from inspiration)
   const aspiration = getAspirationForGrowth();
   if (aspiration) {
-    ui.info('Aspiration found', `${aspiration.category}: ${aspiration.description.slice(0, 60)}...`);
+    ui.info('Aspiration found', `${aspiration.category}: ${aspiration.description}`);
     try {
       const grew = await scheduler.forceGrowth();
       if (!grew) {

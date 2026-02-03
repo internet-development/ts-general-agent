@@ -102,6 +102,11 @@ export async function runClaudeCode(
 ): Promise<ClaudeCodeResult> {
   const memory = createMemory(memoryPath);
 
+  //NOTE(self): Prefix every prompt with instruction to check AGENTS.md first
+  const prefixedPrompt = `First, read and understand AGENTS.md - it defines the system constraints and architecture.
+
+${prompt}`;
+
   //NOTE(self): Find the claude binary
   let finalClaudePath = await findClaudeBinary();
 
@@ -129,7 +134,7 @@ export async function runClaudeCode(
 **Claude Binary:** ${finalClaudePath}
 **Prompt:**
 \`\`\`
-${prompt}
+${prefixedPrompt}
 \`\`\`
 `);
 
@@ -142,7 +147,7 @@ ${prompt}
       child = spawn(finalClaudePath, [
         '--print',
         '--dangerously-skip-permissions',
-        prompt, //NOTE(self): Prompt as positional argument
+        prefixedPrompt, //NOTE(self): Prompt as positional argument (prefixed with AGENTS.md instruction)
       ], {
         cwd: workingDir,
         stdio: ['ignore', 'pipe', 'pipe'], //NOTE(self): No stdin needed
