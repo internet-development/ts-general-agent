@@ -26,7 +26,7 @@ import {
   updateExpressionEngagement,
 } from '@modules/expression.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
-import { addInsight, getInsights, getRelationshipSummary, initializeThreadTracking } from '@modules/engagement.js';
+import { addInsight, getInsights, getRelationshipSummary } from '@modules/engagement.js';
 import { getFrictionReadyForImprovement } from '@modules/friction.js';
 import { getAspirationForGrowth, getAspirationStats, getAllAspirations } from '@modules/aspiration.js';
 import { getEngagementPatterns } from '@modules/expression.js';
@@ -86,11 +86,6 @@ async function walk(): Promise<void> {
 
   //NOTE(self): Configure GitHub
   authGitHub(config.github.username, config.github.token);
-
-  //NOTE(self): Bootstrap thread tracking from existing replies (one-time, cheap API calls)
-  ui.startSpinner('Initializing thread tracking');
-  await initializeThreadTracking();
-  ui.stopSpinner('Thread tracking ready');
 
   //NOTE(self): Get the scheduler (but don't start it - we'll call methods directly)
   const scheduler = getScheduler();

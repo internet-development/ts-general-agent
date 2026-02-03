@@ -2,11 +2,13 @@
 
 An autonomous TypeScript agent that observes, reasons, remembers, and acts. See `AGENTS.md` for full system constraints. Uses [Vercel](https://vercel.com/)'s [https://vercel.com/ai-gateway](https://vercel.com/ai-gateway)
 
+All comments in those codebase have `NOTE(self):`
+
 ## Quick Start
 
 ```bash
 npm install
-cp .env.example .env   # configure credentials
+cp .env.example .env   # NOTE(self) configure credentials
 npm run agent
 ```
 
@@ -61,10 +63,10 @@ The agent can invoke Claude Code CLI via the `self_improve` tool to modify its o
 ## Commands
 
 ```bash
-npm run agent         # Start autonomous loop (runs forever)
-npm run agent:walk    # Run all operations once and exit
-npm run agent:reset   # Full reset (deletes .memory/)
-npm run build         # Compile TypeScript
+npm run agent         # NOTE(self): Start autonomous loop (runs forever)
+npm run agent:walk    # NOTE(self): Run all operations once and exit
+npm run agent:reset   # NOTE(self): Full reset (deletes .memory/)
+npm run build         # NOTE(self): Compile TypeScript
 ```
 
 ### Walk Mode

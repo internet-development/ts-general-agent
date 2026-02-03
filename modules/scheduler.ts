@@ -32,8 +32,6 @@ import {
   getRelationshipSummary,
   shouldRespondTo,
   hasRepliedToPost,
-  hasRepliedToThread,
-  initializeThreadTracking,
   type PrioritizedNotification,
 } from '@modules/engagement.js';
 import {
@@ -169,9 +167,6 @@ export class AgentScheduler {
       return;
     }
 
-    //NOTE(self): Bootstrap thread tracking from existing replies (one-time, cheap API calls)
-    await initializeThreadTracking();
-
     //NOTE(self): Initialize expression schedule if needed
     const expressionSchedule = loadExpressionSchedule();
     if (!expressionSchedule.nextExpression) {
@@ -262,18 +257,14 @@ export class AgentScheduler {
       }
 
       //NOTE(self): Filter to unread conversations that need response
-      //NOTE(self): Also exclude posts/threads we've already replied to - avoids false "Ready to respond"
+      //NOTE(self): Only block posts we've directly replied to - allow conversations to continue in threads
       const needsResponse = prioritized.filter((pn) => {
         const n = pn.notification;
         if (n.isRead) return false;
         if (!['reply', 'mention', 'quote'].includes(n.reason)) return false;
+        //NOTE(self): Only block if we already replied to THIS SPECIFIC post (prevents sibling spam)
+        //NOTE(self): Removed thread-level blocking - conversations must be allowed to continue!
         if (hasRepliedToPost(n.uri)) return false;
-
-        //NOTE(self): Check thread root
-        const record = n.record as { reply?: { root?: { uri?: string } } };
-        const threadRootUri = record?.reply?.root?.uri;
-        if (threadRootUri && hasRepliedToThread(threadRootUri)) return false;
-        if (hasRepliedToThread(n.uri)) return false;
 
         return true;
       });
@@ -307,29 +298,14 @@ export class AgentScheduler {
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
 
-      //NOTE(self): CRITICAL: Filter out posts AND threads we've already replied to - NEVER spam
+      //NOTE(self): Filter out posts we've already replied to - prevents sibling spam
+      //NOTE(self): Thread-level blocking removed to allow conversations to continue
       const notYetReplied = this.state.pendingNotifications.filter((pn) => {
         const n = pn.notification;
 
-        //NOTE(self): Check if we've replied to this specific post
+        //NOTE(self): Only block if we've replied to THIS SPECIFIC post (prevents multiple sibling replies)
         if (hasRepliedToPost(n.uri)) {
           logger.debug('Skipping already-replied post', { uri: n.uri });
-          return false;
-        }
-
-        //NOTE(self): Extract thread root from notification record (if it's a reply)
-        const record = n.record as { reply?: { root?: { uri?: string } } };
-        const threadRootUri = record?.reply?.root?.uri;
-
-        //NOTE(self): If this is part of a thread we've already participated in, skip it
-        if (threadRootUri && hasRepliedToThread(threadRootUri)) {
-          logger.debug('Skipping notification from thread we already replied to', { uri: n.uri, threadRootUri });
-          return false;
-        }
-
-        //NOTE(self): Also check if the notification URI itself is a thread root we've replied to
-        if (hasRepliedToThread(n.uri)) {
-          logger.debug('Skipping notification that is a thread root we replied to', { uri: n.uri });
           return false;
         }
 
