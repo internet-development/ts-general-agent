@@ -1,5 +1,7 @@
 # ts-general-agent
 
+![ts-general-agent preview](https://private-user-images.githubusercontent.com/310223/545215587-60053e4b-981b-4a3a-9026-422710165d9d.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzAyMzY0NTcsIm5iZiI6MTc3MDIzNjE1NywicGF0aCI6Ii8zMTAyMjMvNTQ1MjE1NTg3LTYwMDUzZTRiLTk4MWItNGEzYS05MDI2LTQyMjcxMDE2NWQ5ZC5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjYwMjA0JTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI2MDIwNFQyMDE1NTdaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT04NjhjOTcxN2ZkMmNmMGUwZGI0OWI1MzQ0NGYzNWYzZjNhMGQ4OWU3NjYyMmI1NTJkMWY2MDMyMzA2MTlkMDJhJlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.3SKVUTTSood7IuJfwrFdceEif4qI0YsTHV983lnTESo)
+
 An autonomous TypeScript agent that observes, reasons, remembers, and acts. See `AGENTS.md` for full system constraints. Uses [Vercel](https://vercel.com/)'s [https://vercel.com/ai-gateway](https://vercel.com/ai-gateway)
 
 All comments in those codebase have `NOTE(self):`
@@ -29,12 +31,12 @@ AGENT_GITHUB_TOKEN=ghp_your-token
 
 The agent uses a **four-loop scheduler architecture**:
 
-| Loop | Interval | Purpose |
-|------|----------|---------|
-| Awareness | 45 sec | Check notifications (API only, no LLM) |
-| Expression | 90-120 min | Share thoughts from SELF.md |
-| Reflection | 4-6 hours | Integrate experiences, update SELF.md |
-| Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI |
+| Loop             | Interval    | Purpose                                |
+| ---------------- | ----------- | -------------------------------------- |
+| Awareness        | 45 sec      | Check notifications (API only, no LLM) |
+| Expression       | 90-120 min  | Share thoughts from SELF.md            |
+| Reflection       | 4-6 hours   | Integrate experiences, update SELF.md  |
+| Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI       |
 
 ```
 ts-general-agent/
@@ -49,11 +51,11 @@ ts-general-agent/
 
 ## Permissions
 
-| Path | Access |
-|------|--------|
-| `SOUL.md` | Read only |
-| `SELF.md` | Read/Write (agent-owned) |
-| `.memory/`, `.workrepos/` | Read/Write |
+| Path                               | Access                                  |
+| ---------------------------------- | --------------------------------------- |
+| `SOUL.md`                          | Read only                               |
+| `SELF.md`                          | Read/Write (agent-owned)                |
+| `.memory/`, `.workrepos/`          | Read/Write                              |
 | `adapters/`, `modules/`, `skills/` | Self-modifiable via `self_improve` tool |
 
 ## Self-Improvement
@@ -94,7 +96,7 @@ This project is powered by the [`ai`](https://www.npmjs.com/package/ai) package 
 import { streamText, jsonSchema } from 'ai';
 
 const result = streamText({
-  model: 'openai/gpt-5-2', 
+  model: 'openai/gpt-5-2',
   messages: modelMessages,
   tools: {
     myTool: {
@@ -113,12 +115,12 @@ const toolCalls = await result.toolCalls;
 
 ### Key Features We Rely On
 
-| Feature | How We Use It |
-|---------|---------------|
-| `streamText()` | All LLM calls stream for responsive UI |
+| Feature            | How We Use It                              |
+| ------------------ | ------------------------------------------ |
+| `streamText()`     | All LLM calls stream for responsive UI     |
 | `result.toolCalls` | Async access to tool calls after streaming |
-| `result.usage` | Token tracking for cost monitoring |
-| `jsonSchema()` | Type-safe tool definitions |
+| `result.usage`     | Token tracking for cost monitoring         |
+| `jsonSchema()`     | Type-safe tool definitions                 |
 
 The `ai` module automatically reads `AI_GATEWAY_API_KEY` from your environment - no manual client setup needed.
 
