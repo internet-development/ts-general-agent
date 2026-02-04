@@ -12,3 +12,6 @@ export * from '@adapters/github/star-repository.js';
 export * from '@adapters/github/follow-user.js';
 export * from '@adapters/github/get-user.js';
 export * from '@adapters/github/list-org-repos.js';
+export * from '@adapters/github/parse-url.js';
+export * from '@adapters/github/get-notifications.js';
+export * from '@adapters/github/get-issue-thread.js';

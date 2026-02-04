@@ -32,7 +32,8 @@ import {
   recordReflectionComplete,
   getRelationshipSummary,
   shouldRespondTo,
-  hasRepliedToPost,
+  getSeenAt,
+  updateSeenAt,
   type PrioritizedNotification,
 } from '@modules/engagement.js';
 import {
@@ -73,11 +74,43 @@ import {
   getAspirationStats,
 } from '@modules/aspiration.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
+import * as github from '@adapters/github/index.js';
+import {
+  extractGitHubUrls,
+  type ParsedGitHubUrl,
+} from '@adapters/github/parse-url.js';
+import {
+  getNotifications as getGitHubNotifications,
+  filterActionableNotifications,
+  extractNumberFromApiUrl,
+  markNotificationRead,
+  type GitHubNotification,
+} from '@adapters/github/get-notifications.js';
+import {
+  getIssueThread,
+  analyzeConversation,
+  formatThreadForContext,
+  type IssueThread,
+} from '@adapters/github/get-issue-thread.js';
+import {
+  getGitHubSeenAt,
+  updateGitHubSeenAt,
+  updateLastNotificationCheck,
+  trackConversation,
+  getConversation,
+  recordOurComment,
+  updateConversationState,
+  markConversationConcluded,
+  getConversationsNeedingAttention,
+  getGitHubEngagementStats,
+} from '@modules/github-engagement.js';
 
 //NOTE(self): Scheduler Configuration - can be tuned from SELF.md in future
 export interface SchedulerConfig {
   //NOTE(self): Awareness loop interval (ms) - how often to check for replies
   awarenessInterval: number;
+  //NOTE(self): GitHub awareness interval (ms) - how often to check GitHub notifications
+  githubAwarenessInterval: number;
   //NOTE(self): Expression interval range (ms) - how often to share thoughts
   expressionMinInterval: number;
   expressionMaxInterval: number;
@@ -94,6 +127,7 @@ export interface SchedulerConfig {
 
 const DEFAULT_CONFIG: SchedulerConfig = {
   awarenessInterval: 45_000, //NOTE(self): 45 seconds - quick enough to feel responsive to replies
+  githubAwarenessInterval: 2 * 60_000, //NOTE(self): 2 minutes - GitHub rate limits are stricter
   expressionMinInterval: 3 * 60 * 60 * 1000, //NOTE(self): 3 hours minimum between posts (token-heavy)
   expressionMaxInterval: 4 * 60 * 60 * 1000, //NOTE(self): 4 hours maximum between posts
   reflectionInterval: 6 * 60 * 60 * 1000, //NOTE(self): 6 hours between reflections (token-heavy)
@@ -103,14 +137,28 @@ const DEFAULT_CONFIG: SchedulerConfig = {
   reflectionEventThreshold: 10, //NOTE(self): Reflect after 10 significant events (replies, posts)
 };
 
+//NOTE(self): GitHub conversation pending action
+interface PendingGitHubConversation {
+  owner: string;
+  repo: string;
+  number: number;
+  type: 'issue' | 'pull';
+  url: string;
+  thread: IssueThread;
+  source: 'bluesky_url' | 'github_notification';
+  reason: string;
+}
+
 //NOTE(self): Scheduler State
 interface SchedulerState {
   isRunning: boolean;
   lastAwarenessCheck: number;
+  lastGitHubAwarenessCheck: number;
   lastReflection: number;
   lastImprovementCheck: number;
-  currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving';
+  currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving' | 'github_responding';
   pendingNotifications: PrioritizedNotification[];
+  pendingGitHubConversations: PendingGitHubConversation[];
   consecutiveErrors: number;
 }
 
@@ -120,6 +168,7 @@ export class AgentScheduler {
   private appConfig: Config;
   private state: SchedulerState;
   private awarenessTimer: NodeJS.Timeout | null = null;
+  private githubAwarenessTimer: NodeJS.Timeout | null = null;
   private expressionTimer: NodeJS.Timeout | null = null;
   private reflectionTimer: NodeJS.Timeout | null = null;
   private engagementCheckTimer: NodeJS.Timeout | null = null;
@@ -131,10 +180,12 @@ export class AgentScheduler {
     this.state = {
       isRunning: false,
       lastAwarenessCheck: 0,
+      lastGitHubAwarenessCheck: 0,
       lastReflection: Date.now(),
       lastImprovementCheck: 0,
       currentMode: 'idle',
       pendingNotifications: [],
+      pendingGitHubConversations: [],
       consecutiveErrors: 0,
     };
   }
@@ -151,6 +202,7 @@ export class AgentScheduler {
 
   //NOTE(self): Deduplicate reply tool calls to save tokens
   //NOTE(self): Prevents LLM from replying to the same post multiple times in one session
+  //NOTE(self): Session-local Set handles 99% of cases; executor's API check is the safety net
   private deduplicateReplyToolCalls(
     toolCalls: ToolCall[],
     repliedPostUris: Set<string>
@@ -168,15 +220,9 @@ export class AgentScheduler {
       }
 
       //NOTE(self): Check if we've already replied to this post in this session
+      //NOTE(self): The executor's hasAgentRepliedInThread API check handles cross-session deduplication
       if (repliedPostUris.has(postUri)) {
-        logger.info('Deduplicating reply tool call', { postUri, toolId: tc.id });
-        skipped++;
-        return false;
-      }
-
-      //NOTE(self): Also check persistent storage (replied in previous sessions)
-      if (hasRepliedToPost(postUri)) {
-        logger.info('Skipping reply to already-replied post', { postUri, toolId: tc.id });
+        logger.info('Deduplicating reply tool call (session)', { postUri, toolId: tc.id });
         skipped++;
         return false;
       }
@@ -218,6 +264,7 @@ export class AgentScheduler {
 
     //NOTE(self): Start the loops
     this.startAwarenessLoop();
+    this.startGitHubAwarenessLoop();
     this.startExpressionLoop();
     this.startReflectionLoop();
     this.startEngagementCheckLoop();
@@ -226,8 +273,9 @@ export class AgentScheduler {
     //NOTE(self): Start UI timer updates
     this.startTimerUpdates();
 
-    //NOTE(self): Run initial awareness check
+    //NOTE(self): Run initial awareness checks
     await this.awarenessCheck();
+    await this.githubAwarenessCheck();
   }
 
   //NOTE(self): Stop all loops
@@ -250,6 +298,10 @@ export class AgentScheduler {
     if (this.engagementCheckTimer) {
       clearInterval(this.engagementCheckTimer);
       this.engagementCheckTimer = null;
+    }
+    if (this.githubAwarenessTimer) {
+      clearInterval(this.githubAwarenessTimer);
+      this.githubAwarenessTimer = null;
     }
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
@@ -291,6 +343,9 @@ export class AgentScheduler {
       const session = getSession();
       const agentDid = session?.did;
 
+      //NOTE(self): Get seenAt timestamp for restart recovery filtering
+      const seenAt = getSeenAt();
+
       //NOTE(self): Prioritize and check for urgent items
       const prioritized = prioritizeNotifications(
         notifications,
@@ -304,16 +359,19 @@ export class AgentScheduler {
       }
 
       //NOTE(self): Filter to conversations that need response
-      //NOTE(self): Only block posts we've directly replied to - allow conversations to continue in threads
-      //NOTE(self): IMPORTANT: Don't filter by isRead - that's just Bluesky's "seen" status, not our response status
+      //NOTE(self): Use seenAt timestamp for restart recovery - only process notifications newer than last seen
+      //NOTE(self): The executor's API check (hasAgentRepliedInThread) handles actual deduplication
       const needsResponse = prioritized.filter((pn) => {
         const n = pn.notification;
         if (!['reply', 'mention', 'quote'].includes(n.reason)) return false;
-        //NOTE(self): Only block if we already replied to THIS SPECIFIC post (prevents sibling spam)
-        //NOTE(self): Removed thread-level blocking - conversations must be allowed to continue!
-        if (hasRepliedToPost(n.uri)) {
-          logger.debug('Skipping already-replied notification', { uri: n.uri, reason: n.reason });
-          return false;
+
+        //NOTE(self): seenAt filter for restart recovery - skip old notifications we've already processed
+        if (seenAt) {
+          const notifTime = new Date(n.indexedAt);
+          if (notifTime <= seenAt) {
+            logger.debug('Skipping notification older than seenAt', { uri: n.uri, notifTime: n.indexedAt, seenAt: seenAt.toISOString() });
+            return false;
+          }
         }
 
         return true;
@@ -324,13 +382,76 @@ export class AgentScheduler {
         fetched: notifications.length,
         prioritized: prioritized.length,
         needsResponse: needsResponse.length,
+        seenAt: seenAt?.toISOString() || 'none',
         reasons: needsResponse.map(pn => ({ reason: pn.notification.reason, author: pn.notification.author.handle })),
       });
 
       if (needsResponse.length > 0) {
         ui.info('Ready to respond');
         this.state.pendingNotifications = needsResponse;
+
+        //NOTE(self): Extract GitHub URLs from Bluesky notifications
+        //NOTE(self): These will be processed separately in GitHub response mode
+        for (const pn of needsResponse) {
+          const text = (pn.notification.record as { text?: string })?.text || '';
+          const githubUrls = extractGitHubUrls(text);
+
+          for (const parsed of githubUrls) {
+            if (parsed.type === 'issue' || parsed.type === 'pull') {
+              //NOTE(self): Track this conversation and fetch thread
+              trackConversation(
+                parsed.owner,
+                parsed.repo,
+                parsed.number,
+                parsed.type,
+                parsed.url,
+                'bluesky_url'
+              );
+
+              //NOTE(self): Fetch the issue thread to check if we should respond
+              const threadResult = await getIssueThread(
+                { owner: parsed.owner, repo: parsed.repo, issue_number: parsed.number },
+                this.appConfig.github.username
+              );
+
+              if (threadResult.success) {
+                const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username);
+                if (analysis.shouldRespond) {
+                  this.state.pendingGitHubConversations.push({
+                    owner: parsed.owner,
+                    repo: parsed.repo,
+                    number: parsed.number,
+                    type: parsed.type,
+                    url: parsed.url,
+                    thread: threadResult.data,
+                    source: 'bluesky_url',
+                    reason: analysis.reason,
+                  });
+                  logger.info('Found GitHub URL in Bluesky notification', {
+                    url: parsed.url,
+                    reason: analysis.reason,
+                  });
+                }
+              }
+            }
+          }
+        }
+
         await this.triggerResponseMode();
+
+        //NOTE(self): Process GitHub conversations after Bluesky responses
+        if (this.state.pendingGitHubConversations.length > 0) {
+          await this.triggerGitHubResponseMode();
+        }
+      }
+
+      //NOTE(self): Update seenAt timestamp after processing notifications
+      //NOTE(self): Use the most recent notification timestamp
+      if (notifications.length > 0) {
+        const latestNotifTime = notifications
+          .map(n => new Date(n.indexedAt))
+          .reduce((latest, current) => current > latest ? current : latest);
+        updateSeenAt(latestNotifTime);
       }
 
       //NOTE(self): Mark notifications as seen on Bluesky
@@ -348,6 +469,273 @@ export class AgentScheduler {
     }
   }
 
+  //NOTE(self): ========== GITHUB AWARENESS LOOP ==========
+  //NOTE(self): Check GitHub notifications for mentions and replies
+  //NOTE(self): Runs less frequently than Bluesky due to rate limits
+
+  private startGitHubAwarenessLoop(): void {
+    this.githubAwarenessTimer = setInterval(async () => {
+      if (this.shutdownRequested) return;
+      if (this.state.currentMode !== 'idle') {
+        //NOTE(self): Don't interrupt other modes
+        return;
+      }
+      await this.githubAwarenessCheck();
+    }, this.config.githubAwarenessInterval);
+  }
+
+  private async githubAwarenessCheck(): Promise<void> {
+    if (this.state.currentMode !== 'idle') return;
+
+    this.state.lastGitHubAwarenessCheck = Date.now();
+
+    try {
+      //NOTE(self): Check GitHub notifications
+      const githubSeenAt = getGitHubSeenAt();
+      const notifResult = await getGitHubNotifications({
+        participating: true, //NOTE(self): Only where we're directly involved
+        since: githubSeenAt?.toISOString(),
+        per_page: 20,
+      });
+
+      if (!notifResult.success) {
+        logger.debug('GitHub awareness check failed', { error: notifResult.error });
+        return;
+      }
+
+      const notifications = notifResult.data;
+      const actionable = filterActionableNotifications(notifications, this.appConfig.github.username);
+
+      logger.debug('GitHub awareness check', {
+        fetched: notifications.length,
+        actionable: actionable.length,
+        since: githubSeenAt?.toISOString() || 'none',
+      });
+
+      //NOTE(self): Process actionable notifications
+      for (const notif of actionable) {
+        //NOTE(self): Extract owner/repo from repository
+        const owner = notif.repository.owner.login;
+        const repo = notif.repository.name;
+
+        //NOTE(self): Get issue/PR number from subject URL
+        const number = extractNumberFromApiUrl(notif.subject.url);
+        if (!number) {
+          logger.debug('Could not extract number from GitHub notification', { url: notif.subject.url });
+          continue;
+        }
+
+        const type = notif.subject.type === 'PullRequest' ? 'pull' : 'issue';
+        const url = `https://github.com/${owner}/${repo}/${type === 'pull' ? 'pull' : 'issues'}/${number}`;
+
+        //NOTE(self): Track the conversation
+        trackConversation(owner, repo, number, type, url, 'github_notification');
+
+        //NOTE(self): Fetch full thread to analyze
+        const threadResult = await getIssueThread(
+          { owner, repo, issue_number: number },
+          this.appConfig.github.username
+        );
+
+        if (threadResult.success) {
+          const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username);
+
+          if (analysis.shouldRespond) {
+            //NOTE(self): Check if we already have this in pending
+            const alreadyPending = this.state.pendingGitHubConversations.some(
+              c => c.owner === owner && c.repo === repo && c.number === number
+            );
+
+            if (!alreadyPending) {
+              this.state.pendingGitHubConversations.push({
+                owner,
+                repo,
+                number,
+                type,
+                url,
+                thread: threadResult.data,
+                source: 'github_notification',
+                reason: analysis.reason,
+              });
+
+              logger.info('GitHub notification needs response', {
+                url,
+                reason: notif.reason,
+                analysisReason: analysis.reason,
+              });
+            }
+          } else {
+            //NOTE(self): Update conversation state if not responding
+            updateConversationState(owner, repo, number, 'awaiting_response', analysis.reason);
+          }
+        }
+
+        //NOTE(self): Mark notification as read
+        await markNotificationRead(notif.id);
+      }
+
+      //NOTE(self): Update seenAt timestamp
+      if (notifications.length > 0) {
+        const latestTime = notifications
+          .map(n => new Date(n.updated_at))
+          .reduce((latest, current) => current > latest ? current : latest);
+        updateGitHubSeenAt(latestTime);
+      }
+
+      updateLastNotificationCheck();
+
+      //NOTE(self): Trigger GitHub response mode if we have pending conversations
+      if (this.state.pendingGitHubConversations.length > 0 && this.state.currentMode === 'idle') {
+        await this.triggerGitHubResponseMode();
+      }
+
+    } catch (error) {
+      logger.debug('GitHub awareness check error', { error: String(error) });
+    }
+  }
+
+  //NOTE(self): ========== GITHUB RESPONSE MODE ==========
+  //NOTE(self): Respond to GitHub conversations with full context
+  //NOTE(self): The SOUL decides when to engage and when a conversation is concluded
+
+  private async triggerGitHubResponseMode(): Promise<void> {
+    if (this.state.pendingGitHubConversations.length === 0) return;
+
+    this.state.currentMode = 'github_responding';
+    ui.startSpinner('Checking GitHub conversations');
+
+    try {
+      const config = this.appConfig;
+      const soul = readSoul(config.paths.soul);
+      const selfContent = readSelf(config.paths.selfmd);
+
+      //NOTE(self): Process each pending conversation
+      for (const pending of this.state.pendingGitHubConversations) {
+        ui.startSpinner(`GitHub: ${pending.owner}/${pending.repo}#${pending.number}`);
+
+        //NOTE(self): Build context for the LLM
+        const threadContext = formatThreadForContext(pending.thread, 15);
+
+        const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# GitHub Response Mode
+
+You're engaging in a GitHub issue conversation. Your SELF.md contains your values and patterns for engaging authentically.
+
+**CRITICAL GUIDELINES:**
+1. Be helpful and constructive - you're here to assist
+2. Respond as a senior staff engineer in your SELF.md voice
+3. If you've already contributed and the conversation is winding down, it's OK to not respond
+4. If the issue is resolved or closed, acknowledge and don't continue
+5. One comment per response cycle - don't spam the thread
+6. If you decide the conversation is concluded, say so explicitly
+
+Your GitHub username: ${config.github.username}
+Repository: ${pending.owner}/${pending.repo}
+
+Available tools:
+- github_create_issue_comment: Leave a comment on this issue
+- github_list_issues: Check other related issues if needed
+- github_get_repo: Get repository context if needed`;
+
+        const userMessage = `# GitHub Conversation Needs Your Attention
+
+**Source:** ${pending.source === 'bluesky_url' ? 'Someone shared this on Bluesky' : 'Direct GitHub notification'}
+**Reason:** ${pending.reason}
+
+${threadContext}
+
+---
+
+Review this conversation. Decide if you should respond:
+- If yes, use github_create_issue_comment with owner="${pending.owner}", repo="${pending.repo}", issue_number=${pending.number}
+- If the conversation is concluded or doesn't need your input, explain why and move on
+- Remember: quality over quantity. One thoughtful comment is better than many.`;
+
+        const messages: Message[] = [{ role: 'user', content: userMessage }];
+
+        let response = await chatWithTools({
+          system: systemPrompt,
+          messages,
+          tools: AGENT_TOOLS,
+        });
+
+        //NOTE(self): Execute any tool calls
+        if (response.toolCalls.length > 0) {
+          const results = await executeTools(response.toolCalls);
+
+          //NOTE(self): Track our comment
+          for (let i = 0; i < response.toolCalls.length; i++) {
+            const tc = response.toolCalls[i];
+            const result = results[i];
+
+            if (tc.name === 'github_create_issue_comment' && !result.is_error) {
+              try {
+                const parsed = JSON.parse(result.content);
+                if (parsed.id) {
+                  recordOurComment(pending.owner, pending.repo, pending.number, parsed.id);
+                  updateConversationState(pending.owner, pending.repo, pending.number, 'awaiting_response');
+                  recordSignificantEvent('github_comment');
+                  addInsight(`Contributed to GitHub issue ${pending.owner}/${pending.repo}#${pending.number}`);
+                  ui.info('GitHub comment posted', `${pending.owner}/${pending.repo}#${pending.number}`);
+                }
+              } catch {
+                //NOTE(self): Not JSON, continue
+              }
+            }
+          }
+
+          //NOTE(self): Continue conversation if needed
+          messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+          messages.push(createToolResultMessage(results));
+
+          response = await chatWithTools({
+            system: systemPrompt,
+            messages,
+            tools: AGENT_TOOLS,
+          });
+        }
+
+        //NOTE(self): Check if SOUL decided conversation is concluded
+        const responseText = response.text?.toLowerCase() || '';
+        if (
+          responseText.includes('concluded') ||
+          responseText.includes('resolved') ||
+          responseText.includes('no further input needed') ||
+          responseText.includes('conversation is complete')
+        ) {
+          markConversationConcluded(
+            pending.owner,
+            pending.repo,
+            pending.number,
+            response.text || 'SOUL determined conversation is concluded'
+          );
+          logger.info('Conversation marked as concluded', {
+            url: pending.url,
+            reason: response.text?.slice(0, 100),
+          });
+        }
+      }
+
+      //NOTE(self): Clear pending conversations
+      this.state.pendingGitHubConversations = [];
+      ui.stopSpinner('GitHub check complete');
+
+    } catch (error) {
+      ui.stopSpinner('GitHub response error', false);
+
+      if (isFatalError(error)) {
+        ui.error('Fatal API Error', error.message);
+        logger.error('Fatal API error in GitHub response', { code: error.code, message: error.message });
+        this.stop();
+        process.exit(1);
+      }
+
+      logger.error('GitHub response mode error', { error: String(error) });
+      recordFriction('social', 'Error responding to GitHub', String(error));
+    } finally {
+      this.state.currentMode = 'idle';
+    }
+  }
+
   //NOTE(self): ========== RESPONSE MODE ==========
   //NOTE(self): When someone reaches out, respond with full attention
   //NOTE(self): Uses OPERATING.md for efficiency
@@ -356,29 +744,19 @@ export class AgentScheduler {
     if (this.state.pendingNotifications.length === 0) return;
 
     this.state.currentMode = 'responding';
-    ui.startSpinner('Responding to people');
+    ui.startSpinner('Checking if conversation is needed');
 
     try {
       const config = this.appConfig;
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
 
-      //NOTE(self): Filter out posts we've already replied to - prevents sibling spam
-      //NOTE(self): Thread-level blocking removed to allow conversations to continue
-      const notYetReplied = this.state.pendingNotifications.filter((pn) => {
-        const n = pn.notification;
-
-        //NOTE(self): Only block if we've replied to THIS SPECIFIC post (prevents multiple sibling replies)
-        if (hasRepliedToPost(n.uri)) {
-          logger.debug('Skipping already-replied post', { uri: n.uri });
-          return false;
-        }
-
-        return true;
-      });
+      //NOTE(self): No local reply tracking filter needed here
+      //NOTE(self): The executor's API check (hasAgentRepliedInThread) handles deduplication
+      //NOTE(self): This reduces complexity and makes the API the single source of truth
 
       //NOTE(self): Filter notifications - only respond where we add value
-      const worthResponding = notYetReplied.filter((pn) => {
+      const worthResponding = this.state.pendingNotifications.filter((pn) => {
         const check = shouldRespondTo(pn.notification, config.owner.blueskyDid);
         if (!check.shouldRespond) {
           logger.debug('Skipping notification', { reason: check.reason, uri: pn.notification.uri });
@@ -511,7 +889,7 @@ Review each notification. Respond as yourself - your SELF.md guides when and how
         });
       }
 
-      ui.stopSpinner('Responses sent');
+      ui.stopSpinner('Check complete');
 
       //NOTE(self): Clear pending notifications
       this.state.pendingNotifications = [];
@@ -1393,6 +1771,10 @@ Speak briefly about who you are right now, in this moment. No tools needed - jus
     }
     await this.growthCycle();
     return true;
+  }
+
+  async forceGitHubAwareness(): Promise<void> {
+    await this.githubAwarenessCheck();
   }
 
   //NOTE(self): Get scheduled timers for UI display

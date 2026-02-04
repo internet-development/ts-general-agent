@@ -1,5 +1,6 @@
 import { getAuthHeaders, getSession } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
+import { logger } from '@modules/logger.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -164,4 +165,62 @@ export async function getReplyRefs(
       root: { uri: thread.post.uri, cid: thread.post.cid },
     },
   };
+}
+
+//NOTE(self): Check thread API to see if we've already replied - single source of truth
+//NOTE(self): No local tracking needed - the API IS the truth
+export async function hasAgentRepliedInThread(postUri: string): Promise<boolean> {
+  const session = getSession();
+  if (!session) {
+    //NOTE(self): No session means we can't check - fail OPEN (allow reply attempt)
+    logger.debug('No session for hasAgentRepliedInThread check', { postUri });
+    return false;
+  }
+
+  const agentDid = session.did;
+
+  try {
+    //NOTE(self): Fetch thread with depth=1 (direct replies only) to minimize API cost
+    const threadResult = await getPostThread(postUri, 1, 0);
+
+    if (!threadResult.success) {
+      //NOTE(self): Fail OPEN - better to attempt a reply than block all replies
+      //NOTE(self): Bluesky will reject true duplicates anyway
+      logger.debug('Failed to fetch thread for reply check, failing open', {
+        postUri,
+        error: threadResult.error,
+      });
+      return false;
+    }
+
+    const thread = threadResult.data.thread;
+
+    //NOTE(self): Check if any direct reply is from the agent
+    if (thread.replies && Array.isArray(thread.replies)) {
+      for (const reply of thread.replies) {
+        //NOTE(self): Skip blocked/notfound posts
+        if (reply.$type !== 'app.bsky.feed.defs#threadViewPost') {
+          continue;
+        }
+
+        const replyPost = reply as ThreadViewPost;
+        if (replyPost.post.author.did === agentDid) {
+          logger.debug('Agent has already replied in thread', {
+            postUri,
+            agentReplyUri: replyPost.post.uri,
+          });
+          return true;
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    //NOTE(self): Fail OPEN on any error
+    logger.debug('Error checking thread for agent reply, failing open', {
+      postUri,
+      error: String(error),
+    });
+    return false;
+  }
 }

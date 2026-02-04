@@ -284,7 +284,7 @@ export class TerminalUI {
   heartbeat(): void {
     this.lastHeartbeat = new Date();
     const ts = `${ANSI.dim}${timestamp()}${ANSI.reset}`;
-    this.writeOutput(`  ${ts}  ${ANSI.red}${SYM.heart}${ANSI.reset} ${ANSI.white}ready${ANSI.reset} ${ANSI.dim}listening for mentions and messages${ANSI.reset}`);
+    this.writeOutput(`  ${ts}  ${ANSI.red}${SYM.heart}${ANSI.reset} ${ANSI.white}ready${ANSI.reset} ${ANSI.dim}listening for notifications${ANSI.reset}`);
   }
 
   //NOTE(self): Format a single timer line for display
@@ -483,7 +483,7 @@ export class TerminalUI {
     //NOTE(self): Draw timer lines (4 lines showing scheduled actions)
     if (this.timers) {
       const timerLines = [
-        this.formatTimerLine('Awareness', this.timers.awareness.nextAt, 'checking for mentions'),
+        this.formatTimerLine('Awareness', this.timers.awareness.nextAt, 'checking notifications'),
         this.formatTimerLine('Expression', this.timers.expression.nextAt, this.timers.expression.description || 'next post'),
         this.formatTimerLine('Reflection', this.timers.reflection.nextAt, 'updating SELF.md'),
         this.formatTimerLine('Improvement', this.timers.improvement.nextAt, this.timers.improvement.description || 'code changes'),

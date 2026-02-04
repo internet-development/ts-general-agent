@@ -21,7 +21,8 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import * as arena from '@adapters/arena/index.js';
-import { markInteractionResponded, hasRepliedToPost, markPostReplied } from '@modules/engagement.js';
+import { markInteractionResponded } from '@modules/engagement.js';
+import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
 import { runClaudeCode } from '@skills/self-improvement.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { ui } from '@modules/ui.js';
@@ -220,10 +221,11 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: 'Error: post_uri and post_cid are required to reply', is_error: true };
         }
 
-        //NOTE(self): Prevent multiple replies to the SAME post - this creates sibling spam
-        //NOTE(self): Thread-level blocking removed - conversations must be allowed to continue!
-        if (hasRepliedToPost(post_uri)) {
-          logger.warn('Blocked duplicate reply attempt', { post_uri });
+        //NOTE(self): Check thread API to see if we've already replied - single source of truth
+        //NOTE(self): This is async but fails OPEN if API errors - better to attempt than block
+        const alreadyReplied = await hasAgentRepliedInThread(post_uri);
+        if (alreadyReplied) {
+          logger.warn('Blocked duplicate reply attempt (API check)', { post_uri });
           return { tool_use_id: call.id, content: 'BLOCKED: You have already replied to this post. Replying multiple times to the same post is spam. Move on to the next notification.', is_error: true };
         }
 
@@ -248,10 +250,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         if (result.success) {
           //NOTE(self): Only show in chat after successful reply - reduces perceived duplicates
           ui.social(`${config.agent.name} (reply)`, text);
-          //NOTE(self): Mark the interaction as responded in engagement tracking
+          //NOTE(self): Mark the interaction as responded in engagement tracking (for relationship insights)
           markInteractionResponded(post_uri, result.data.uri);
-          //NOTE(self): Mark this post as replied to (prevents sibling spam, allows thread conversations)
-          markPostReplied(post_uri);
+          //NOTE(self): No local tracking needed - the API IS the truth for reply deduplication
           logger.info('Reply sent', { post_uri, reply_uri: result.data.uri });
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }

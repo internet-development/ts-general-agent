@@ -7,7 +7,6 @@
  */
 
 import type { AtprotoNotification } from '@adapters/atproto/types.js';
-import { getPostThread } from '@adapters/atproto/get-post-thread.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
@@ -57,166 +56,27 @@ interface EngagementState {
   reflection: ReflectionState;
   lastStateUpdate: string;
   todayStart: string;
+  seenAt?: string; //NOTE(self): Timestamp of last processed notification - for restart recovery
 }
 
 
 //NOTE(self): Persistent tracking - survives restarts
 
-//NOTE(self): Path to tracking files
-const REPLIED_URIS_PATH = '.memory/replied_uris.json';
-const REPLIED_THREADS_PATH = '.memory/replied_threads.json';
+//NOTE(self): Path to relationship file (seenAt stored here too)
 const RELATIONSHIPS_PATH = '.memory/relationships.json';
 
-//NOTE(self): Track which post URIs we've replied to (prevents multiple replies to same post)
-//NOTE(self): Persisted to disk so I remember across restarts
-let repliedToPostUris: Set<string> | null = null;
-
-//NOTE(self): CRITICAL: Track which THREADS we've participated in (prevents spam in same thread)
-//NOTE(self): A thread is identified by its root URI - if we've replied anywhere in a thread, don't reply again
-let repliedToThreads: Set<string> | null = null;
-
-function loadRepliedUris(): Set<string> {
-  if (repliedToPostUris !== null) return repliedToPostUris;
-
-  try {
-    if (existsSync(REPLIED_URIS_PATH)) {
-      const data = JSON.parse(readFileSync(REPLIED_URIS_PATH, 'utf-8'));
-      repliedToPostUris = new Set(data.uris || []);
-      logger.debug('Loaded replied URIs', { count: repliedToPostUris.size });
-    } else {
-      repliedToPostUris = new Set();
-    }
-  } catch (err) {
-    logger.error('Failed to load replied URIs', { error: String(err) });
-    repliedToPostUris = new Set();
-  }
-  return repliedToPostUris;
+//NOTE(self): seenAt timestamp - only process notifications newer than this
+//NOTE(self): Handles restart recovery without tracking individual URIs
+export function getSeenAt(): Date | null {
+  const state = loadState();
+  return state.seenAt ? new Date(state.seenAt) : null;
 }
 
-function loadRepliedThreads(): Set<string> {
-  if (repliedToThreads !== null) return repliedToThreads;
-
-  try {
-    if (existsSync(REPLIED_THREADS_PATH)) {
-      const data = JSON.parse(readFileSync(REPLIED_THREADS_PATH, 'utf-8'));
-      repliedToThreads = new Set(data.threads || []);
-      logger.debug('Loaded replied threads', { count: repliedToThreads.size });
-    } else {
-      repliedToThreads = new Set();
-    }
-  } catch (err) {
-    logger.error('Failed to load replied threads', { error: String(err) });
-    repliedToThreads = new Set();
-  }
-  return repliedToThreads;
-}
-
-function saveRepliedUris(): void {
-  try {
-    const dir = dirname(REPLIED_URIS_PATH);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    const uris = loadRepliedUris();
-    //NOTE(self): Keep ALL replied URIs - never respond to the same post twice
-    const urisArray = Array.from(uris);
-    writeFileSync(REPLIED_URIS_PATH, JSON.stringify({ uris: urisArray, lastUpdated: new Date().toISOString() }, null, 2));
-  } catch (err) {
-    logger.error('Failed to save replied URIs', { error: String(err) });
-  }
-}
-
-function saveRepliedThreads(): void {
-  try {
-    const dir = dirname(REPLIED_THREADS_PATH);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    const threads = loadRepliedThreads();
-    const threadsArray = Array.from(threads);
-    writeFileSync(REPLIED_THREADS_PATH, JSON.stringify({ threads: threadsArray, lastUpdated: new Date().toISOString() }, null, 2));
-  } catch (err) {
-    logger.error('Failed to save replied threads', { error: String(err) });
-  }
-}
-
-export function hasRepliedToPost(postUri: string): boolean {
-  return loadRepliedUris().has(postUri);
-}
-
-//NOTE(self): CRITICAL: Check if we've already participated in this thread
-export function hasRepliedToThread(threadRootUri: string): boolean {
-  return loadRepliedThreads().has(threadRootUri);
-}
-
-export function markPostReplied(postUri: string, threadRootUri?: string): void {
-  loadRepliedUris().add(postUri);
-  saveRepliedUris();
-
-  //NOTE(self): Also mark the thread as participated
-  if (threadRootUri) {
-    loadRepliedThreads().add(threadRootUri);
-    saveRepliedThreads();
-    logger.debug('Marked thread as replied', { postUri, threadRootUri });
-  }
-}
-
-//NOTE(self): Bootstrap thread tracking from existing replied URIs
-//NOTE(self): This runs on startup if replied_threads.json doesn't exist
-//NOTE(self): Uses cheap API calls to resolve thread roots for posts we've already replied to
-export async function initializeThreadTracking(): Promise<void> {
-  //NOTE(self): Skip if thread tracking file already exists
-  if (existsSync(REPLIED_THREADS_PATH)) {
-    logger.debug('Thread tracking already initialized', { path: REPLIED_THREADS_PATH });
-    return;
-  }
-
-  const repliedUris = loadRepliedUris();
-  if (repliedUris.size === 0) {
-    logger.debug('No replied URIs to bootstrap thread tracking from');
-    return;
-  }
-
-  logger.info('Bootstrapping thread tracking from existing replies', { count: repliedUris.size });
-
-  const threads = loadRepliedThreads();
-  let resolved = 0;
-  let failed = 0;
-
-  for (const uri of repliedUris) {
-    try {
-      //NOTE(self): Fetch the post thread to find its root
-      const threadResult = await getPostThread(uri);
-
-      if (threadResult.success) {
-        const post = threadResult.data.thread.post;
-
-        //NOTE(self): If the post is a reply, use its root; otherwise it IS the root
-        if (post.record.reply?.root?.uri) {
-          threads.add(post.record.reply.root.uri);
-        } else {
-          threads.add(post.uri);
-        }
-        resolved++;
-      } else {
-        //NOTE(self): Post may have been deleted or account blocked - use the URI itself as fallback
-        threads.add(uri);
-        failed++;
-        logger.debug('Could not fetch thread for replied post', { uri, error: threadResult.error });
-      }
-
-      //NOTE(self): Rate limit - don't hammer the API
-      await new Promise(resolve => setTimeout(resolve, 100));
-    } catch (err) {
-      //NOTE(self): On error, still add the URI itself as a fallback thread root
-      threads.add(uri);
-      failed++;
-      logger.warn('Error bootstrapping thread for URI', { uri, error: String(err) });
-    }
-  }
-
-  saveRepliedThreads();
-  logger.info('Thread tracking bootstrap complete', { resolved, failed, totalThreads: threads.size });
+export function updateSeenAt(timestamp: Date): void {
+  const state = loadState();
+  state.seenAt = timestamp.toISOString();
+  saveState(state);
+  logger.debug('Updated seenAt timestamp', { seenAt: state.seenAt });
 }
 
 function getDefaultState(): EngagementState {
@@ -389,16 +249,9 @@ export function markInteractionResponded(originalUri: string, responseUri: strin
 }
 
 export function hasRespondedToNotification(uri: string): boolean {
-  //NOTE(self): Check both tracking systems - belt and suspenders
-  //NOTE(self): Never respond to the same notification twice
-
-  //NOTE(self): First check the replied URIs set (fast lookup)
-  if (hasRepliedToPost(uri)) {
-    logger.debug('Notification already replied to (replied URIs)', { uri });
-    return true;
-  }
-
-  //NOTE(self): Also check relationship interaction records
+  //NOTE(self): Check relationship interaction records for response tracking
+  //NOTE(self): This provides engagement intelligence without being critical for spam prevention
+  //NOTE(self): The API check (hasAgentRepliedInThread) is the real source of truth
   const state = loadState();
   for (const relationship of Object.values(state.relationships)) {
     for (const interaction of relationship.interactions) {
