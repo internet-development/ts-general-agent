@@ -1,6 +1,6 @@
 //NOTE(self): Creates a collaborative development workspace repository
-// Uses www-sacred template, enforces www-lil-intdev- prefix
-// CONSTRAINT: Only ONE repo with www-lil-intdev- prefix allowed per org (guards against excess creation)
+//NOTE(self): Uses www-sacred template, enforces www-lil-intdev- prefix
+//NOTE(self): CONSTRAINT - Only ONE repo with www-lil-intdev- prefix allowed per org (guards against excess creation)
 
 import * as github from '@adapters/github/index.js';
 import { createRepositoryFromTemplate } from '@adapters/github/create-repository-from-template.js';
@@ -55,7 +55,7 @@ export async function findExistingWorkspace(org: string = DEFAULT_ORG): Promise<
 export async function createWorkspace(params: CreateWorkspaceParams): Promise<WorkspaceResult> {
   const org = params.org || DEFAULT_ORG;
 
-  // Check for existing workspace first
+  //NOTE(self): Check for existing workspace first - enforces one-per-org rule
   const existing = await findExistingWorkspace(org);
   if (existing) {
     logger.info('Workspace already exists', { workspace: existing, org });
@@ -66,7 +66,7 @@ export async function createWorkspace(params: CreateWorkspaceParams): Promise<Wo
     };
   }
 
-  // Ensure prefix is applied
+  //NOTE(self): Ensure prefix is applied automatically
   const repoName = params.name.startsWith(WORKSPACE_PREFIX)
     ? params.name
     : `${WORKSPACE_PREFIX}${params.name}`;

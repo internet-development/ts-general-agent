@@ -604,6 +604,45 @@ ts-general-agent/
 
 ---
 
+## Code Style Conventions
+
+### Comment Style: `//NOTE(self):`
+
+All explanatory comments in the codebase use the `//NOTE(self):` prefix. This convention:
+- Makes comments searchable and consistent
+- Signals that the comment is self-documentation (agent explaining to future self)
+- Distinguishes explanatory notes from commented-out code
+
+**Usage patterns:**
+
+```typescript
+//NOTE(self): File header - what this file does
+//NOTE(self): Explains a design decision or constraint
+
+export async function doSomething() {
+  //NOTE(self): Why this approach was chosen
+  const result = await api.call();
+
+  if (!result.success) {
+    //NOTE(self): Handling edge case because...
+    return fallback();
+  }
+}
+```
+
+**When to use:**
+- File headers describing purpose
+- Explaining non-obvious design decisions
+- Documenting constraints or gotchas
+- Inline explanations for complex logic
+
+**When NOT to use:**
+- Obvious code that's self-explanatory
+- TODO items (use `//TODO:` instead)
+- Temporary debugging (remove before commit)
+
+---
+
 ## Token Budget (Estimated Daily)
 
 **Context sizes** (baseline):

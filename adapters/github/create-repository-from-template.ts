@@ -1,3 +1,5 @@
+//NOTE(self): GitHub API for creating repositories from template repos
+
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubRepository, GitHubResult } from '@adapters/github/types.js';
 
