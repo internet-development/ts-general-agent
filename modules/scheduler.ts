@@ -15,6 +15,7 @@ import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
 import { executeTools } from '@modules/executor.js';
+import type { ToolCall } from '@modules/tools.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
@@ -146,6 +147,44 @@ export class AgentScheduler {
       return hour >= this.config.quietHoursStart || hour < this.config.quietHoursEnd;
     }
     return hour >= this.config.quietHoursStart && hour < this.config.quietHoursEnd;
+  }
+
+  //NOTE(self): Deduplicate reply tool calls to save tokens
+  //NOTE(self): Prevents LLM from replying to the same post multiple times in one session
+  private deduplicateReplyToolCalls(
+    toolCalls: ToolCall[],
+    repliedPostUris: Set<string>
+  ): { deduplicated: ToolCall[]; skipped: number } {
+    let skipped = 0;
+    const deduplicated = toolCalls.filter((tc) => {
+      //NOTE(self): Only deduplicate reply-type tools
+      if (tc.name !== 'bluesky_reply') {
+        return true;
+      }
+
+      const postUri = tc.input?.post_uri as string | undefined;
+      if (!postUri) {
+        return true; //NOTE(self): Let executor handle validation errors
+      }
+
+      //NOTE(self): Check if we've already replied to this post in this session
+      if (repliedPostUris.has(postUri)) {
+        logger.info('Deduplicating reply tool call', { postUri, toolId: tc.id });
+        skipped++;
+        return false;
+      }
+
+      //NOTE(self): Also check persistent storage (replied in previous sessions)
+      if (hasRepliedToPost(postUri)) {
+        logger.info('Skipping reply to already-replied post', { postUri, toolId: tc.id });
+        skipped++;
+        return false;
+      }
+
+      return true;
+    });
+
+    return { deduplicated, skipped };
   }
 
   //NOTE(self): Start all loops
@@ -408,20 +447,62 @@ Review each notification. Respond as yourself - your SELF.md guides when and how
         tools: AGENT_TOOLS,
       });
 
+      //NOTE(self): Track replied URIs across this session to deduplicate LLM-generated replies
+      const sessionRepliedUris = new Set<string>();
+
       //NOTE(self): Execute tool calls (replies)
       while (response.toolCalls.length > 0) {
-        const results = await executeTools(response.toolCalls);
+        //NOTE(self): Deduplicate reply tool calls to save tokens and prevent spam
+        const { deduplicated: toolCallsToExecute, skipped } = this.deduplicateReplyToolCalls(
+          response.toolCalls,
+          sessionRepliedUris
+        );
 
-        //NOTE(self): Record successful replies as significant events
-        for (const result of results) {
+        if (skipped > 0) {
+          logger.info('Deduplicated reply tool calls', { skipped, remaining: toolCallsToExecute.length });
+        }
+
+        //NOTE(self): Execute deduplicated tool calls
+        const results = await executeTools(toolCallsToExecute);
+
+        //NOTE(self): Track successful replies and record significant events
+        for (let i = 0; i < toolCallsToExecute.length; i++) {
+          const tc = toolCallsToExecute[i];
+          const result = results[i];
+
           if (!result.is_error) {
             recordSignificantEvent('conversation');
+
+            //NOTE(self): Track successful reply URIs for this session
+            if (tc.name === 'bluesky_reply') {
+              const postUri = tc.input?.post_uri as string | undefined;
+              if (postUri) {
+                sessionRepliedUris.add(postUri);
+              }
+            }
           }
         }
 
         //NOTE(self): Format messages correctly for the AI SDK
+        //NOTE(self): Include original tool calls so LLM understands what happened
         messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
-        messages.push(createToolResultMessage(results));
+
+        //NOTE(self): Create results for skipped calls (so LLM knows they were deduplicated)
+        const allResults = response.toolCalls.map((tc) => {
+          const executedResult = results.find((r) => r.tool_use_id === tc.id);
+          if (executedResult) {
+            return executedResult;
+          }
+          //NOTE(self): Tool was skipped due to deduplication
+          return {
+            tool_use_id: tc.id,
+            tool_name: tc.name,
+            content: 'SKIPPED: Duplicate reply attempt - you already replied to this post in this session.',
+            is_error: true,
+          };
+        });
+
+        messages.push(createToolResultMessage(allResults));
 
         response = await chatWithTools({
           system: systemPrompt,
