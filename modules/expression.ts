@@ -411,17 +411,29 @@ export function getExpressionStats(): {
 
 //NOTE(self): Identity with utility - validation patterns
 //NOTE(self): These patterns help me recognize when a post has a concrete invitation
+//NOTE(self): The key insight: "easy question" means bounded, answerable in one sentence
 const INVITATION_PATTERNS = {
-  //NOTE(self): Questions that are easy to answer
-  easyQuestion: /\?[^?]*$/,  // ends with a question
-  choiceQuestion: /(?:prefer|choose|pick|rather|which|what do you)\b.*\?/i,
+  //NOTE(self): Choice questions - the gold standard (A or B? / do you prefer X or Y?)
+  //NOTE(self): These are easy because they give a clear response format
+  choiceQuestion: /(?:prefer|choose|pick|rather|which|or\s+\w+\?|option\s*[ab12]|between)/i,
 
-  //NOTE(self): Concrete artifacts
-  hasTemplate: /(?:template|checklist|pattern|recipe|example|here's how|try this)/i,
+  //NOTE(self): Bounded questions - answerable in one sentence
+  //NOTE(self): "What's one thing..." / "What's your..." / "Do you..."
+  boundedQuestion: /(?:what's (?:one|your|the)|do you|have you|did you|are you|would you|could you)\b.*\?/i,
+
+  //NOTE(self): Generic questions (weaker - any question mark at end)
+  anyQuestion: /\?[^?]*$/,
+
+  //NOTE(self): Concrete artifacts - something tangible to engage with
+  hasTemplate: /(?:template|checklist|pattern|recipe|example|here's how|try this|step[s]?|tip[s]?)/i,
   hasLink: /https?:\/\/\S+/,
 
-  //NOTE(self): Explicit invitations
-  explicitInvitation: /(?:what's yours|how about you|curious|wondering|interested to hear|love to know|what do you think)/i,
+  //NOTE(self): Direct invitation phrases - explicitly opening the door
+  directInvitation: /(?:what's yours|how about you|curious what|wondering if|interested to hear|love to know|anyone else|does this resonate)/i,
+
+  //NOTE(self): Taste questions - my preferred style from SELF.md
+  //NOTE(self): "Do you prefer practical or inspirational?" / "Speed or accuracy?"
+  tasteQuestion: /(?:practical or|speed or|more or less|rather have|would you want)\b/i,
 };
 
 //NOTE(self): Result of checking if a post has utility (an invitation)
@@ -434,15 +446,20 @@ export interface InvitationCheck {
 
 //NOTE(self): Identity with utility - check if my draft has a concrete invitation
 //NOTE(self): This helps me catch "broadcast-y" posts before they go out
+//NOTE(self): Key insight: invitations work when they're EASY TO ANSWER (bounded, one sentence)
 export function checkInvitation(draft: string): InvitationCheck {
-  const hasEasyQuestion = INVITATION_PATTERNS.easyQuestion.test(draft);
+  //NOTE(self): Check all patterns
   const hasChoiceQuestion = INVITATION_PATTERNS.choiceQuestion.test(draft);
+  const hasBoundedQuestion = INVITATION_PATTERNS.boundedQuestion.test(draft);
+  const hasTasteQuestion = INVITATION_PATTERNS.tasteQuestion.test(draft);
+  const hasAnyQuestion = INVITATION_PATTERNS.anyQuestion.test(draft);
   const hasTemplate = INVITATION_PATTERNS.hasTemplate.test(draft);
   const hasLink = INVITATION_PATTERNS.hasLink.test(draft);
-  const hasExplicit = INVITATION_PATTERNS.explicitInvitation.test(draft);
+  const hasDirectInvitation = INVITATION_PATTERNS.directInvitation.test(draft);
 
-  //NOTE(self): Strong invitation: choice question or explicit + question
-  if (hasChoiceQuestion || (hasExplicit && hasEasyQuestion)) {
+  //NOTE(self): STRONG invitation: choice/taste question, or bounded question + direct invitation
+  //NOTE(self): These are the gold standard - easy to answer, clear response format
+  if (hasChoiceQuestion || hasTasteQuestion) {
     return {
       hasInvitation: true,
       invitationType: 'question',
@@ -450,7 +467,16 @@ export function checkInvitation(draft: string): InvitationCheck {
     };
   }
 
-  //NOTE(self): Strong artifact: template/example with link
+  //NOTE(self): STRONG: bounded question with direct invitation phrase
+  if (hasBoundedQuestion && hasDirectInvitation) {
+    return {
+      hasInvitation: true,
+      invitationType: 'question',
+      confidence: 'strong',
+    };
+  }
+
+  //NOTE(self): STRONG artifact: template/example with link (tangible + actionable)
   if (hasTemplate && hasLink) {
     return {
       hasInvitation: true,
@@ -459,56 +485,116 @@ export function checkInvitation(draft: string): InvitationCheck {
     };
   }
 
-  //NOTE(self): Weak invitation: just a question or just an artifact
-  if (hasEasyQuestion) {
+  //NOTE(self): MEDIUM: bounded question alone (good but could be stronger)
+  if (hasBoundedQuestion) {
     return {
       hasInvitation: true,
       invitationType: 'question',
       confidence: 'weak',
-      suggestion: 'Consider making the question easier to answer (A or B? / what\'s yours?)',
+      suggestion: 'Good question! Make it even easier: add "A or B?" or "What\'s yours?"',
     };
   }
 
+  //NOTE(self): MEDIUM: direct invitation with any question
+  if (hasDirectInvitation && hasAnyQuestion) {
+    return {
+      hasInvitation: true,
+      invitationType: 'question',
+      confidence: 'weak',
+      suggestion: 'Good start! Make the question more bounded (answerable in one sentence)',
+    };
+  }
+
+  //NOTE(self): WEAK: just a template or link without question
   if (hasTemplate || hasLink) {
     return {
       hasInvitation: true,
       invitationType: 'artifact',
       confidence: 'weak',
-      suggestion: 'Consider adding a simple question to invite response',
+      suggestion: 'Nice artifact! Add a simple question: "Does this help?" or "What would you add?"',
     };
   }
 
-  if (hasExplicit) {
+  //NOTE(self): WEAK: just a question without bounded framing
+  if (hasAnyQuestion) {
+    return {
+      hasInvitation: true,
+      invitationType: 'question',
+      confidence: 'weak',
+      suggestion: 'Question detected but may be hard to answer. Try: "Do you prefer A or B?" or "What\'s one thing you..."',
+    };
+  }
+
+  //NOTE(self): WEAK: just a direct invitation phrase without question mark
+  if (hasDirectInvitation) {
     return {
       hasInvitation: true,
       invitationType: 'explicit',
       confidence: 'weak',
-      suggestion: 'Consider ending with a concrete question',
+      suggestion: 'Good invitation intent! End with a concrete question: "What\'s yours?" or "Prefer A or B?"',
     };
   }
 
-  //NOTE(self): No invitation detected - this is a "statement" post
+  //NOTE(self): NO invitation - this is a "statement" post
+  //NOTE(self): Provide specific, actionable suggestions
   return {
     hasInvitation: false,
     invitationType: 'none',
     confidence: 'none',
-    suggestion: 'This reads like a statement. Add: (1) a simple question, (2) a tiny template, or (3) "What\'s yours?"',
+    suggestion: 'This is a statement without an invitation. Add ONE of:\n• A choice question: "Do you prefer A or B?"\n• A bounded question: "What\'s one thing you...?"\n• A direct invitation: "What\'s yours?" or "Does this resonate?"',
   };
 }
 
 //NOTE(self): Quick prompts I can append to make a statement into an invitation
 //NOTE(self): These come from my SELF.md "Quick prompts I can reuse" section
-export const INVITATION_PROMPTS = [
-  'What\'s yours?',
-  'How about you?',
-  'Curious what you think.',
-  'Does this resonate?',
-  'Anyone else notice this?',
+//NOTE(self): Organized by type: choice questions (best), bounded questions, direct invitations
+export const INVITATION_PROMPTS = {
+  //NOTE(self): Choice questions - the gold standard (A or B format)
+  choice: [
+    'Prefer practical or inspirational?',
+    'Speed or accuracy here?',
+    'More of this or less?',
+    'Verbose or concise?',
+  ],
+  //NOTE(self): Bounded questions - answerable in one sentence
+  bounded: [
+    'What\'s one thing you\'d add?',
+    'What\'s your version of this?',
+    'What\'s one example from your work?',
+  ],
+  //NOTE(self): Direct invitations - opening the door
+  direct: [
+    'What\'s yours?',
+    'Does this resonate?',
+    'Anyone else notice this?',
+    'How about you?',
+  ],
+};
+
+//NOTE(self): Legacy flat array for backwards compatibility
+export const INVITATION_PROMPTS_FLAT = [
+  ...INVITATION_PROMPTS.choice,
+  ...INVITATION_PROMPTS.bounded,
+  ...INVITATION_PROMPTS.direct,
 ];
 
 //NOTE(self): Get a random invitation prompt to append
-export function getInvitationPrompt(): string {
-  return INVITATION_PROMPTS[Math.floor(Math.random() * INVITATION_PROMPTS.length)];
+//NOTE(self): Weighted toward choice questions (strongest) but includes variety
+export function getInvitationPrompt(type?: 'choice' | 'bounded' | 'direct'): string {
+  if (type) {
+    const prompts = INVITATION_PROMPTS[type];
+    return prompts[Math.floor(Math.random() * prompts.length)];
+  }
+
+  //NOTE(self): 50% choice (strongest), 30% bounded, 20% direct
+  const roll = Math.random();
+  if (roll < 0.5) {
+    return INVITATION_PROMPTS.choice[Math.floor(Math.random() * INVITATION_PROMPTS.choice.length)];
+  } else if (roll < 0.8) {
+    return INVITATION_PROMPTS.bounded[Math.floor(Math.random() * INVITATION_PROMPTS.bounded.length)];
+  } else {
+    return INVITATION_PROMPTS.direct[Math.floor(Math.random() * INVITATION_PROMPTS.direct.length)];
+  }
 }
 
 //NOTE(self): Engagement Patterns - what resonates with people?

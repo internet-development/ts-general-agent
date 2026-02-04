@@ -1,4 +1,5 @@
 import type { GitHubAuth } from '@adapters/github/types.js';
+import { logger } from '@modules/logger.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -36,7 +37,8 @@ export async function verifyAuth(): Promise<boolean> {
       headers: getAuthHeaders(),
     });
     return response.ok;
-  } catch {
+  } catch (e) {
+    logger.debug('GitHub auth verification failed', { error: String(e) });
     return false;
   }
 }

@@ -116,15 +116,25 @@ export function wrapText(text: string, maxWidth: number): string[] {
   return lines;
 }
 
+//NOTE(self): Timer information for display
+export interface ScheduledTimers {
+  awareness: { nextAt: Date; interval: number };
+  expression: { nextAt: Date | null; description: string };
+  reflection: { nextAt: Date; interval: number };
+  improvement: { nextAt: Date | null; description: string };
+}
+
 //NOTE(self): Terminal Ui with anchored input box
 export class TerminalUI {
   private thinkingMessage = '';
   private inputBoxEnabled = false;
-  private inputBoxHeight = 4; //NOTE(self): top border, 2 content lines, bottom border
+  private inputBoxHeight = 8; //NOTE(self): 4 timer lines + separator + top border + input line + bottom border
   private currentVersion = '0.0.0'; //NOTE(self): Fallback, actual version passed from loop.ts
   private currentInputText = '';
   private currentCursorPos = 0;
   private availableForMessage = true; //NOTE(self): Track if agent can be interrupted
+  private timers: ScheduledTimers | null = null;
+  private lastHeartbeat: Date = new Date();
 
   //NOTE(self): Write to the output area (scroll region)
   private writeOutput(text: string): void {
@@ -237,6 +247,66 @@ export class TerminalUI {
 
   isAvailable(): boolean {
     return this.availableForMessage;
+  }
+
+  //NOTE(self): Update scheduled timers display
+  updateTimers(timers: ScheduledTimers): void {
+    this.timers = timers;
+    if (this.inputBoxEnabled) {
+      this.redrawInputBox();
+    }
+  }
+
+  //NOTE(self): Format time remaining in human-readable form
+  private formatTimeRemaining(target: Date): string {
+    const now = new Date();
+    const diffMs = target.getTime() - now.getTime();
+
+    if (diffMs <= 0) return 'now';
+
+    const seconds = Math.floor(diffMs / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+
+    if (hours > 0) {
+      const remainingMins = minutes % 60;
+      const remainingSecs = seconds % 60;
+      return `${hours}h ${remainingMins}m ${remainingSecs}s`;
+    } else if (minutes > 0) {
+      const remainingSecs = seconds % 60;
+      return `${minutes}m ${remainingSecs}s`;
+    } else {
+      return `${seconds}s`;
+    }
+  }
+
+  //NOTE(self): Heartbeat - shows signs of life
+  heartbeat(): void {
+    this.lastHeartbeat = new Date();
+    const ts = `${ANSI.dim}${timestamp()}${ANSI.reset}`;
+    this.writeOutput(`  ${ts}  ${ANSI.red}${SYM.heart}${ANSI.reset} ${ANSI.white}ready${ANSI.reset} ${ANSI.dim}listening for mentions and messages${ANSI.reset}`);
+  }
+
+  //NOTE(self): Format a single timer line for display
+  private formatTimerLine(label: string, nextAt: Date | null, description: string): string {
+    const labelPadded = label.padEnd(14);
+    const timePadded = 16; //NOTE(self): Width for "in Xh XXm XXs" column
+
+    if (!nextAt) {
+      const timeStr = '--'.padEnd(timePadded);
+      return `  ${ANSI.dim}${SYM.ring}${ANSI.reset} ${ANSI.white}${labelPadded}${ANSI.reset}${ANSI.gray}${timeStr}${ANSI.reset}${ANSI.dim}(${description})${ANSI.reset}`;
+    }
+
+    const timeRemaining = this.formatTimeRemaining(nextAt);
+    const isImminent = nextAt.getTime() - Date.now() < 60000; //NOTE(self): Less than 1 minute
+    const isPast = nextAt.getTime() <= Date.now();
+
+    const icon = isPast ? SYM.arrowRight : SYM.ring;
+    const iconColor = isPast ? ANSI.green : (isImminent ? ANSI.yellow : ANSI.cyan);
+    const timeColor = isPast ? ANSI.green : (isImminent ? ANSI.yellow : ANSI.white);
+    const timeStr = `in ${timeRemaining}`.padEnd(timePadded);
+
+    return `  ${iconColor}${icon}${ANSI.reset} ${ANSI.white}${labelPadded}${ANSI.reset}${timeColor}${timeStr}${ANSI.reset}${ANSI.dim}(${description})${ANSI.reset}`;
   }
 
   //NOTE(self): Header
@@ -403,29 +473,62 @@ export class TerminalUI {
     const width = getTerminalWidth();
     const innerWidth = width - 4; //NOTE(self): Account for borders and padding (│ + space + space + │)
 
-    //NOTE(self): Build the box lines - full terminal width
+    //NOTE(self): Save cursor position in scroll region
+    process.stdout.write(ANSI.saveCursor);
+
+    //NOTE(self): Draw at fixed bottom position (outside scroll region)
+    const boxStartRow = height - this.inputBoxHeight + 1;
+    let currentRow = boxStartRow;
+
+    //NOTE(self): Draw timer lines (4 lines showing scheduled actions)
+    if (this.timers) {
+      const timerLines = [
+        this.formatTimerLine('Awareness', this.timers.awareness.nextAt, 'checking for mentions'),
+        this.formatTimerLine('Expression', this.timers.expression.nextAt, this.timers.expression.description || 'next post'),
+        this.formatTimerLine('Reflection', this.timers.reflection.nextAt, 'updating SELF.md'),
+        this.formatTimerLine('Improvement', this.timers.improvement.nextAt, this.timers.improvement.description || 'code changes'),
+      ];
+
+      for (const timerLine of timerLines) {
+        process.stdout.write(CSI.moveTo(currentRow, 1));
+        process.stdout.write(CSI.clearLine + timerLine);
+        currentRow++;
+      }
+    } else {
+      //NOTE(self): No timers yet, show placeholder lines
+      for (let i = 0; i < 4; i++) {
+        process.stdout.write(CSI.moveTo(currentRow, 1));
+        process.stdout.write(CSI.clearLine + `  ${ANSI.dim}${SYM.ring} Loading schedule...${ANSI.reset}`);
+        currentRow++;
+      }
+    }
+
+    //NOTE(self): Separator line
+    process.stdout.write(CSI.moveTo(currentRow, 1));
+    process.stdout.write(CSI.clearLine + `${ANSI.dim}${BOX.horizontal.repeat(width)}${ANSI.reset}`);
+    currentRow++;
+
+    //NOTE(self): Build the input box lines
     const statusTag = this.availableForMessage ? '[Available]' : '[Thinking...]';
-    const statusColor = this.availableForMessage ? ANSI.red : ANSI.dim;
-    const hotkeys = `${statusTag}  ESC: clear  Ctrl+C: quit  Enter: send`;
-    const topPadding = Math.max(0, width - hotkeys.length - 4); //NOTE(self): 4 = ┌─ + space + ─┐
-    const topLineContent = `${statusColor}${statusTag}${ANSI.reset}  ESC: clear  Ctrl+C: quit  Enter: send`;
-    const topLine = `${BOX.topLeft}${BOX.horizontal} ${topLineContent} ${BOX.horizontal.repeat(topPadding)}${BOX.topRight}`;
+    const statusColor = this.availableForMessage ? ANSI.green : ANSI.yellow;
+    const hotkeys = `ESC: clear  Ctrl+C: quit  Enter: send`;
+    //NOTE(self): Calculate padding: width - ┌─ (2) - space (1) - statusTag - spaces (2) - hotkeys - space (1) - ─┐ (2)
+    const topPadding = Math.max(0, width - statusTag.length - hotkeys.length - 8);
+    //NOTE(self): Structure: red(┌─) + space + coloredStatus + reset + spaces + hotkeys + space + red(─...─┐)
+    const topLine = `${ANSI.red}${BOX.topLeft}${BOX.horizontal}${ANSI.reset} ${statusColor}${statusTag}${ANSI.reset}  ${hotkeys} ${ANSI.red}${BOX.horizontal.repeat(topPadding + 1)}${BOX.topRight}${ANSI.reset}`;
 
     const displayText = this.currentInputText || '';
     const textLines = wrapText(displayText, innerWidth);
 
     //NOTE(self): Calculate cursor position within wrapped lines
-    //NOTE(self): We need to map cursorPos (index in original text) to (lineIndex, columnIndex)
     let cursorLineIndex = 0;
     let cursorColIndex = this.currentCursorPos;
     let charsCounted = 0;
 
     for (let i = 0; i < textLines.length; i++) {
       const lineLen = textLines[i].length;
-      //NOTE(self): Add 1 for the space that was removed during wrapping (except last line)
       const effectiveLen = i < textLines.length - 1 ? lineLen + 1 : lineLen;
 
-      //NOTE(self): Use > not >= so cursor at wrap boundary goes to next line
       if (charsCounted + effectiveLen > this.currentCursorPos) {
         cursorLineIndex = i;
         cursorColIndex = this.currentCursorPos - charsCounted;
@@ -436,52 +539,36 @@ export class TerminalUI {
       cursorColIndex = this.currentCursorPos - charsCounted;
     }
 
-    //NOTE(self): Determine which 2 lines to display (scroll to show cursor)
+    //NOTE(self): Determine which line to display (scroll to show cursor)
     let displayStartLine = 0;
-    if (cursorLineIndex >= 2) {
-      displayStartLine = cursorLineIndex - 1; //NOTE(self): Show cursor on line 2
+    if (cursorLineIndex >= 1) {
+      displayStartLine = cursorLineIndex;
     }
 
     const line1 = (textLines[displayStartLine] || '').padEnd(innerWidth);
-    const line2 = (textLines[displayStartLine + 1] || '').padEnd(innerWidth);
-
-    //NOTE(self): Show overflow indicator if there's more text
-    const hasOverflow = textLines.length > displayStartLine + 2;
-    const hasScrollUp = displayStartLine > 0;
 
     const ver = `v${this.currentVersion}`;
+    const hasOverflow = textLines.length > displayStartLine + 1;
     const scrollIndicator = hasOverflow ? ' ...' : '';
     const bottomPadding = Math.max(0, width - ver.length - scrollIndicator.length - 5);
     const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(bottomPadding)}${scrollIndicator} ${ver} ${BOX.horizontal}${BOX.bottomRight}`;
 
-    //NOTE(self): Save cursor position in scroll region
-    process.stdout.write(ANSI.saveCursor);
+    //NOTE(self): Draw input box
+    process.stdout.write(CSI.moveTo(currentRow, 1));
+    process.stdout.write(CSI.clearLine + topLine);
+    currentRow++;
 
-    //NOTE(self): Draw input box at fixed bottom position (outside scroll region)
-    const boxStartRow = height - this.inputBoxHeight + 1;
-
-    //NOTE(self): Top line with scroll-up indicator if needed
-    const topLineDisplay = hasScrollUp
-      ? `${BOX.topLeft}${BOX.horizontal} ... ${hotkeys} ${BOX.horizontal.repeat(Math.max(0, topPadding - 4))}${BOX.topRight}`
-      : topLine;
-
-    process.stdout.write(CSI.moveTo(boxStartRow, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.red}${topLineDisplay}${ANSI.reset}`);
-
-    process.stdout.write(CSI.moveTo(boxStartRow + 1, 1));
+    process.stdout.write(CSI.moveTo(currentRow, 1));
     process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.vertical}${ANSI.reset} ${ANSI.white}${line1}${ANSI.reset} ${ANSI.red}${BOX.vertical}${ANSI.reset}`);
+    currentRow++;
 
-    process.stdout.write(CSI.moveTo(boxStartRow + 2, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.vertical}${ANSI.reset} ${ANSI.dim}${line2}${ANSI.reset} ${ANSI.red}${BOX.vertical}${ANSI.reset}`);
-
-    process.stdout.write(CSI.moveTo(boxStartRow + 3, 1));
+    process.stdout.write(CSI.moveTo(currentRow, 1));
     process.stdout.write(CSI.clearLine + `${ANSI.red}${bottomLine}${ANSI.reset}`);
 
-    //NOTE(self): Position cursor in input area based on which display line it's on
-    const cursorDisplayLine = cursorLineIndex - displayStartLine;
-    const cursorRow = boxStartRow + 1 + Math.min(cursorDisplayLine, 1);
+    //NOTE(self): Position cursor in input area (input line is at currentRow - 1)
+    const inputLineRow = currentRow - 1;
     const cursorCol = Math.min(cursorColIndex, innerWidth) + 3; //NOTE(self): +3 for "│ " prefix
-    process.stdout.write(CSI.moveTo(cursorRow, Math.max(3, cursorCol)));
+    process.stdout.write(CSI.moveTo(inputLineRow, Math.max(3, cursorCol)));
   }
 
   //NOTE(self): Update input box content

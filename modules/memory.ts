@@ -87,7 +87,8 @@ export function createMemory(basePath: string): Memory {
       }
       try {
         return readdirSync(path);
-      } catch {
+      } catch (e) {
+        logger.debug('Failed to list directory', { path, error: String(e) });
         return [];
       }
     },

@@ -97,8 +97,8 @@ ${code}
       if (existsSync(tempFile)) {
         unlinkSync(tempFile);
       }
-    } catch {
-      //NOTE(self): Ignore cleanup errors
+    } catch (e) {
+      logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) });
     }
   }
 }

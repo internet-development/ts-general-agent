@@ -10,7 +10,7 @@
  */
 
 import { logger } from '@modules/logger.js';
-import { ui } from '@modules/ui.js';
+import { ui, type ScheduledTimers } from '@modules/ui.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
@@ -182,6 +182,10 @@ export class AgentScheduler {
     this.startExpressionLoop();
     this.startReflectionLoop();
     this.startEngagementCheckLoop();
+    this.startHeartbeatLoop();
+
+    //NOTE(self): Start UI timer updates
+    this.startTimerUpdates();
 
     //NOTE(self): Run initial awareness check
     await this.awarenessCheck();
@@ -207,6 +211,10 @@ export class AgentScheduler {
     if (this.engagementCheckTimer) {
       clearInterval(this.engagementCheckTimer);
       this.engagementCheckTimer = null;
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
 
     ui.system('Scheduler stopped');
@@ -256,23 +264,41 @@ export class AgentScheduler {
         recordInteraction(pn.notification);
       }
 
-      //NOTE(self): Filter to unread conversations that need response
+      //NOTE(self): Filter to conversations that need response
       //NOTE(self): Only block posts we've directly replied to - allow conversations to continue in threads
+      //NOTE(self): IMPORTANT: Don't filter by isRead - that's just Bluesky's "seen" status, not our response status
       const needsResponse = prioritized.filter((pn) => {
         const n = pn.notification;
-        if (n.isRead) return false;
         if (!['reply', 'mention', 'quote'].includes(n.reason)) return false;
         //NOTE(self): Only block if we already replied to THIS SPECIFIC post (prevents sibling spam)
         //NOTE(self): Removed thread-level blocking - conversations must be allowed to continue!
-        if (hasRepliedToPost(n.uri)) return false;
+        if (hasRepliedToPost(n.uri)) {
+          logger.debug('Skipping already-replied notification', { uri: n.uri, reason: n.reason });
+          return false;
+        }
 
         return true;
+      });
+
+      //NOTE(self): Log what we found for debugging
+      logger.info('Awareness check complete', {
+        fetched: notifications.length,
+        prioritized: prioritized.length,
+        needsResponse: needsResponse.length,
+        reasons: needsResponse.map(pn => ({ reason: pn.notification.reason, author: pn.notification.author.handle })),
       });
 
       if (needsResponse.length > 0) {
         ui.info('Ready to respond');
         this.state.pendingNotifications = needsResponse;
         await this.triggerResponseMode();
+      }
+
+      //NOTE(self): Mark notifications as seen on Bluesky
+      //NOTE(self): This prevents re-processing the same notifications
+      const seenResult = await atproto.updateSeenNotifications();
+      if (!seenResult.success) {
+        logger.debug('Failed to mark notifications as seen', { error: seenResult.error });
       }
 
       //NOTE(self): Reset error counter on success
@@ -525,9 +551,31 @@ Your handle: ${config.bluesky.username}${richnessNote}`;
               suggestion: invitationCheck.suggestion,
             });
 
+            //NOTE(self): Identity with utility - give specific, actionable guidance
+            //NOTE(self): The key insight: invitations work when they're EASY TO ANSWER
+            const choiceExample = getInvitationPrompt('choice');
+            const boundedExample = getInvitationPrompt('bounded');
             const revisionPrompt = invitationCheck.suggestion
-              ? `Your draft: "${draftText}"\n\n${invitationCheck.suggestion}\n\nExample quick fixes: "${getInvitationPrompt()}" or "${getInvitationPrompt()}"\n\nRevise and post again.`
-              : `Your draft: "${draftText}"\n\nThis reads like a statement. Add a simple question or invitation at the end.\n\nExample: "${getInvitationPrompt()}"\n\nRevise and post again.`;
+              ? `Your draft: "${draftText}"
+
+${invitationCheck.suggestion}
+
+**What makes a STRONG invitation:**
+1. Choice questions (best): "${choiceExample}" - gives clear A/B options
+2. Bounded questions: "${boundedExample}" - answerable in one sentence
+3. Direct invitations: "What's yours?" - opens the door simply
+
+Pick ONE and add it naturally. Keep the post under 300 chars total. Revise and post again.`
+              : `Your draft: "${draftText}"
+
+This is a statement without an invitation. Identity with utility means every personal share has an open door.
+
+**Add ONE of these:**
+- Choice question: "${choiceExample}"
+- Bounded question: "${boundedExample}"
+- Direct invitation: "What's yours?"
+
+Revise and post again.`;
 
             //NOTE(self): Don't include tool_use blocks when asking for revision - the AI SDK
             //NOTE(self): requires tool results after tool calls. Since we're not executing the
@@ -543,7 +591,24 @@ Your handle: ${config.bluesky.username}${richnessNote}`;
               tools: AGENT_TOOLS,
             });
 
-            addInsight('Revised post to add stronger invitation - identity with utility in action');
+            //NOTE(self): Identity with utility - verify the revision actually improved the invitation
+            const revisedPostCall = response.toolCalls.find((tc) => tc.name === 'bluesky_post');
+            const revisedText = revisedPostCall?.input?.text as string;
+            if (revisedText) {
+              const revisedCheck = checkInvitation(revisedText);
+              if (revisedCheck.hasInvitation && revisedCheck.confidence === 'strong') {
+                addInsight('Revised post to add stronger invitation - identity with utility in action');
+              } else if (revisedCheck.hasInvitation) {
+                //NOTE(self): Weak invitation after revision - still post, but note it
+                addInsight('Posted with weak invitation after revision - consider what makes invitations land');
+              } else {
+                //NOTE(self): No invitation even after revision - this is friction to learn from
+                addInsight('Posted without clear invitation despite revision - identity with utility needs practice');
+                recordFriction('expression', 'Identity post lacked invitation after revision', revisedText);
+              }
+            } else {
+              addInsight('Revised post to add stronger invitation - identity with utility in action');
+            }
           }
         }
       }
@@ -1050,6 +1115,26 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
     }
   }
 
+  //NOTE(self): ========== HEARTBEAT LOOP ==========
+  //NOTE(self): Show signs of life so owner knows agent is running
+
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+
+  private startHeartbeatLoop(): void {
+    //NOTE(self): Show heartbeat every 5 minutes to indicate agent is alive
+    const heartbeatInterval = 5 * 60 * 1000;
+
+    this.heartbeatTimer = setInterval(() => {
+      if (this.shutdownRequested) return;
+      if (this.state.currentMode === 'idle') {
+        this.showHeartbeat();
+      }
+    }, heartbeatInterval);
+
+    //NOTE(self): Show initial heartbeat
+    this.showHeartbeat();
+  }
+
   //NOTE(self): ========== ENGAGEMENT CHECK LOOP ==========
   //NOTE(self): Check how my expressions are being received
 
@@ -1227,6 +1312,58 @@ Speak briefly about who you are right now, in this moment. No tools needed - jus
     }
     await this.growthCycle();
     return true;
+  }
+
+  //NOTE(self): Get scheduled timers for UI display
+  getScheduledTimers(): ScheduledTimers {
+    const now = Date.now();
+    const schedule = loadExpressionSchedule();
+
+    //NOTE(self): Calculate next awareness check
+    const nextAwareness = new Date(this.state.lastAwarenessCheck + this.config.awarenessInterval);
+
+    //NOTE(self): Calculate next expression from schedule
+    const nextExpression = schedule.nextExpression ? new Date(schedule.nextExpression) : null;
+    const expressionDesc = schedule.promptSource || 'next post';
+
+    //NOTE(self): Calculate next reflection
+    const nextReflection = new Date(this.state.lastReflection + this.config.reflectionInterval);
+
+    //NOTE(self): Calculate next improvement check (if friction or aspiration is ready)
+    const frictionReady = getFrictionReadyForImprovement();
+    const aspirationReady = getAspirationForGrowth();
+    const hasImprovementPending = frictionReady || aspirationReady;
+    const nextImprovement = hasImprovementPending
+      ? new Date(this.state.lastImprovementCheck + this.config.improvementMinHours * 60 * 60 * 1000)
+      : null;
+    const improvementDesc = frictionReady
+      ? `fix: ${frictionReady.category}`
+      : aspirationReady
+        ? `grow: ${aspirationReady.category}`
+        : 'no friction or inspiration pending';
+
+    return {
+      awareness: { nextAt: nextAwareness, interval: this.config.awarenessInterval },
+      expression: { nextAt: nextExpression, description: expressionDesc },
+      reflection: { nextAt: nextReflection, interval: this.config.reflectionInterval },
+      improvement: { nextAt: nextImprovement, description: improvementDesc },
+    };
+  }
+
+  //NOTE(self): Start the UI timer update loop
+  startTimerUpdates(): void {
+    //NOTE(self): Update timers every second for smooth countdown
+    const updateTimers = () => {
+      if (!this.state.isRunning) return;
+      ui.updateTimers(this.getScheduledTimers());
+      setTimeout(updateTimers, 1000);
+    };
+    updateTimers();
+  }
+
+  //NOTE(self): Show heartbeat message
+  showHeartbeat(): void {
+    ui.heartbeat();
   }
 }
 

@@ -394,6 +394,7 @@ export function hasRespondedToNotification(uri: string): boolean {
 
   //NOTE(self): First check the replied URIs set (fast lookup)
   if (hasRepliedToPost(uri)) {
+    logger.debug('Notification already replied to (replied URIs)', { uri });
     return true;
   }
 
@@ -402,6 +403,7 @@ export function hasRespondedToNotification(uri: string): boolean {
   for (const relationship of Object.values(state.relationships)) {
     for (const interaction of relationship.interactions) {
       if (interaction.uri === uri && interaction.responded) {
+        logger.debug('Notification already responded to (relationship records)', { uri, handle: relationship.handle });
         return true;
       }
     }
@@ -514,8 +516,14 @@ export function prioritizeNotifications(
   const state = loadState();
   const prioritized: PrioritizedNotification[] = [];
 
+  logger.debug('Prioritizing notifications', {
+    total: notifications.length,
+    types: notifications.map(n => ({ reason: n.reason, author: n.author.handle, isRead: n.isRead })),
+  });
+
   for (const notification of notifications) {
     if (hasRespondedToNotification(notification.uri)) {
+      logger.debug('Skipping already-responded notification', { uri: notification.uri, author: notification.author.handle });
       continue;
     }
 
@@ -581,7 +589,21 @@ export function prioritizeNotifications(
     });
   }
 
-  return prioritized.sort((a, b) => b.priority - a.priority);
+  const sorted = prioritized.sort((a, b) => b.priority - a.priority);
+
+  if (sorted.length > 0) {
+    logger.info('Prioritized notifications', {
+      count: sorted.length,
+      top: sorted.slice(0, 5).map(pn => ({
+        reason: pn.notification.reason,
+        author: pn.notification.author.handle,
+        priority: pn.priority,
+        priorityReason: pn.reason,
+      })),
+    });
+  }
+
+  return sorted;
 }
 
 export function hasUrgentNotifications(notifications: PrioritizedNotification[]): boolean {

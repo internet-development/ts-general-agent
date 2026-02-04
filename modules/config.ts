@@ -1,6 +1,7 @@
 import { config as dotenvConfig } from 'dotenv';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { logger } from '@modules/logger.js';
 
 dotenvConfig();
 
@@ -90,9 +91,9 @@ export function initializeSelf(config: Config): void {
         content = content.replace(/\{\{AGENT_NAME\}\}/g, config.agent.name);
         content = content.replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0]);
         writeFileSync(config.paths.selfmd, content, 'utf-8');
-        console.log(`Created SELF.md for ${config.agent.name}`);
+        logger.info('Created SELF.md', { agentName: config.agent.name });
       } catch (err) {
-        console.error('Failed to create SELF.md from template:', err);
+        logger.error('Failed to create SELF.md from template', { error: String(err) });
       }
     }
     return;
@@ -107,7 +108,7 @@ export function initializeSelf(config: Config): void {
       writeFileSync(config.paths.selfmd, updated, 'utf-8');
     }
   } catch (err) {
-    console.error('Failed to update SELF.md placeholders:', err);
+    logger.error('Failed to update SELF.md placeholders', { error: String(err) });
   }
 }
 
