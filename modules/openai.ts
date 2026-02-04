@@ -275,6 +275,19 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
       let isRetryable = false;
       let isFatal = false;
 
+      //NOTE(self): Handle AI_NoOutputGeneratedError as valid "end of conversation"
+      //NOTE(self): This happens when the model has nothing more to say (no text, no tool calls)
+      //NOTE(self): Common scenario: after tool errors like "BLOCKED: already replied", model decides it's done
+      if (errorStr.includes('AI_NoOutputGeneratedError') || errorStr.includes('No output generated')) {
+        logger.debug('AI returned no output - treating as end of conversation', { attempt: attempt + 1 });
+        return {
+          text: '',
+          toolCalls: [],
+          stopReason: 'end_turn',
+          usage: { inputTokens: 0, outputTokens: 0 },
+        };
+      }
+
       //NOTE(self): Handle specific error types
       if (errorStr.includes('401') || errorStr.includes('unauthorized') || errorStr.includes('invalid_api_key')) {
         friendlyError = 'Invalid API key. Check API_KEY_GATEWAY_OPENAI in .env';
