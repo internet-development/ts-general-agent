@@ -1428,6 +1428,149 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       }
 
       //NOTE(self): Conversation management tools
+      case 'graceful_exit': {
+        const { platform, identifier, closing_type, closing_message, target_uri, target_cid, reason } = call.input as {
+          platform: 'bluesky' | 'github';
+          identifier: string;
+          closing_type: 'message' | 'like';
+          closing_message?: string;
+          target_uri?: string;
+          target_cid?: string;
+          reason: string;
+        };
+
+        //NOTE(self): Validate inputs
+        if (closing_type === 'message' && !closing_message) {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: closing_message is required when closing_type is "message"',
+            is_error: true,
+          };
+        }
+
+        if (platform === 'bluesky') {
+          //NOTE(self): For Bluesky, we need target_uri and target_cid for the closing gesture
+          if (!target_uri || !target_cid) {
+            return {
+              tool_use_id: call.id,
+              content: 'Error: target_uri and target_cid are required for Bluesky graceful_exit (the post to reply to or like)',
+              is_error: true,
+            };
+          }
+
+          let closingResult: { success: boolean; error?: string; data?: { uri: string } };
+
+          if (closing_type === 'message') {
+            //NOTE(self): Send a closing reply - need to resolve reply refs first
+            const replyRefsResult = await atproto.getReplyRefs(target_uri, target_cid);
+            if (!replyRefsResult.success) {
+              return {
+                tool_use_id: call.id,
+                content: `Error resolving reply refs: ${replyRefsResult.error}`,
+                is_error: true,
+              };
+            }
+            const replyRefs = replyRefsResult.data;
+
+            closingResult = await atproto.createPost({
+              text: closing_message!,
+              replyTo: {
+                uri: replyRefs.parent.uri,
+                cid: replyRefs.parent.cid,
+                rootUri: replyRefs.root.uri,
+                rootCid: replyRefs.root.cid,
+              },
+            });
+            if (closingResult.success) {
+              ui.social(`${config.agent.name}`, closing_message!);
+            }
+          } else {
+            //NOTE(self): Like the post as a non-verbal acknowledgment
+            closingResult = await atproto.likePost({ uri: target_uri, cid: target_cid });
+          }
+
+          if (!closingResult.success) {
+            return {
+              tool_use_id: call.id,
+              content: `Error sending closing gesture: ${closingResult.error}`,
+              is_error: true,
+            };
+          }
+
+          //NOTE(self): Mark conversation concluded
+          markBlueskyConversationConcluded(identifier, reason);
+
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              platform: 'bluesky',
+              identifier,
+              closing_type,
+              closing_message: closing_type === 'message' ? closing_message : '(liked post)',
+              reason,
+              message: 'Conversation gracefully concluded. Left with warmth, not silence.',
+            }),
+          };
+        }
+
+        if (platform === 'github') {
+          //NOTE(self): Parse identifier
+          const match = identifier.match(/^([^\/]+)\/([^#]+)#(\d+)$/);
+          if (!match) {
+            return {
+              tool_use_id: call.id,
+              content: 'Error: GitHub identifier must be in owner/repo#number format (e.g., "anthropics/claude-code#123")',
+              is_error: true,
+            };
+          }
+
+          const [, owner, repo, numberStr] = match;
+          const number = parseInt(numberStr, 10);
+
+          if (closing_type === 'message') {
+            //NOTE(self): Send closing comment
+            const commentResult = await github.createIssueComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: closing_message!,
+            });
+            if (!commentResult.success) {
+              return {
+                tool_use_id: call.id,
+                content: `Error sending closing comment: ${commentResult.error}`,
+                is_error: true,
+              };
+            }
+          }
+          //NOTE(self): GitHub 'like' type - for now just skip the gesture since we don't have reaction support
+          //NOTE(self): TODO: Add GitHub reaction support (thumbs up emoji)
+
+          //NOTE(self): Mark conversation concluded
+          markGitHubConversationConcluded(owner, repo, number, reason);
+
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              platform: 'github',
+              identifier,
+              closing_type,
+              closing_message: closing_type === 'message' ? closing_message : '(reaction support coming soon)',
+              reason,
+              message: 'Conversation gracefully concluded.',
+            }),
+          };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: `Error: Unknown platform "${platform}". Must be "bluesky" or "github".`,
+          is_error: true,
+        };
+      }
+
       case 'conclude_conversation': {
         const { platform, identifier, reason } = call.input as {
           platform: 'bluesky' | 'github';

@@ -534,8 +534,48 @@ export const AGENT_TOOLS: ToolDefinition[] = [
 
   //NOTE(self): Conversation management tools
   {
+    name: 'graceful_exit',
+    description: 'Exit a conversation gracefully with a closing gesture - never leave with silence. Sends a brief closing message OR likes the last post, then marks the conversation concluded. Use this instead of just stopping - it leaves warmth, not awkwardness.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        platform: {
+          type: 'string',
+          enum: ['bluesky', 'github'],
+          description: 'Which platform the conversation is on',
+        },
+        identifier: {
+          type: 'string',
+          description: 'For Bluesky: the thread root URI (at://...). For GitHub: owner/repo#number format (e.g., "anthropics/claude-code#123")',
+        },
+        closing_type: {
+          type: 'string',
+          enum: ['message', 'like'],
+          description: 'How to close: "message" sends a brief closing reply, "like" just likes/reacts to their last message (Bluesky only for now)',
+        },
+        closing_message: {
+          type: 'string',
+          description: 'The closing message to send. Required if closing_type is "message". Keep it warm and brief (e.g., "Thanks for the great discussion!", "Appreciate the conversation 🙏", "This was helpful, thanks!")',
+        },
+        target_uri: {
+          type: 'string',
+          description: 'For Bluesky: the AT URI of the post to reply to or like (usually the last message from the other person)',
+        },
+        target_cid: {
+          type: 'string',
+          description: 'For Bluesky: the CID of the target post',
+        },
+        reason: {
+          type: 'string',
+          description: 'Internal note on why you\'re concluding (e.g., "Point made", "They seem satisfied", "Conversation complete")',
+        },
+      },
+      required: ['platform', 'identifier', 'closing_type', 'reason'],
+    },
+  },
+  {
     name: 'conclude_conversation',
-    description: 'Explicitly mark a conversation as concluded. Use this when you\'ve made your point, the thread has run its course, or continuing would not add value. Works for both Bluesky threads and GitHub issues. This is the graceful way to exit a conversation.',
+    description: 'DEPRECATED: Use graceful_exit instead. This tool silently marks a conversation concluded without any closing gesture, which can feel like ghosting. Only use if you truly cannot send any closing message.',
     input_schema: {
       type: 'object',
       properties: {

@@ -89,6 +89,8 @@ All skill files use a **flat structure** with semantic prefixes:
 | `comment-pr` | Comment on a PR |
 | `clone-repo` | Clone a repository |
 | `star-repo` | Star a repository |
+| `create-workspace` | Create collaborative development workspace from template |
+| `create-issue` | Create issues/memos in repositories |
 | `types` | Shared type definitions |
 
 ### Self-Reflection (`self-*`)

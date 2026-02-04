@@ -1,0 +1,50 @@
+import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
+import type { GitHubRepository, GitHubResult } from '@adapters/github/types.js';
+
+const GITHUB_API = 'https://api.github.com';
+
+export interface CreateRepoFromTemplateParams {
+  templateOwner: string;
+  templateRepo: string;
+  name: string;
+  owner?: string; // org or user to create under, defaults to authenticated user
+  description?: string;
+  private?: boolean;
+  includeAllBranches?: boolean;
+}
+
+export async function createRepositoryFromTemplate(
+  params: CreateRepoFromTemplateParams
+): Promise<GitHubResult<GitHubRepository>> {
+  const auth = getAuth();
+  if (!auth) {
+    return { success: false, error: 'GitHub not authenticated' };
+  }
+
+  try {
+    const response = await fetch(
+      `${GITHUB_API}/repos/${params.templateOwner}/${params.templateRepo}/generate`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          name: params.name,
+          owner: params.owner,
+          description: params.description,
+          private: params.private ?? false,
+          include_all_branches: params.includeAllBranches ?? false,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      return { success: false, error: error.message || 'Failed to create repository from template' };
+    }
+
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}

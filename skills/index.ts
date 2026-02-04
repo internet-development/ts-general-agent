@@ -17,6 +17,19 @@ export { commentOnIssue } from '@skills/self-github-comment-issue.js';
 export { commentOnPR } from '@skills/self-github-comment-pr.js';
 export { cloneRepo } from '@skills/self-github-clone-repo.js';
 export { starRepo } from '@skills/self-github-star-repo.js';
+export {
+  createWorkspace,
+  findExistingWorkspace,
+  getWorkspaceUrl,
+  type CreateWorkspaceParams,
+  type WorkspaceResult,
+} from '@skills/self-github-create-workspace.js';
+export {
+  createMemo,
+  createGitHubIssue,
+  type CreateMemoParams,
+  type MemoResult,
+} from '@skills/self-github-create-issue.js';
 export type { RepoToMonitor } from '@skills/self-github-types.js';
 
 // Self-reflection skills
