@@ -40,10 +40,8 @@ export interface ReplyRefs {
   root: { uri: string; cid: string };
 }
 
-/**
- * Fetch a post's thread to get full context including the thread root.
- * Used for building proper reply references.
- */
+//NOTE(self): Fetch a post's thread to get full context including the thread root
+//NOTE(self): Used for building proper reply references
 export async function getPostThread(
   uri: string,
   depth: number = 0, //NOTE(self): We only need the post itself and its parent chain
@@ -73,20 +71,16 @@ export async function getPostThread(
   }
 }
 
-/**
- * Build reply references for a given parent post.
- *
- * This helper resolves the proper thread root:
- * - If rootUri/rootCid are provided, uses those directly
- * - Otherwise, fetches the parent post's thread to find the true root
- * - Falls back to treating the parent as root (safe for direct replies to top-level posts)
- *
- * @param parentUri - AT URI of the post being replied to
- * @param parentCid - CID of the post being replied to
- * @param rootUri - Optional: AT URI of the thread root (if already known)
- * @param rootCid - Optional: CID of the thread root (if already known)
- * @returns ReplyRefs with properly resolved parent and root references
- */
+//NOTE(self): Build reply references for a given parent post
+//NOTE(self): This helper resolves the proper thread root:
+//NOTE(self): - If rootUri/rootCid are provided, uses those directly
+//NOTE(self): - Otherwise, fetches the parent post's thread to find the true root
+//NOTE(self): - Falls back to treating the parent as root (safe for direct replies to top-level posts)
+//NOTE(self): @param parentUri - AT URI of the post being replied to
+//NOTE(self): @param parentCid - CID of the post being replied to
+//NOTE(self): @param rootUri - Optional: AT URI of the thread root (if already known)
+//NOTE(self): @param rootCid - Optional: CID of the thread root (if already known)
+//NOTE(self): @returns ReplyRefs with properly resolved parent and root references
 export async function getReplyRefs(
   parentUri: string,
   parentCid: string,
@@ -178,10 +172,8 @@ export interface ThreadAnalysis {
   conversationHistory: string;      //NOTE(self): Formatted thread history for LLM context
 }
 
-/**
- * Analyze a thread for conversation management
- * //NOTE(self): Helps SOUL decide whether to continue engaging or gracefully exit
- */
+//NOTE(self): Analyze a thread for conversation management
+//NOTE(self): Helps SOUL decide whether to continue engaging or gracefully exit
 export async function analyzeThread(
   postUri: string,
   agentDid: string

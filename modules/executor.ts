@@ -22,8 +22,16 @@ import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import * as arena from '@adapters/arena/index.js';
 import { markInteractionResponded } from '@modules/engagement.js';
+import {
+  markConversationConcluded as markBlueskyConversationConcluded,
+  getConversation as getBlueskyConversation,
+} from '@modules/bluesky-engagement.js';
+import {
+  markConversationConcluded as markGitHubConversationConcluded,
+  getConversation as getGitHubConversation,
+} from '@modules/github-engagement.js';
 import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
-import { runClaudeCode } from '@skills/self-improvement.js';
+import { runClaudeCode } from '@skills/self-improve-run.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { ui } from '@modules/ui.js';
 import {
@@ -1416,6 +1424,75 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             //NOTE(self): Helpful hint if attribution is incomplete
             note: complete ? null : 'Original creator not yet found. Consider using get_posts_needing_attribution to work on attribution backlog.',
           }),
+        };
+      }
+
+      //NOTE(self): Conversation management tools
+      case 'conclude_conversation': {
+        const { platform, identifier, reason } = call.input as {
+          platform: 'bluesky' | 'github';
+          identifier: string;
+          reason: string;
+        };
+
+        if (platform === 'bluesky') {
+          //NOTE(self): identifier should be the thread root URI
+          const conversation = getBlueskyConversation(identifier);
+          if (!conversation) {
+            //NOTE(self): Still mark it concluded even if we weren't tracking it
+            //NOTE(self): The tracking will be created by markConversationConcluded
+            logger.info('Concluding untracked Bluesky conversation', { rootUri: identifier, reason });
+          }
+          markBlueskyConversationConcluded(identifier, reason);
+
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              platform: 'bluesky',
+              identifier,
+              reason,
+              message: 'Conversation marked as concluded. You will not respond to further messages in this thread unless explicitly @mentioned again.',
+            }),
+          };
+        }
+
+        if (platform === 'github') {
+          //NOTE(self): identifier should be owner/repo#number format
+          const match = identifier.match(/^([^\/]+)\/([^#]+)#(\d+)$/);
+          if (!match) {
+            return {
+              tool_use_id: call.id,
+              content: 'Error: GitHub identifier must be in owner/repo#number format (e.g., "anthropics/claude-code#123")',
+              is_error: true,
+            };
+          }
+
+          const [, owner, repo, numberStr] = match;
+          const number = parseInt(numberStr, 10);
+
+          const conversation = getGitHubConversation(owner, repo, number);
+          if (!conversation) {
+            logger.info('Concluding untracked GitHub conversation', { owner, repo, number, reason });
+          }
+          markGitHubConversationConcluded(owner, repo, number, reason);
+
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              platform: 'github',
+              identifier,
+              reason,
+              message: 'Conversation marked as concluded. You will not respond to further messages in this issue unless explicitly @mentioned again.',
+            }),
+          };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: `Error: Unknown platform "${platform}". Must be "bluesky" or "github".`,
+          is_error: true,
         };
       }
 

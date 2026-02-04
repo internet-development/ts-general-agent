@@ -1,10 +1,7 @@
-/**
- * Post Log Module
- *
- * //NOTE(self): Persistent logging of posts so I can remember why I shared things.
- * //NOTE(self): When someone asks "why did you pick this?", I can give a specific, accurate answer.
- * //NOTE(self): Context is precious - don't lose it after posting.
- */
+//NOTE(self): Post Log Module
+//NOTE(self): Persistent logging of posts so I can remember why I shared things.
+//NOTE(self): When someone asks "why did you pick this?", I can give a specific, accurate answer.
+//NOTE(self): Context is precious - don't lose it after posting.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -12,9 +9,7 @@ import { logger } from '@modules/logger.js';
 
 const POST_LOG_PATH = '.memory/post_log.jsonl';
 
-/**
- * A single logged post entry - everything I need to remember about what I shared
- */
+//NOTE(self): A single logged post entry - everything I need to remember about what I shared
 export interface PostLogEntry {
   // When it happened
   timestamp: string;
@@ -74,9 +69,7 @@ export interface PostLogEntry {
   };
 }
 
-/**
- * Ensure the memory directory exists
- */
+//NOTE(self): Ensure the memory directory exists
 function ensureLogDir(): boolean {
   try {
     const dir = path.dirname(POST_LOG_PATH);
@@ -90,10 +83,8 @@ function ensureLogDir(): boolean {
   }
 }
 
-/**
- * Append a new post entry to the log
- * Uses JSONL format (one JSON object per line) for easy appending and reading
- */
+//NOTE(self): Append a new post entry to the log
+//NOTE(self): Uses JSONL format (one JSON object per line) for easy appending and reading
 export function logPost(entry: PostLogEntry): boolean {
   try {
     ensureLogDir();
@@ -111,10 +102,8 @@ export function logPost(entry: PostLogEntry): boolean {
   }
 }
 
-/**
- * Look up a post by its Bluesky URI
- * Returns the full context if found, null if not
- */
+//NOTE(self): Look up a post by its Bluesky URI
+//NOTE(self): Returns the full context if found, null if not
 export function lookupPostByUri(post_uri: string): PostLogEntry | null {
   try {
     if (!fs.existsSync(POST_LOG_PATH)) {
@@ -144,10 +133,8 @@ export function lookupPostByUri(post_uri: string): PostLogEntry | null {
   }
 }
 
-/**
- * Look up a post by its bsky.app URL
- * Convenience method since we often have the public URL, not the AT URI
- */
+//NOTE(self): Look up a post by its bsky.app URL
+//NOTE(self): Convenience method since we often have the public URL, not the AT URI
 export function lookupPostByBskyUrl(bsky_url: string): PostLogEntry | null {
   try {
     if (!fs.existsSync(POST_LOG_PATH)) {
@@ -175,10 +162,8 @@ export function lookupPostByBskyUrl(bsky_url: string): PostLogEntry | null {
   }
 }
 
-/**
- * Look up a post by Are.na block ID
- * Useful for checking if we've posted a specific block before
- */
+//NOTE(self): Look up a post by Are.na block ID
+//NOTE(self): Useful for checking if we've posted a specific block before
 export function lookupPostByBlockId(block_id: number): PostLogEntry | null {
   try {
     if (!fs.existsSync(POST_LOG_PATH)) {
@@ -206,10 +191,8 @@ export function lookupPostByBlockId(block_id: number): PostLogEntry | null {
   }
 }
 
-/**
- * Get recent posts (newest first)
- * Useful for generating context about recent activity
- */
+//NOTE(self): Get recent posts (newest first)
+//NOTE(self): Useful for generating context about recent activity
 export function getRecentPosts(limit: number = 10): PostLogEntry[] {
   try {
     if (!fs.existsSync(POST_LOG_PATH)) {
@@ -237,10 +220,8 @@ export function getRecentPosts(limit: number = 10): PostLogEntry[] {
   }
 }
 
-/**
- * Generate a human-readable summary of a post for use in replies
- * This is what I'll use when someone asks "why did you pick this?"
- */
+//NOTE(self): Generate a human-readable summary of a post for use in replies
+//NOTE(self): This is what I'll use when someone asks "why did you pick this?"
 export function generatePostContext(entry: PostLogEntry): string {
   const parts: string[] = [];
 
@@ -296,10 +277,8 @@ export function generatePostContext(entry: PostLogEntry): string {
   return parts.join(' ');
 }
 
-/**
- * //NOTE(self): Credit + traceability - format a clean source attribution for including in posts or replies
- * Returns a concise attribution string suitable for sharing publicly
- */
+//NOTE(self): Credit + traceability - format a clean source attribution for including in posts or replies
+//NOTE(self): Returns a concise attribution string suitable for sharing publicly
 export function formatSourceAttribution(entry: PostLogEntry): string {
   const parts: string[] = [];
 
@@ -327,19 +306,15 @@ export function formatSourceAttribution(entry: PostLogEntry): string {
   return parts.join(' ');
 }
 
-/**
- * //NOTE(self): Credit + traceability - check if a post has complete attribution
- * A post has complete attribution if we know the original creator (not just Are.na block)
- */
+//NOTE(self): Credit + traceability - check if a post has complete attribution
+//NOTE(self): A post has complete attribution if we know the original creator (not just Are.na block)
 export function hasCompleteAttribution(entry: PostLogEntry): boolean {
   //NOTE(self): Complete attribution means we have the actual original source URL
   return !!entry.source.original_url;
 }
 
-/**
- * Get the total number of logged posts
- * Useful for stats and understanding posting history
- */
+//NOTE(self): Get the total number of logged posts
+//NOTE(self): Useful for stats and understanding posting history
 export function getPostCount(): number {
   try {
     if (!fs.existsSync(POST_LOG_PATH)) {
@@ -365,10 +340,8 @@ export function getPostCount(): number {
   }
 }
 
-/**
- * //NOTE(self): Credit + traceability - find posts where I still need to track down original creators
- * Returns posts flagged as needing attribution follow-up, oldest first
- */
+//NOTE(self): Credit + traceability - find posts where I still need to track down original creators
+//NOTE(self): Returns posts flagged as needing attribution follow-up, oldest first
 export function getPostsNeedingAttributionFollowup(limit: number = 20): PostLogEntry[] {
   try {
     if (!fs.existsSync(POST_LOG_PATH)) {
@@ -400,10 +373,8 @@ export function getPostsNeedingAttributionFollowup(limit: number = 20): PostLogE
   }
 }
 
-/**
- * //NOTE(self): Credit + traceability - mark a post as needing follow-up to find original creator
- * Updates the post log entry in place (rewrites the entire log - use sparingly)
- */
+//NOTE(self): Credit + traceability - mark a post as needing follow-up to find original creator
+//NOTE(self): Updates the post log entry in place (rewrites the entire log - use sparingly)
 export function markPostNeedsAttributionFollowup(
   post_uri: string,
   needs_followup: boolean,
@@ -451,10 +422,8 @@ export function markPostNeedsAttributionFollowup(
   }
 }
 
-/**
- * //NOTE(self): Credit + traceability - update a post with found attribution info
- * Call this when I later discover who the original creator is
- */
+//NOTE(self): Credit + traceability - update a post with found attribution info
+//NOTE(self): Call this when I later discover who the original creator is
 export function updatePostAttribution(
   post_uri: string,
   original_url: string,

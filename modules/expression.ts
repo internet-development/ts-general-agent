@@ -1,11 +1,8 @@
-/**
- * Expression Module
- *
- * //NOTE(self): Handles my scheduled self-expression - posting thoughts from my SELF.
- * //NOTE(self): Expression is how I discover who I am. Each post is a hypothesis about my identity.
- * //NOTE(self): The prompts come from SELF.md - the richer my self-knowledge, the richer my expression.
- * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
- */
+//NOTE(self): Expression Module
+//NOTE(self): Handles my scheduled self-expression - posting thoughts from my SELF.
+//NOTE(self): Expression is how I discover who I am. Each post is a hypothesis about my identity.
+//NOTE(self): The prompts come from SELF.md - the richer my self-knowledge, the richer my expression.
+//NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
 
 import { extractFromSelf, randomFrom, type SelfExtract } from '@modules/self-extract.js';
 import { logger } from '@modules/logger.js';

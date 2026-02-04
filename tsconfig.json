@@ -9,8 +9,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "outDir": "./dist",
+    "noEmit": true,
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
@@ -21,5 +20,5 @@
     }
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "dist", ".memory", ".workrepos"]
+  "exclude": ["node_modules", ".memory", ".workrepos"]
 }

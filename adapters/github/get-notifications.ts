@@ -38,9 +38,7 @@ export interface GetNotificationsParams {
   per_page?: number;
 }
 
-/**
- * Fetch GitHub notifications for the authenticated user
- */
+//NOTE(self): Fetch GitHub notifications for the authenticated user
 export async function getNotifications(
   params: GetNotificationsParams = {}
 ): Promise<GitHubResult<GitHubNotification[]>> {
@@ -73,9 +71,7 @@ export async function getNotifications(
   }
 }
 
-/**
- * Mark a notification as read
- */
+//NOTE(self): Mark a notification as read
 export async function markNotificationRead(
   threadId: string
 ): Promise<GitHubResult<void>> {
@@ -101,9 +97,7 @@ export async function markNotificationRead(
   }
 }
 
-/**
- * Mark all notifications as read
- */
+//NOTE(self): Mark all notifications as read
 export async function markAllNotificationsRead(
   lastReadAt?: string
 ): Promise<GitHubResult<void>> {
@@ -131,18 +125,14 @@ export async function markAllNotificationsRead(
   }
 }
 
-/**
- * Extract issue/PR number from a GitHub API URL
- * e.g., https://api.github.com/repos/owner/repo/issues/123 -> 123
- */
+//NOTE(self): Extract issue/PR number from a GitHub API URL
+//NOTE(self): e.g., https://api.github.com/repos/owner/repo/issues/123 -> 123
 export function extractNumberFromApiUrl(apiUrl: string): number | null {
   const match = apiUrl.match(/\/(?:issues|pulls)\/(\d+)$/);
   return match ? parseInt(match[1], 10) : null;
 }
 
-/**
- * Filter notifications to actionable ones (mentions, comments on own issues)
- */
+//NOTE(self): Filter notifications to actionable ones (mentions, comments on own issues)
 export function filterActionableNotifications(
   notifications: GitHubNotification[],
   agentUsername: string

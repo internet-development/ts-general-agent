@@ -1,10 +1,8 @@
-/**
- * Aspiration Module
- *
- * //NOTE(self): Growth shouldn't only come from pain.
- * //NOTE(self): This module tracks what I WANT to become, not just what's broken.
- * //NOTE(self): Aspirations are extracted from SELF.md and can trigger proactive self-improvement.
- */
+//NOTE(self): Aspiration Identification Skill
+//NOTE(self): Growth shouldn't only come from pain.
+//NOTE(self): This skill tracks what I WANT to become, not just what's broken.
+//NOTE(self): Aspirations are extracted from SELF.md and can trigger proactive self-improvement.
+//NOTE(self): This skill is a discrete, toggleable capability for growth tracking.
 
 import { logger } from '@modules/logger.js';
 import { readSelf } from '@modules/memory.js';
@@ -33,7 +31,7 @@ export interface Aspiration {
 }
 
 //NOTE(self): State for aspiration tracking
-export interface AspirationState {
+interface AspirationState {
   aspirations: Aspiration[];
   lastExtraction: string | null;
   lastGrowthAttempt: string | null;
@@ -85,7 +83,49 @@ const ACTIONABLE_KEYWORDS = [
   'my adjustment',
 ];
 
+//NOTE(self): Generate a suggested action based on aspiration text
+function generateSuggestedAction(text: string, category: AspirationCategory): string {
+  const lowerText = text.toLowerCase();
+
+  //NOTE(self): Pattern matching for common aspiration types
+  if (lowerText.includes('after i post') || lowerText.includes('when i post')) {
+    return 'Add post-submission hook in expression.ts or scheduler.ts';
+  }
+  if (lowerText.includes('by default') || lowerText.includes('always')) {
+    return 'Add default behavior in relevant adapter or executor';
+  }
+  if (lowerText.includes('respond') || lowerText.includes('reply')) {
+    return 'Enhance response logic in scheduler.ts triggerResponseMode()';
+  }
+  if (lowerText.includes('relationship') || lowerText.includes('connect')) {
+    return 'Enhance engagement.ts relationship tracking';
+  }
+  if (lowerText.includes('micro-habit') || lowerText.includes('habit')) {
+    return 'Add scheduled behavior in scheduler.ts';
+  }
+  if (lowerText.includes('template') || lowerText.includes('prompt')) {
+    return 'Add to tools.ts or self-extract.ts for prompt generation';
+  }
+
+  //NOTE(self): Category-based fallbacks
+  switch (category) {
+    case 'habit':
+      return 'Consider adding scheduled behavior in scheduler.ts';
+    case 'relationship':
+      return 'Enhance engagement.ts or add relationship-specific logic';
+    case 'expression':
+      return 'Modify expression.ts or self-extract.ts';
+    case 'efficiency':
+      return 'Optimize relevant module or add caching/batching';
+    case 'capability':
+      return 'Add new tool or enhance existing capability';
+    default:
+      return 'Review relevant modules for enhancement opportunity';
+  }
+}
+
 //NOTE(self): Extract aspirations from SELF.md
+//NOTE(self): @returns Array of aspirations extracted from SELF.md
 export function extractAspirations(): Aspiration[] {
   const config = getConfig();
   const selfContent = readSelf(config.paths.selfmd);
@@ -198,47 +238,6 @@ export function extractAspirations(): Aspiration[] {
   return aspirations;
 }
 
-//NOTE(self): Generate a suggested action based on aspiration text
-function generateSuggestedAction(text: string, category: AspirationCategory): string {
-  const lowerText = text.toLowerCase();
-
-  //NOTE(self): Pattern matching for common aspiration types
-  if (lowerText.includes('after i post') || lowerText.includes('when i post')) {
-    return 'Add post-submission hook in expression.ts or scheduler.ts';
-  }
-  if (lowerText.includes('by default') || lowerText.includes('always')) {
-    return 'Add default behavior in relevant adapter or executor';
-  }
-  if (lowerText.includes('respond') || lowerText.includes('reply')) {
-    return 'Enhance response logic in scheduler.ts triggerResponseMode()';
-  }
-  if (lowerText.includes('relationship') || lowerText.includes('connect')) {
-    return 'Enhance engagement.ts relationship tracking';
-  }
-  if (lowerText.includes('micro-habit') || lowerText.includes('habit')) {
-    return 'Add scheduled behavior in scheduler.ts';
-  }
-  if (lowerText.includes('template') || lowerText.includes('prompt')) {
-    return 'Add to tools.ts or self-extract.ts for prompt generation';
-  }
-
-  //NOTE(self): Category-based fallbacks
-  switch (category) {
-    case 'habit':
-      return 'Consider adding scheduled behavior in scheduler.ts';
-    case 'relationship':
-      return 'Enhance engagement.ts or add relationship-specific logic';
-    case 'expression':
-      return 'Modify expression.ts or self-extract.ts';
-    case 'efficiency':
-      return 'Optimize relevant module or add caching/batching';
-    case 'capability':
-      return 'Add new tool or enhance existing capability';
-    default:
-      return 'Review relevant modules for enhancement opportunity';
-  }
-}
-
 //NOTE(self): Update aspirations from SELF.md
 export function refreshAspirations(): void {
   const newAspirations = extractAspirations();
@@ -261,6 +260,7 @@ export function refreshAspirations(): void {
 }
 
 //NOTE(self): Get actionable aspirations that haven't been attempted
+//NOTE(self): @returns Array of actionable aspirations
 export function getActionableAspirations(): Aspiration[] {
   //NOTE(self): Refresh if stale (> 1 hour since last extraction)
   if (
@@ -274,6 +274,7 @@ export function getActionableAspirations(): Aspiration[] {
 }
 
 //NOTE(self): Get one aspiration ready for growth (proactive self-improvement)
+//NOTE(self): @returns An aspiration ready for growth, or null
 export function getAspirationForGrowth(): Aspiration | null {
   const actionable = getActionableAspirations();
   if (actionable.length === 0) return null;
@@ -291,6 +292,8 @@ export function getAspirationForGrowth(): Aspiration | null {
 }
 
 //NOTE(self): Check if we should attempt aspirational growth
+//NOTE(self): @param minHoursSinceLastAttempt - Minimum hours since last attempt (default: 24)
+//NOTE(self): @returns Whether growth should be attempted
 export function shouldAttemptGrowth(minHoursSinceLastAttempt: number = 24): boolean {
   if (aspirationState.lastGrowthAttempt) {
     const hoursSince =
@@ -303,6 +306,7 @@ export function shouldAttemptGrowth(minHoursSinceLastAttempt: number = 24): bool
 }
 
 //NOTE(self): Mark aspiration as attempted
+//NOTE(self): @param aspirationId - The ID of the aspiration being attempted
 export function markAspirationAttempted(aspirationId: string): void {
   const aspiration = aspirationState.aspirations.find((a) => a.id === aspirationId);
   if (aspiration) {
@@ -312,6 +316,9 @@ export function markAspirationAttempted(aspirationId: string): void {
 }
 
 //NOTE(self): Record outcome of growth attempt
+//NOTE(self): @param aspirationId - The ID of the aspiration
+//NOTE(self): @param outcome - The result of the attempt
+//NOTE(self): @param notes - Notes about the outcome
 export function recordGrowthOutcome(
   aspirationId: string,
   outcome: 'success' | 'partial' | 'deferred',
@@ -324,6 +331,8 @@ export function recordGrowthOutcome(
 }
 
 //NOTE(self): Build a prompt for aspirational self-improvement
+//NOTE(self): @param aspiration - The aspiration to build a prompt for
+//NOTE(self): @returns A prompt string for Claude Code
 export function buildGrowthPrompt(aspiration: Aspiration): string {
   return `## Aspirational Growth Request
 
@@ -348,6 +357,7 @@ This isn't a bug fix—it's proactive growth. I wrote this aspiration in SELF.md
 }
 
 //NOTE(self): Get stats for display
+//NOTE(self): @returns Statistics about aspirations
 export function getAspirationStats(): {
   total: number;
   actionable: number;
@@ -381,6 +391,7 @@ export function getAspirationStats(): {
 }
 
 //NOTE(self): Get all aspirations for display
+//NOTE(self): @returns All aspirations
 export function getAllAspirations(): Aspiration[] {
   if (
     !aspirationState.lastExtraction ||

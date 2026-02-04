@@ -1,13 +1,10 @@
-/**
- * Scheduler Module
- *
- * //NOTE(self): Coordinates my four modes of being:
- * //NOTE(self): 1. Awareness - watching for people who reach out (cheap, fast)
- * //NOTE(self): 2. Expression - sharing thoughts from my SELF (scheduled)
- * //NOTE(self): 3. Reflection - integrating experiences and updating SELF (deep)
- * //NOTE(self): 4. Self-Improvement - fixing friction via Claude Code (rare)
- * //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
- */
+//NOTE(self): Scheduler Module
+//NOTE(self): Coordinates my four modes of being:
+//NOTE(self): 1. Awareness - watching for people who reach out (cheap, fast)
+//NOTE(self): 2. Expression - sharing thoughts from my SELF (scheduled)
+//NOTE(self): 3. Reflection - integrating experiences and updating SELF (deep)
+//NOTE(self): 4. Self-Improvement - fixing friction via Claude Code (rare)
+//NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';
 import { ui, type ScheduledTimers } from '@modules/ui.js';
@@ -45,7 +42,7 @@ import {
   getExperiencesForReflection,
   markExperiencesIntegrated,
   pruneOldExperiences,
-} from '@modules/experiences.js';
+} from '@skills/self-capture-experiences.js';
 import {
   loadExpressionSchedule,
   saveExpressionSchedule,
@@ -70,7 +67,7 @@ import {
   buildImprovementPrompt,
   getFrictionStats,
   type FrictionCategory,
-} from '@modules/friction.js';
+} from '@skills/self-detect-friction.js';
 import {
   shouldAttemptGrowth,
   getAspirationForGrowth,
@@ -78,8 +75,8 @@ import {
   recordGrowthOutcome,
   buildGrowthPrompt,
   getAspirationStats,
-} from '@modules/aspiration.js';
-import { runClaudeCode } from '@skills/self-improvement.js';
+} from '@skills/self-identify-aspirations.js';
+import { runClaudeCode } from '@skills/self-improve-run.js';
 import * as github from '@adapters/github/index.js';
 import {
   extractGitHubUrlsFromRecord,
@@ -102,13 +99,23 @@ import {
   getGitHubSeenAt,
   updateGitHubSeenAt,
   updateLastNotificationCheck,
-  trackConversation,
-  getConversation,
+  trackConversation as trackGitHubConversation,
+  getConversation as getGitHubConversation,
   recordOurComment,
-  updateConversationState,
-  markConversationConcluded,
-  getConversationsNeedingAttention,
+  updateConversationState as updateGitHubConversationState,
+  markConversationConcluded as markGitHubConversationConcluded,
+  getConversationsNeedingAttention as getGitHubConversationsNeedingAttention,
 } from '@modules/github-engagement.js';
+import {
+  trackConversation as trackBlueskyConversation,
+  recordParticipantActivity,
+  recordOurReply,
+  updateThreadDepth,
+  analyzeConversation as analyzeBlueskyConversation,
+  shouldRespondInConversation,
+  getConversation as getBlueskyConversation,
+  cleanupOldConversations as cleanupOldBlueskyConversations,
+} from '@modules/bluesky-engagement.js';
 
 //NOTE(self): Scheduler Configuration - can be tuned from SELF.md in future
 export interface SchedulerConfig {
@@ -282,6 +289,11 @@ export class AgentScheduler {
     //NOTE(self): Start UI timer updates
     this.startTimerUpdates();
 
+    //NOTE(self): Run initial reflection to recalibrate and integrate any pending experiences
+    //NOTE(self): This grounds the agent in its identity and updates SELF.md with learnings
+    ui.system('Initial reflection', 'grounding in self before acting');
+    await this.reflectionCycle();
+
     //NOTE(self): Run initial awareness checks
     await this.awarenessCheck();
     await this.githubAwarenessCheck();
@@ -413,7 +425,7 @@ export class AgentScheduler {
               //NOTE(self): Track this conversation and fetch thread
               //NOTE(self): Use different source for owner vs non-owner requests
               const source = isOwnerRequest ? 'bluesky_url_owner' : 'bluesky_url';
-              trackConversation(
+              trackGitHubConversation(
                 parsed.owner,
                 parsed.repo,
                 parsed.number,
@@ -550,7 +562,7 @@ export class AgentScheduler {
         const url = `https://github.com/${owner}/${repo}/${type === 'pull' ? 'pull' : 'issues'}/${number}`;
 
         //NOTE(self): Track the conversation
-        trackConversation(owner, repo, number, type, url, 'github_notification');
+        trackGitHubConversation(owner, repo, number, type, url, 'github_notification');
 
         //NOTE(self): Fetch full thread to analyze
         const threadResult = await getIssueThread(
@@ -587,7 +599,7 @@ export class AgentScheduler {
             }
           } else {
             //NOTE(self): Update conversation state if not responding
-            updateConversationState(owner, repo, number, 'awaiting_response', analysis.reason);
+            updateGitHubConversationState(owner, repo, number, 'awaiting_response', analysis.reason);
           }
         }
 
@@ -647,12 +659,26 @@ You're engaging in a GitHub issue conversation. Your SELF.md contains your value
 3. If you've already contributed and the conversation is winding down, it's OK to not respond
 4. If the issue is resolved or closed, acknowledge and don't continue
 5. One comment per response cycle - don't spam the thread
-6. If you decide the conversation is concluded, say so explicitly
+
+**CONVERSATION WISDOM:**
+- Track ALL participants, not just yourself - if multiple people have gone quiet, the conversation may be done
+- If you've commented 2+ times, seriously consider if you're adding value
+- If the issue author seems satisfied or hasn't responded, let it rest
+- Quality over quantity - one helpful comment is better than many
+
+**HOW TO END A CONVERSATION:**
+When you decide the conversation has run its course, use the \`conclude_conversation\` tool:
+- platform: "github"
+- identifier: "${pending.owner}/${pending.repo}#${pending.number}"
+- reason: why you're concluding (e.g., "Issue resolved", "No further input needed")
+
+This explicitly marks the conversation as concluded so you won't be prompted to respond again.
 
 Your GitHub username: ${config.github.username}
 Repository: ${pending.owner}/${pending.repo}
 
 Available tools:
+- conclude_conversation: Mark this conversation as concluded
 - github_create_issue_comment: Leave a comment on this issue
 - github_list_issues: Check other related issues if needed
 - github_get_repo: Get repository context if needed`;
@@ -673,10 +699,14 @@ ${threadContext}
 
 ---
 
-Review this conversation. Decide if you should respond:
-- If yes, use github_create_issue_comment with owner="${pending.owner}", repo="${pending.repo}", issue_number=${pending.number}
-- If the conversation is concluded or doesn't need your input, explain why and move on
-- Remember: quality over quantity. One thoughtful comment is better than many.`;
+Review this conversation and ALL participants' activity. Decide:
+
+1. **If you should respond:** use github_create_issue_comment
+2. **If the conversation is done:** use conclude_conversation to explicitly mark it concluded
+
+Consider: Has everyone who was engaged stopped responding? Is the issue resolved? Have you made your point?
+
+Remember: quality over quantity. One helpful comment is better than many.`;
 
         const messages: Message[] = [{ role: 'user', content: userMessage }];
 
@@ -700,7 +730,7 @@ Review this conversation. Decide if you should respond:
                 const parsed = JSON.parse(result.content);
                 if (parsed.id) {
                   recordOurComment(pending.owner, pending.repo, pending.number, parsed.id);
-                  updateConversationState(pending.owner, pending.repo, pending.number, 'awaiting_response');
+                  updateGitHubConversationState(pending.owner, pending.repo, pending.number, 'awaiting_response');
                   recordSignificantEvent('github_comment');
 
                   //NOTE(self): Capture the experience of helping - what was the issue about?
@@ -740,25 +770,8 @@ Review this conversation. Decide if you should respond:
           });
         }
 
-        //NOTE(self): Check if SOUL decided conversation is concluded
-        const responseText = response.text?.toLowerCase() || '';
-        if (
-          responseText.includes('concluded') ||
-          responseText.includes('resolved') ||
-          responseText.includes('no further input needed') ||
-          responseText.includes('conversation is complete')
-        ) {
-          markConversationConcluded(
-            pending.owner,
-            pending.repo,
-            pending.number,
-            response.text || 'SOUL determined conversation is concluded'
-          );
-          logger.info('Conversation marked as concluded', {
-            url: pending.url,
-            reason: response.text?.slice(0, 100),
-          });
-        }
+        //NOTE(self): Conversation conclusion is now handled explicitly via conclude_conversation tool
+        //NOTE(self): The tool call marks the conversation as concluded in github-engagement.ts
       }
 
       //NOTE(self): Clear pending conversations
@@ -942,7 +955,7 @@ People have reached out. Your SELF.md contains your values and patterns for enga
 - If your last reply made your point, you don't need to keep defending or elaborating
 - If the other person is repeating themselves, they've said what they wanted to say
 - It's wise to let the other person have the last word sometimes
-- A graceful exit ("Thanks for the exchange!" or simply not replying) is better than beating a dead horse
+- A graceful exit is better than beating a dead horse
 - You can always be re-engaged if someone @mentions you again
 
 **Signs a conversation should end:**
@@ -951,6 +964,15 @@ People have reached out. Your SELF.md contains your values and patterns for enga
 - You're going in circles
 - It's becoming argumentative rather than productive
 - The other person seems satisfied or has moved on
+- Multiple participants have stopped engaging
+
+**HOW TO END A CONVERSATION:**
+When you decide a conversation has run its course, use the \`conclude_conversation\` tool:
+- platform: "bluesky"
+- identifier: the thread root URI (at://...)
+- reason: why you're concluding (e.g., "Point made", "Going in circles")
+
+This explicitly marks the conversation as concluded so you won't be prompted to respond again.
 
 Your handle: ${config.bluesky.username}
 Owner: ${config.owner.blueskyHandle}`;
@@ -961,13 +983,19 @@ ${notificationsText}
 
 ---
 
-Review each notification and the full conversation context. Consider:
-1. Have you already made your point in this thread?
-2. Is the conversation going in circles?
-3. Would NOT replying be the wiser choice?
+Review each notification and the FULL conversation context including ALL participants.
 
-It's OK to not reply if the conversation has run its course. Quality over quantity.
-Respond as yourself - your SELF.md guides when and how to engage.`;
+For each conversation, decide:
+1. **If you should respond:** use bluesky_reply
+2. **If the conversation is done:** use conclude_conversation to explicitly mark it concluded
+
+Consider:
+- Have you already made your point?
+- Are ALL participants still engaged, or have some gone quiet?
+- Is the conversation going in circles?
+- Would NOT replying be the wiser choice?
+
+Quality over quantity. Respond as yourself - your SELF.md guides when and how to engage.`;
 
       const messages: Message[] = [{ role: 'user', content: userMessage }];
 

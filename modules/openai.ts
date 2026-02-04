@@ -1,10 +1,7 @@
-/**
- * AI Gateway Module
- *
- * Uses the `ai` npm module with gateway for streaming LLM responses.
- * STATELESS BY DESIGN: Each API call is completely independent.
- * All context must be provided with each request.
- */
+//NOTE(self): AI Gateway Module
+//NOTE(self): Uses the `ai` npm module with gateway for streaming LLM responses.
+//NOTE(self): STATELESS BY DESIGN: Each API call is completely independent.
+//NOTE(self): All context must be provided with each request.
 
 import { streamText, jsonSchema, type ModelMessage, type Tool } from 'ai';
 import { getConfig } from '@modules/config.js';

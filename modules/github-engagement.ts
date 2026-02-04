@@ -1,10 +1,7 @@
-/**
- * GitHub Engagement Module
- *
- * //NOTE(self): Track GitHub conversations and know when to engage
- * //NOTE(self): seenAt timestamp for restart recovery
- * //NOTE(self): Conversation state tracking to know when to stop
- */
+//NOTE(self): GitHub Engagement Module
+//NOTE(self): Track GitHub conversations and know when to engage
+//NOTE(self): seenAt timestamp for restart recovery
+//NOTE(self): Conversation state tracking to know when to stop
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';

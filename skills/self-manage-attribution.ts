@@ -1,10 +1,8 @@
-/**
- * Attribution Module
- *
- * //NOTE(self): Credit + traceability - helps me track and follow up on source attribution.
- * //NOTE(self): When I share content, I want to credit original creators when possible.
- * //NOTE(self): This module provides stats and prompts for working on attribution backlog.
- */
+//NOTE(self): Attribution Management Skill
+//NOTE(self): Credit + traceability - helps me track and follow up on source attribution.
+//NOTE(self): When I share content, I want to credit original creators when possible.
+//NOTE(self): This skill provides stats and prompts for working on attribution backlog.
+//NOTE(self): This skill is a discrete, toggleable capability for attribution tracking.
 
 import { getPostsNeedingAttributionFollowup, getPostCount } from '@modules/post-log.js';
 import { logger } from '@modules/logger.js';
@@ -25,9 +23,9 @@ export interface AttributionBacklogStats {
   };
 }
 
-/**
- * //NOTE(self): Get stats about the attribution backlog for reflection prompts
- */
+//NOTE(self): Get stats about the attribution backlog
+//NOTE(self): Used for reflection prompts
+//NOTE(self): @returns Statistics about posts needing attribution
 export function getAttributionBacklogStats(): AttributionBacklogStats {
   try {
     const needsFollowup = getPostsNeedingAttributionFollowup(100); // Get up to 100 for accurate count
@@ -68,10 +66,9 @@ export function getAttributionBacklogStats(): AttributionBacklogStats {
   }
 }
 
-/**
- * //NOTE(self): Generate a reflection prompt section about attribution backlog
- * //NOTE(self): This nudges me to work on finding original creators during reflection
- */
+//NOTE(self): Generate a reflection prompt section about attribution backlog
+//NOTE(self): This nudges me to work on finding original creators during reflection
+//NOTE(self): @returns A prompt section string, or null if no backlog
 export function getAttributionReflectionPrompt(): string | null {
   const stats = getAttributionBacklogStats();
 
@@ -103,10 +100,9 @@ export function getAttributionReflectionPrompt(): string | null {
   return parts.join('\n');
 }
 
-/**
- * //NOTE(self): Check if it's a good time to work on attribution backlog
- * //NOTE(self): Returns true if we have a meaningful backlog and haven't checked recently
- */
+//NOTE(self): Check if it's a good time to work on attribution backlog
+//NOTE(self): Returns true if we have a meaningful backlog and haven't checked recently
+//NOTE(self): @returns Whether attribution work should be suggested
 export function shouldSuggestAttributionWork(): boolean {
   const stats = getAttributionBacklogStats();
 

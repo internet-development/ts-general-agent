@@ -1,10 +1,8 @@
-/**
- * Social Graph Module
- *
- * //NOTE(self): Extracts entities from social content and builds relational context.
- * //NOTE(self): Helps the agent understand who people are talking about.
- * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
- */
+//NOTE(self): Social Context Enrichment Skill
+//NOTE(self): Extracts entities from social content and builds relational context.
+//NOTE(self): Helps the agent understand who people are talking about.
+//NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
+//NOTE(self): This skill is a discrete, toggleable capability for context enrichment.
 
 import { getProfile } from '@adapters/atproto/get-profile.js';
 import type { AtprotoProfile, AtprotoFeedItem, AtprotoFollower } from '@adapters/atproto/types.js';
@@ -34,6 +32,8 @@ export interface SocialGraphData {
 const profileCache = new Map<string, EnrichedProfile>();
 
 //NOTE(self): Extract handles from arbitrary text
+//NOTE(self): @param text - Text to extract handles from
+//NOTE(self): @returns Array of handles found
 export function extractHandles(text: string): string[] {
   const handles = new Set<string>();
 
@@ -51,6 +51,10 @@ export function extractHandles(text: string): string[] {
 }
 
 //NOTE(self): Extract all mentioned entities from social seed data
+//NOTE(self): @param ownerProfile - The owner's profile
+//NOTE(self): @param ownerFollows - The owner's follows list
+//NOTE(self): @param timeline - Recent timeline items
+//NOTE(self): @returns Array of mentioned entities
 export function extractMentionedEntities(
   ownerProfile: AtprotoProfile | null,
   ownerFollows: AtprotoFollower[],
@@ -98,17 +102,23 @@ export function extractMentionedEntities(
 }
 
 //NOTE(self): Load cached profile from memory
+//NOTE(self): @param handle - Handle to look up
+//NOTE(self): @returns Cached profile or null
 export function loadCachedProfile(handle: string): EnrichedProfile | null {
   return profileCache.get(handle.toLowerCase()) || null;
 }
 
 //NOTE(self): Save profile to memory cache
+//NOTE(self): @param profile - Profile to cache
 export function cacheProfile(profile: EnrichedProfile): void {
   profile.lastSeen = new Date().toISOString();
   profileCache.set(profile.handle.toLowerCase(), profile);
 }
 
 //NOTE(self): Fetch and enrich profiles for mentioned entities
+//NOTE(self): @param entities - Entities to enrich
+//NOTE(self): @param maxLookups - Maximum API lookups (default: 8)
+//NOTE(self): @returns Array of enriched profiles
 export async function enrichMentionedEntities(
   entities: MentionedEntity[],
   maxLookups: number = 8
@@ -148,6 +158,8 @@ export async function enrichMentionedEntities(
 }
 
 //NOTE(self): Format enriched profiles for the agent's context
+//NOTE(self): @param profiles - Profiles to format
+//NOTE(self): @returns Formatted context string
 export function formatEnrichedContext(profiles: EnrichedProfile[]): string {
   if (profiles.length === 0) {
     return '';
@@ -176,7 +188,12 @@ export function formatEnrichedContext(profiles: EnrichedProfile[]): string {
   return parts.join('\n');
 }
 
+//NOTE(self): Build social context from social seed data
 //NOTE(self): Main entry point - extract and enrich social graph
+//NOTE(self): @param ownerProfile - The owner's profile
+//NOTE(self): @param ownerFollows - The owner's follows list
+//NOTE(self): @param timeline - Recent timeline items
+//NOTE(self): @returns Formatted social context string
 export async function buildSocialContext(
   ownerProfile: AtprotoProfile | null,
   ownerFollows: AtprotoFollower[],

@@ -1,10 +1,7 @@
-/**
- * Action Queue Module
- *
- * //NOTE(self): A resilient, persistent queue for outbound actions (especially replies).
- * //NOTE(self): Ensures follow-through when rate limits or breathing pauses defer actions.
- * //NOTE(self): Every started conversation deserves completion. Reliability builds trust.
- */
+//NOTE(self): Action Queue Module
+//NOTE(self): A resilient, persistent queue for outbound actions (especially replies).
+//NOTE(self): Ensures follow-through when rate limits or breathing pauses defer actions.
+//NOTE(self): Every started conversation deserves completion. Reliability builds trust.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -54,28 +51,22 @@ interface QueueStats {
 //NOTE(self): In-memory cache of the queue for fast access
 let queueCache: QueuedAction[] | null = null;
 
-/**
- * Generate a deterministic hash for deduplication
- * Key: post_uri + normalized text (lowercased, trimmed, whitespace collapsed)
- */
+//NOTE(self): Generate a deterministic hash for deduplication
+//NOTE(self): Key: post_uri + normalized text (lowercased, trimmed, whitespace collapsed)
 function generateTextHash(postUri: string, text: string): string {
   const normalized = text.toLowerCase().trim().replace(/\s+/g, ' ');
   const input = `${postUri}:${normalized}`;
   return crypto.createHash('sha256').update(input).digest('hex').slice(0, 16);
 }
 
-/**
- * Calculate exponential backoff with jitter
- */
+//NOTE(self): Calculate exponential backoff with jitter
 function calculateBackoff(attemptCount: number): number {
   const exponential = BASE_BACKOFF_MS * Math.pow(2, attemptCount - 1);
   const jitter = Math.random() * 0.3 * exponential; // 0-30% jitter
   return Math.min(exponential + jitter, MAX_BACKOFF_MS);
 }
 
-/**
- * Ensure the queue directory exists
- */
+//NOTE(self): Ensure the queue directory exists
 function ensureQueueDir(): void {
   const queueDir = path.dirname(QUEUE_FILE);
   if (!fs.existsSync(queueDir)) {
@@ -87,9 +78,7 @@ function ensureQueueDir(): void {
   }
 }
 
-/**
- * Append a log entry for audit trail
- */
+//NOTE(self): Append a log entry for audit trail
 function auditLog(action: string, details: Record<string, unknown>): void {
   try {
     ensureQueueDir();
@@ -101,9 +90,7 @@ function auditLog(action: string, details: Record<string, unknown>): void {
   }
 }
 
-/**
- * Load the queue from disk
- */
+//NOTE(self): Load the queue from disk
 function loadQueue(): QueuedAction[] {
   if (queueCache !== null) {
     return queueCache;
@@ -140,9 +127,7 @@ function loadQueue(): QueuedAction[] {
   }
 }
 
-/**
- * Save the queue to disk (full rewrite)
- */
+//NOTE(self): Save the queue to disk (full rewrite)
 function saveQueue(): void {
   if (queueCache === null) return;
 
@@ -156,10 +141,8 @@ function saveQueue(): void {
   }
 }
 
-/**
- * Check if an action already exists (deduplication)
- * Returns the existing action if found, null otherwise
- */
+//NOTE(self): Check if an action already exists (deduplication)
+//NOTE(self): Returns the existing action if found, null otherwise
 export function findDuplicate(postUri: string, text: string): QueuedAction | null {
   const queue = loadQueue();
   const hash = generateTextHash(postUri, text);
@@ -173,10 +156,8 @@ export function findDuplicate(postUri: string, text: string): QueuedAction | nul
   ) || null;
 }
 
-/**
- * Enqueue a new action (typically a reply)
- * Returns { enqueued: true, action } or { enqueued: false, reason, existingAction? }
- */
+//NOTE(self): Enqueue a new action (typically a reply)
+//NOTE(self): Returns { enqueued: true, action } or { enqueued: false, reason, existingAction? }
 export function enqueueAction(params: {
   target: QueuedAction['target'];
   text: string;
@@ -233,10 +214,8 @@ export function enqueueAction(params: {
   return { enqueued: true, action };
 }
 
-/**
- * Mark an action as deferred (rate limit hit, etc.)
- * Schedules retry with exponential backoff
- */
+//NOTE(self): Mark an action as deferred (rate limit hit, etc.)
+//NOTE(self): Schedules retry with exponential backoff
 export function deferAction(id: string, reason: string): QueuedAction | null {
   const queue = loadQueue();
   const action = queue.find((a) => a.id === id);
@@ -280,9 +259,7 @@ export function deferAction(id: string, reason: string): QueuedAction | null {
   return action;
 }
 
-/**
- * Mark an action as successfully sent
- */
+//NOTE(self): Mark an action as successfully sent
 export function markActionSent(id: string, responseUri?: string): QueuedAction | null {
   const queue = loadQueue();
   const action = queue.find((a) => a.id === id);
@@ -306,9 +283,7 @@ export function markActionSent(id: string, responseUri?: string): QueuedAction |
   return action;
 }
 
-/**
- * Mark an action as abandoned (requires human intervention)
- */
+//NOTE(self): Mark an action as abandoned (requires human intervention)
 export function abandonAction(id: string, reason: string): QueuedAction | null {
   const queue = loadQueue();
   const action = queue.find((a) => a.id === id);
@@ -330,10 +305,8 @@ export function abandonAction(id: string, reason: string): QueuedAction | null {
   return action;
 }
 
-/**
- * Get all actions ready for retry (deferred with nextRetryAt in the past)
- * Returns actions sorted by priority, then by oldest first
- */
+//NOTE(self): Get all actions ready for retry (deferred with nextRetryAt in the past)
+//NOTE(self): Returns actions sorted by priority, then by oldest first
 export function getRetryableActions(): QueuedAction[] {
   const queue = loadQueue();
   const now = Date.now();
@@ -364,17 +337,13 @@ export function getRetryableActions(): QueuedAction[] {
   });
 }
 
-/**
- * Get failed actions that need human review
- */
+//NOTE(self): Get failed actions that need human review
 export function getFailedActions(): QueuedAction[] {
   const queue = loadQueue();
   return queue.filter((a) => a.status === 'failed');
 }
 
-/**
- * Get queue statistics
- */
+//NOTE(self): Get queue statistics
 export function getQueueStats(): QueueStats {
   const queue = loadQueue();
 
@@ -399,10 +368,8 @@ export function getQueueStats(): QueueStats {
   };
 }
 
-/**
- * Group queued actions by thread root URI for triage
- * This helps identify which threads have multiple pending actions
- */
+//NOTE(self): Group queued actions by thread root URI for triage
+//NOTE(self): This helps identify which threads have multiple pending actions
 export function groupByThread(): Map<string, QueuedAction[]> {
   const queue = loadQueue();
   const groups = new Map<string, QueuedAction[]>();
@@ -420,24 +387,18 @@ export function groupByThread(): Map<string, QueuedAction[]> {
   return groups;
 }
 
-/**
- * Clear the in-memory cache (useful for testing or forced reload)
- */
+//NOTE(self): Clear the in-memory cache (useful for testing or forced reload)
 export function clearCache(): void {
   queueCache = null;
 }
 
-/**
- * Get a specific action by ID
- */
+//NOTE(self): Get a specific action by ID
 export function getAction(id: string): QueuedAction | null {
   const queue = loadQueue();
   return queue.find((a) => a.id === id) || null;
 }
 
-/**
- * Remove an action from the queue entirely (cleanup)
- */
+//NOTE(self): Remove an action from the queue entirely (cleanup)
 export function removeAction(id: string): boolean {
   const queue = loadQueue();
   const index = queue.findIndex((a) => a.id === id);

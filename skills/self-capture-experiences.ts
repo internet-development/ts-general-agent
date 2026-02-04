@@ -1,10 +1,8 @@
-/**
- * Experiences Module
- *
- * //NOTE(self): Capture meaningful experiences that help the SOUL grow
- * //NOTE(self): Not metrics or counts - actual moments of learning, connection, and growth
- * //NOTE(self): These experiences are what shape identity during reflection
- */
+//NOTE(self): Experience Capture Skill
+//NOTE(self): Capture meaningful experiences that help the SOUL grow
+//NOTE(self): Not metrics or counts - actual moments of learning, connection, and growth
+//NOTE(self): These experiences are what shape identity during reflection
+//NOTE(self): This skill is a discrete, toggleable capability for reflection enhancement.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -78,10 +76,11 @@ function generateId(): string {
   return `exp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Record a meaningful experience
- * //NOTE(self): Call this when something happens that could shape identity
- */
+//NOTE(self): Record a meaningful experience
+//NOTE(self): Call this when something happens that could shape identity
+//NOTE(self): @param type - The type of experience
+//NOTE(self): @param description - What happened
+//NOTE(self): @param context - Optional context (source, person, url)
 export function recordExperience(
   type: ExperienceType,
   description: string,
@@ -132,10 +131,9 @@ export function recordExperience(
   logger.info('Recorded experience', { type, description: description.slice(0, 80) });
 }
 
-/**
- * Get experiences for reflection
- * //NOTE(self): Returns unintegrated experiences, grouped by type
- */
+//NOTE(self): Get experiences for reflection
+//NOTE(self): Returns unintegrated experiences, grouped by type
+//NOTE(self): @returns Experiences data with summary for reflection
 export function getExperiencesForReflection(): {
   experiences: Experience[];
   byType: Record<ExperienceType, Experience[]>;
@@ -231,10 +229,9 @@ export function getExperiencesForReflection(): {
   return { experiences: unintegrated, byType, summary };
 }
 
-/**
- * Mark experiences as integrated into SELF.md
- * //NOTE(self): Call after reflection when experiences have been processed
- */
+//NOTE(self): Mark experiences as integrated into SELF.md
+//NOTE(self): Call after reflection when experiences have been processed
+//NOTE(self): @param experienceIds - Optional specific IDs to mark; if omitted, marks all
 export function markExperiencesIntegrated(experienceIds?: string[]): void {
   const s = loadState();
 
@@ -258,10 +255,10 @@ export function markExperiencesIntegrated(experienceIds?: string[]): void {
   });
 }
 
-/**
- * Prune old integrated experiences
- * //NOTE(self): Keep the experience list from growing forever
- */
+//NOTE(self): Prune old integrated experiences
+//NOTE(self): Keep the experience list from growing forever
+//NOTE(self): @param daysOld - Days after which to prune (default: 30)
+//NOTE(self): @returns Number of experiences pruned
 export function pruneOldExperiences(daysOld: number = 30): number {
   const s = loadState();
   const cutoff = Date.now() - (daysOld * 24 * 60 * 60 * 1000);
@@ -281,9 +278,8 @@ export function pruneOldExperiences(daysOld: number = 30): number {
   return pruned;
 }
 
-/**
- * Get count of unintegrated experiences
- */
+//NOTE(self): Get count of unintegrated experiences
+//NOTE(self): @returns Number of unintegrated experiences
 export function getUnintegratedCount(): number {
   const s = loadState();
   return s.experiences.filter(e => !e.integrated).length;

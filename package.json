@@ -5,14 +5,15 @@
     "node": ">=18"
   },
   "license": "MIT",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "agent": "tsx index.ts",
     "agent:walk": "tsx walk.ts",
+    "agent:walk:quick": "tsx walk.ts --skip-improvement",
     "agent:reset": "tsx index.ts --flush-all",
     "dev": "tsx watch index.ts",
-    "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts"
   },
   "dependencies": {

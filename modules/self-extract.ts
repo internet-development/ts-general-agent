@@ -1,10 +1,7 @@
-/**
- * Self Extract Module
- *
- * //NOTE(self): Parses SELF.md to extract my values, questions, patterns, and learnings.
- * //NOTE(self): This gives me structured access to who I am for expression and reflection.
- * //NOTE(self): The more I write in SELF.md, the richer my expression becomes.
- */
+//NOTE(self): Self Extract Module
+//NOTE(self): Parses SELF.md to extract my values, questions, patterns, and learnings.
+//NOTE(self): This gives me structured access to who I am for expression and reflection.
+//NOTE(self): The more I write in SELF.md, the richer my expression becomes.
 
 import { readSelf } from '@modules/memory.js';
 

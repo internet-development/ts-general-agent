@@ -1,10 +1,7 @@
-/**
- * Walk Mode - Run all scheduler operations once and exit
- *
- * //NOTE(self): This is useful for testing and manual self-management.
- * //NOTE(self): Instead of running forever, we "walk" through each operation once.
- * //NOTE(self): Uses the same beautiful UI as the main agent.
- */
+//NOTE(self): Walk Mode - Run all scheduler operations once and exit
+//NOTE(self): This is useful for testing and manual self-management.
+//NOTE(self): Instead of running forever, we "walk" through each operation once.
+//NOTE(self): Uses the same beautiful UI as the main agent.
 
 import { config as dotenvConfig } from 'dotenv';
 import * as path from 'path';
@@ -27,8 +24,8 @@ import {
 } from '@modules/expression.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
 import { addInsight, getInsights, getRelationshipSummary } from '@modules/engagement.js';
-import { getFrictionReadyForImprovement } from '@modules/friction.js';
-import { getAspirationForGrowth, getAspirationStats, getAllAspirations } from '@modules/aspiration.js';
+import { getFrictionReadyForImprovement } from '@skills/self-detect-friction.js';
+import { getAspirationForGrowth, getAspirationStats, getAllAspirations } from '@skills/self-identify-aspirations.js';
 import { getEngagementPatterns } from '@modules/expression.js';
 import { createRequire } from 'module';
 
@@ -42,7 +39,17 @@ const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
 const VERSION = pkg.version || '0.0.0';
 
+//NOTE(self): Parse command line arguments for walk mode
+function parseArgs(): { skipImprovement: boolean } {
+  const args = process.argv.slice(2);
+  return {
+    skipImprovement: args.includes('--skip-improvement') || args.includes('-s'),
+  };
+}
+
 async function walk(): Promise<void> {
+  const { skipImprovement } = parseArgs();
+
   //NOTE(self): Initialize sandbox - constrains all file operations to this repo
   initSandbox(REPO_ROOT);
 
@@ -192,42 +199,48 @@ async function walk(): Promise<void> {
   //NOTE(self): 6. SELF-IMPROVEMENT - Reactive (friction) AND Proactive (aspiration)
   ui.printSection('Self-Improvement');
 
-  //NOTE(self): First check for friction (reactive - something is broken)
+  //NOTE(self): Check for friction regardless, for later display in Growth section
   const friction = getFrictionReadyForImprovement();
-  if (friction) {
-    ui.warn('Friction detected', `${friction.category}: ${friction.description}`);
-    try {
-      const improved = await scheduler.forceImprovement();
-      if (!improved) {
-        ui.info('Decision made', 'SOUL evaluated and chose not to fix right now');
-      }
-    } catch (error) {
-      ui.error('Error', String(error));
-    }
-  } else {
-    ui.info('No friction', 'nothing broken');
-  }
 
-  //NOTE(self): Then check for aspirations (proactive - growth from inspiration)
-  const aspiration = getAspirationForGrowth();
-  if (aspiration) {
-    ui.info('Aspiration found', `${aspiration.category}: ${aspiration.description}`);
-    try {
-      const grew = await scheduler.forceGrowth();
-      if (!grew) {
-        ui.info('Decision made', 'SOUL evaluated and chose not to grow right now');
+  if (!skipImprovement) {
+    //NOTE(self): First check for friction (reactive - something is broken)
+    if (friction) {
+      ui.warn('Friction detected', `${friction.category}: ${friction.description}`);
+      try {
+        const improved = await scheduler.forceImprovement();
+        if (!improved) {
+          ui.info('Decision made', 'SOUL evaluated and chose not to fix right now');
+        }
+      } catch (error) {
+        ui.error('Error', String(error));
       }
-    } catch (error) {
-      ui.error('Error', String(error));
+    } else {
+      ui.info('No friction', 'nothing broken');
+    }
+
+    //NOTE(self): Then check for aspirations (proactive - growth from inspiration)
+    const aspiration = getAspirationForGrowth();
+    if (aspiration) {
+      ui.info('Aspiration found', `${aspiration.category}: ${aspiration.description}`);
+      try {
+        const grew = await scheduler.forceGrowth();
+        if (!grew) {
+          ui.info('Decision made', 'SOUL evaluated and chose not to grow right now');
+        }
+      } catch (error) {
+        ui.error('Error', String(error));
+      }
+    } else {
+      //NOTE(self): Show aspiration stats even if nothing is ready
+      const aspirationStats = getAspirationStats();
+      if (aspirationStats.total > 0) {
+        ui.info('Aspirations', `${aspirationStats.total} found in SELF.md (${aspirationStats.actionable} actionable, ${aspirationStats.attempted} attempted)`);
+      } else {
+        ui.info('No aspirations', 'consider adding growth goals to SELF.md');
+      }
     }
   } else {
-    //NOTE(self): Show aspiration stats even if nothing is ready
-    const aspirationStats = getAspirationStats();
-    if (aspirationStats.total > 0) {
-      ui.info('Aspirations', `${aspirationStats.total} found in SELF.md (${aspirationStats.actionable} actionable, ${aspirationStats.attempted} attempted)`);
-    } else {
-      ui.info('No aspirations', 'consider adding growth goals to SELF.md');
-    }
+    ui.info('Skipped', '--skip-improvement flag');
   }
 
   //NOTE(self): 7. GROWTH - Summary of learnings, relationships, and state

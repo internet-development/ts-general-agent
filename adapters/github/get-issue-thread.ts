@@ -26,9 +26,7 @@ export interface GetIssueThreadParams {
   issue_number: number;
 }
 
-/**
- * Fetch an issue with its full comment thread
- */
+//NOTE(self): Fetch an issue with its full comment thread
 export async function getIssueThread(
   params: GetIssueThreadParams,
   agentUsername?: string
@@ -101,9 +99,7 @@ export async function getIssueThread(
   }
 }
 
-/**
- * Check if the agent has already commented on an issue
- */
+//NOTE(self): Check if the agent has already commented on an issue
 export async function hasAgentCommented(
   params: GetIssueThreadParams,
   agentUsername?: string
@@ -121,9 +117,7 @@ export async function hasAgentCommented(
   return { success: true, data: threadResult.data.agentHasCommented };
 }
 
-/**
- * Analyze conversation state to help SOUL decide whether to respond
- */
+//NOTE(self): Analyze conversation state to help SOUL decide whether to respond
 export interface ConversationAnalysis {
   shouldRespond: boolean;
   reason: string;
@@ -232,9 +226,7 @@ export function analyzeConversation(
   };
 }
 
-/**
- * Format thread for LLM context
- */
+//NOTE(self): Format thread for LLM context
 export function formatThreadForContext(thread: IssueThread, maxComments: number = 10): string {
   const { issue, comments } = thread;
 

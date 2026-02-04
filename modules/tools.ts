@@ -532,6 +532,31 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
+  //NOTE(self): Conversation management tools
+  {
+    name: 'conclude_conversation',
+    description: 'Explicitly mark a conversation as concluded. Use this when you\'ve made your point, the thread has run its course, or continuing would not add value. Works for both Bluesky threads and GitHub issues. This is the graceful way to exit a conversation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        platform: {
+          type: 'string',
+          enum: ['bluesky', 'github'],
+          description: 'Which platform the conversation is on',
+        },
+        identifier: {
+          type: 'string',
+          description: 'For Bluesky: the thread root URI (at://...). For GitHub: owner/repo#number format (e.g., "anthropics/claude-code#123")',
+        },
+        reason: {
+          type: 'string',
+          description: 'Why you\'re concluding this conversation (e.g., "Point made, no need to continue", "Conversation going in circles", "Other party seems satisfied")',
+        },
+      },
+      required: ['platform', 'identifier', 'reason'],
+    },
+  },
+
   //NOTE(self): Self-improvement tools
   {
     name: 'self_improve',

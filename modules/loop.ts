@@ -1,10 +1,7 @@
-/**
- * Main Loop Module
- *
- * //NOTE(self): The heart of the agent - powered by the four-loop scheduler.
- * //NOTE(self): Awareness (cheap) + Expression (scheduled) + Reflection (deep) + Self-Improvement (rare)
- * //NOTE(self): Self-discovery through expression, not passive waiting.
- */
+//NOTE(self): Main Loop Module
+//NOTE(self): The heart of the agent - powered by the four-loop scheduler.
+//NOTE(self): Awareness (cheap) + Expression (scheduled) + Reflection (deep) + Self-Improvement (rare)
+//NOTE(self): Self-discovery through expression, not passive waiting.
 
 import { logger } from '@modules/logger.js';
 import {
@@ -24,7 +21,7 @@ import {
   addInsight,
 } from '@modules/engagement.js';
 import { getScheduler } from '@modules/scheduler.js';
-import { recordFriction } from '@modules/friction.js';
+import { recordFriction } from '@skills/self-detect-friction.js';
 import { createRequire } from 'module';
 
 //NOTE(self): Read version from package.json

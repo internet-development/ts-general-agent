@@ -1,10 +1,7 @@
-/**
- * Engagement Module
- *
- * //NOTE(self): Thoughtful engagement that exceeds human capability.
- * //NOTE(self): Post from the heart, respond with care, remember relationships.
- * //NOTE(self): Replied URIs and relationships persist to .memory/ so I remember across restarts.
- */
+//NOTE(self): Engagement Module
+//NOTE(self): Thoughtful engagement that exceeds human capability.
+//NOTE(self): Post from the heart, respond with care, remember relationships.
+//NOTE(self): Replied URIs and relationships persist to .memory/ so I remember across restarts.
 
 import type { AtprotoNotification } from '@adapters/atproto/types.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';

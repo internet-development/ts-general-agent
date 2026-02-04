@@ -1,10 +1,7 @@
-/**
- * Pacing Module
- *
- * //NOTE(self): Ensures the agent acts with dignity and deliberation.
- * //NOTE(self): Prevents spammy behavior and encourages thoughtful engagement.
- * //NOTE(self): Quality over quantity - one thoughtful interaction beats many shallow ones.
- */
+//NOTE(self): Pacing Module
+//NOTE(self): Ensures the agent acts with dignity and deliberation.
+//NOTE(self): Prevents spammy behavior and encourages thoughtful engagement.
+//NOTE(self): Quality over quantity - one thoughtful interaction beats many shallow ones.
 
 import { ui } from '@modules/ui.js';
 import { logger } from '@modules/logger.js';
@@ -274,9 +271,7 @@ export const pacing = new PacingManager();
 
 
 //NOTE(self): Helper Functions
-/**
- * //NOTE(self): Map tool names to action types for pacing
- */
+//NOTE(self): Map tool names to action types for pacing
 export function getActionType(toolName: string): string {
   const mapping: Record<string, string> = {
     bluesky_post: 'post',
@@ -298,9 +293,7 @@ export function getActionType(toolName: string): string {
   return mapping[toolName] || 'other';
 }
 
-/**
- * //NOTE(self): Check if a tool is a "social action" that should be rate limited
- */
+//NOTE(self): Check if a tool is a "social action" that should be rate limited
 export function isSocialAction(toolName: string): boolean {
   const socialTools = [
     'bluesky_post',
@@ -318,9 +311,7 @@ export function isSocialAction(toolName: string): boolean {
   return socialTools.includes(toolName);
 }
 
-/**
- * //NOTE(self): Check if a tool is a "read" action (no rate limit needed)
- */
+//NOTE(self): Check if a tool is a "read" action (no rate limit needed)
 export function isReadAction(toolName: string): boolean {
   const readTools = [
     'bluesky_get_timeline',

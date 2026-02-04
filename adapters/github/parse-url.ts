@@ -19,9 +19,7 @@ export interface ParsedGitHubUrl {
 //NOTE(self): - github.com/owner/repo/issues/123 (without https://)
 const GITHUB_URL_REGEX = /(?:https?:\/\/)?github\.com\/([^\/]+)\/([^\/]+)\/(issues|pull|discussions)\/(\d+)/gi;
 
-/**
- * Parse a single GitHub URL
- */
+//NOTE(self): Parse a single GitHub URL
 export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
   const regex = /(?:https?:\/\/)?github\.com\/([^\/]+)\/([^\/]+)\/(issues|pull|discussions)\/(\d+)/i;
   const match = url.match(regex);
@@ -41,9 +39,7 @@ export function parseGitHubUrl(url: string): ParsedGitHubUrl | null {
   };
 }
 
-/**
- * Extract all GitHub URLs from text
- */
+//NOTE(self): Extract all GitHub URLs from text
 export function extractGitHubUrls(text: string): ParsedGitHubUrl[] {
   const results: ParsedGitHubUrl[] = [];
   const seen = new Set<string>();
@@ -74,24 +70,19 @@ export function extractGitHubUrls(text: string): ParsedGitHubUrl[] {
   return results;
 }
 
-/**
- * Check if text contains any GitHub URLs
- */
+//NOTE(self): Check if text contains any GitHub URLs
 export function hasGitHubUrls(text: string): boolean {
   GITHUB_URL_REGEX.lastIndex = 0;
   return GITHUB_URL_REGEX.test(text);
 }
 
-/**
- * Extract GitHub URLs from a Bluesky post record
- * //NOTE(self): CRITICAL - Bluesky truncates URLs in displayed text!
- * //NOTE(self): A truncated URL like "issues/12..." might parse as issue #12 when it's really #123
- * //NOTE(self):
- * //NOTE(self): Priority order (STOP as soon as we find GitHub URLs):
- * //NOTE(self): 1. facets (rich text link features) - AUTHORITATIVE, full URLs
- * //NOTE(self): 2. embed.external.uri (link preview card) - AUTHORITATIVE, full URL
- * //NOTE(self): 3. text (ONLY if nothing found above) - may be truncated, last resort
- */
+//NOTE(self): Extract GitHub URLs from a Bluesky post record
+//NOTE(self): CRITICAL - Bluesky truncates URLs in displayed text!
+//NOTE(self): A truncated URL like "issues/12..." might parse as issue #12 when it's really #123
+//NOTE(self): Priority order (STOP as soon as we find GitHub URLs):
+//NOTE(self): 1. facets (rich text link features) - AUTHORITATIVE, full URLs
+//NOTE(self): 2. embed.external.uri (link preview card) - AUTHORITATIVE, full URL
+//NOTE(self): 3. text (ONLY if nothing found above) - may be truncated, last resort
 export function extractGitHubUrlsFromRecord(record: Record<string, unknown>): ParsedGitHubUrl[] {
   const seen = new Set<string>();
 

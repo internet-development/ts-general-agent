@@ -120,18 +120,21 @@ The `self-extract` module can parse any of these sections to generate expression
   - fixing bugs in how it connects to services,
   - adding new adapter capabilities it genuinely needs,
   - the changes align with SOUL.md principles.
+- **See `adapters/AGENTS.md` for detailed documentation on adapter design principles.**
 
 ---
 
 ### `modules/`
 - This directory **MUST** contain internal TypeScript modules used for code clarity and structure.
 - The agent **MAY** modify this directory via the `self_improve` tool.
+- **See `modules/AGENTS.md` for detailed documentation on module vs skill decisions.**
 
 ---
 
 ### `skills/`
 - This directory **MUST** represent the agent's capabilities.
 - The agent **MAY** modify this directory via the `self_improve` tool.
+- **See `skills/AGENTS.md` for detailed documentation on skill design and file naming conventions.**
 
 ---
 
@@ -481,7 +484,7 @@ ts-general-agent/
 │   ├── github/                 # GitHub
 │   └── arena/                  # Are.na
 │
-├── modules/                    # Core runtime
+├── modules/                    # Core runtime (see modules/AGENTS.md)
 │   ├── config.ts               # Environment and configuration
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
@@ -490,21 +493,27 @@ ts-general-agent/
 │   ├── scheduler.ts            # Four-loop scheduler
 │   ├── self-extract.ts         # SELF.md parsing
 │   ├── expression.ts           # Scheduled expression
-│   ├── friction.ts             # Friction tracking
 │   ├── executor.ts             # Tool execution
 │   ├── tools.ts                # Tool definitions
 │   ├── pacing.ts               # Rate limiting
 │   ├── engagement.ts           # Relationship tracking
-│   ├── social-graph.ts         # Social context building
+│   ├── bluesky-engagement.ts   # Bluesky conversation state
+│   ├── github-engagement.ts    # GitHub conversation state
 │   ├── sandbox.ts              # File system sandboxing
 │   ├── ui.ts                   # Terminal UI components
 │   └── index.ts                # Module exports
 │
-└── skills/                     # Capabilities
-    ├── social-engagement.ts    # Bluesky interactions
-    ├── github-monitoring.ts    # Repo/issue tracking
-    ├── self-reflection.ts      # Memory and introspection
-    └── self-improvement.ts     # Self-modification via claude-code CLI
+└── skills/                     # Capabilities (see skills/AGENTS.md)
+    ├── self-bluesky-*.ts       # Bluesky platform skills
+    ├── self-github-*.ts        # GitHub platform skills
+    ├── self-*.ts               # Self-reflection skills
+    ├── self-improve-*.ts       # Self-improvement skills
+    ├── self-detect-friction.ts # Friction detection (moved from modules)
+    ├── self-identify-aspirations.ts  # Aspiration tracking (moved from modules)
+    ├── self-capture-experiences.ts   # Experience recording (moved from modules)
+    ├── self-manage-attribution.ts    # Attribution tracking (moved from modules)
+    ├── self-enrich-social-context.ts # Social context building (moved from modules)
+    └── index.ts                # Skill exports
 ```
 
 ---

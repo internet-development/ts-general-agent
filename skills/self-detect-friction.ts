@@ -1,10 +1,8 @@
-/**
- * Friction Module
- *
- * //NOTE(self): Tracks friction I encounter in how I work.
- * //NOTE(self): When friction accumulates, I can use self-improvement to fix it.
- * //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
- */
+//NOTE(self): Friction Detection Skill
+//NOTE(self): Tracks friction I encounter in how I work.
+//NOTE(self): When friction accumulates, I can use self-improvement to fix it.
+//NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
+//NOTE(self): This skill is a discrete, toggleable capability for self-improvement triggers.
 
 import { logger } from '@modules/logger.js';
 
@@ -46,7 +44,7 @@ export interface ImprovementRecord {
 }
 
 //NOTE(self): My friction state - in-memory only
-export interface FrictionState {
+interface FrictionState {
   frictions: FrictionRecord[];
   improvements: ImprovementRecord[];
   lastImprovementAttempt: string | null;
@@ -64,12 +62,11 @@ function generateId(): string {
   return `friction-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-//NOTE(self): Load my friction state (in-memory)
-export function loadFrictionState(): FrictionState {
-  return frictionState;
-}
-
 //NOTE(self): Record friction I've encountered
+//NOTE(self): @param category - The type of friction
+//NOTE(self): @param description - What the friction is
+//NOTE(self): @param context - Additional context about when/where it occurred
+//NOTE(self): @returns The friction record (new or updated)
 export function recordFriction(
   category: FrictionCategory,
   description: string,
@@ -121,6 +118,8 @@ export function recordFriction(
 }
 
 //NOTE(self): Get friction that's ready for self-improvement
+//NOTE(self): @param minOccurrences - Minimum occurrences before friction is ready (default: 3)
+//NOTE(self): @returns The friction record ready for improvement, or null
 export function getFrictionReadyForImprovement(minOccurrences: number = 3): FrictionRecord | null {
   const ready = frictionState.frictions.find(
     (f) => f.occurrences >= minOccurrences && !f.attempted && !f.resolved
@@ -129,6 +128,8 @@ export function getFrictionReadyForImprovement(minOccurrences: number = 3): Fric
 }
 
 //NOTE(self): Check if I should attempt self-improvement
+//NOTE(self): @param minHoursSinceLastAttempt - Minimum hours since last attempt (default: 12)
+//NOTE(self): @returns Whether improvement should be attempted
 export function shouldAttemptImprovement(minHoursSinceLastAttempt: number = 12): boolean {
   if (frictionState.lastImprovementAttempt) {
     const lastAttempt = new Date(frictionState.lastImprovementAttempt);
@@ -141,6 +142,7 @@ export function shouldAttemptImprovement(minHoursSinceLastAttempt: number = 12):
 }
 
 //NOTE(self): Mark friction as being attempted
+//NOTE(self): @param frictionId - The ID of the friction being attempted
 export function markFrictionAttempted(frictionId: string): void {
   const friction = frictionState.frictions.find((f) => f.id === frictionId);
   if (friction) {
@@ -150,6 +152,10 @@ export function markFrictionAttempted(frictionId: string): void {
 }
 
 //NOTE(self): Record the outcome of a self-improvement attempt
+//NOTE(self): @param frictionId - The ID of the friction that was addressed
+//NOTE(self): @param outcome - The result of the attempt
+//NOTE(self): @param changes - Description of changes made
+//NOTE(self): @param notes - Optional additional notes
 export function recordImprovementOutcome(
   frictionId: string,
   outcome: 'success' | 'partial' | 'failed',
@@ -182,6 +188,8 @@ export function recordImprovementOutcome(
 }
 
 //NOTE(self): Mark friction as resolved
+//NOTE(self): @param frictionId - The ID of the friction to mark resolved
+//NOTE(self): @param notes - Optional notes about resolution
 export function markFrictionResolved(frictionId: string, notes?: string): void {
   const friction = frictionState.frictions.find((f) => f.id === frictionId);
   if (friction) {
@@ -193,6 +201,7 @@ export function markFrictionResolved(frictionId: string, notes?: string): void {
 }
 
 //NOTE(self): Get friction statistics for reflection
+//NOTE(self): @returns Statistics about recorded friction
 export function getFrictionStats(): {
   total: number;
   unresolved: number;
@@ -232,7 +241,27 @@ export function getFrictionStats(): {
   };
 }
 
+//NOTE(self): Get hints for where to look based on category
+function getCategoryHints(category: FrictionCategory): string {
+  const hints: Record<FrictionCategory, string> = {
+    pacing: '- modules/pacing.ts\n- modules/scheduler.ts\n- Rate limits and timing logic',
+    expression:
+      '- modules/expression.ts\n- modules/self-extract.ts\n- Prompt generation and posting',
+    memory: '- SELF.md\n- The agent uses SELF.md for all memory',
+    social:
+      '- adapters/atproto/\n- modules/engagement.ts\n- Social interactions and responses',
+    tools: '- modules/tools.ts\n- modules/executor.ts\n- Tool definitions and execution',
+    understanding:
+      '- modules/openai.ts (AI Gateway)\n- System prompts\n- Context building',
+    other: '- Review recent changes\n- Check logs for errors\n- General debugging',
+  };
+
+  return hints[category];
+}
+
 //NOTE(self): Build a prompt for self-improvement based on accumulated friction
+//NOTE(self): @param friction - The friction record to build a prompt for
+//NOTE(self): @returns A prompt string for Claude Code
 export function buildImprovementPrompt(friction: FrictionRecord): string {
   const recentInstances = friction.instances.slice(-3);
   const instancesText = recentInstances
@@ -262,30 +291,15 @@ ${getCategoryHints(friction.category)}
 - Keep changes focused on this specific friction`;
 }
 
-//NOTE(self): Get hints for where to look based on category
-function getCategoryHints(category: FrictionCategory): string {
-  const hints: Record<FrictionCategory, string> = {
-    pacing: '- modules/pacing.ts\n- modules/scheduler.ts\n- Rate limits and timing logic',
-    expression:
-      '- modules/expression.ts\n- modules/self-extract.ts\n- Prompt generation and posting',
-    memory: '- SELF.md\n- The agent uses SELF.md for all memory',
-    social:
-      '- adapters/atproto/\n- modules/engagement.ts\n- Social interactions and responses',
-    tools: '- modules/tools.ts\n- modules/executor.ts\n- Tool definitions and execution',
-    understanding:
-      '- modules/openai.ts (AI Gateway)\n- System prompts\n- Context building',
-    other: '- Review recent changes\n- Check logs for errors\n- General debugging',
-  };
-
-  return hints[category];
-}
-
 //NOTE(self): Get all unresolved friction for display
+//NOTE(self): @returns Array of unresolved friction records
 export function getUnresolvedFriction(): FrictionRecord[] {
   return frictionState.frictions.filter((f) => !f.resolved);
 }
 
 //NOTE(self): Clean up old resolved friction
+//NOTE(self): @param olderThanDays - Days after which to prune resolved friction (default: 30)
+//NOTE(self): @returns Number of records cleaned up
 export function cleanupResolvedFriction(olderThanDays: number = 30): number {
   const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
   const before = frictionState.frictions.length;
@@ -297,4 +311,10 @@ export function cleanupResolvedFriction(olderThanDays: number = 30): number {
   });
 
   return before - frictionState.frictions.length;
+}
+
+//NOTE(self): Load friction state (in-memory)
+//NOTE(self): @returns The current friction state
+export function loadFrictionState(): FrictionState {
+  return frictionState;
 }

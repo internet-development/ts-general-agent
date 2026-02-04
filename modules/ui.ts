@@ -1,9 +1,6 @@
-/**
- * Terminal UI Module
- *
- * //NOTE(self): Uses scroll regions to anchor input box at bottom.
- * //NOTE(self): Output scrolls in upper region, input stays fixed below.
- */
+//NOTE(self): Terminal UI Module
+//NOTE(self): Uses scroll regions to anchor input box at bottom.
+//NOTE(self): Output scrolls in upper region, input stays fixed below.
 
 //NOTE(self): Ansi Escape Codes
 export const ANSI = {

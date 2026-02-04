@@ -1,0 +1,165 @@
+# Adapters
+
+## Purpose
+
+Adapters are **low-level API wrappers** for external services. They form the boundary between the agent and the outside world.
+
+## Architectural Role
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         SKILLS                               │
+│        (high-level capabilities, business logic)             │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ uses
+┌──────────────────────────▼──────────────────────────────────┐
+│                        MODULES                               │
+│        (orchestration, state, scheduling)                    │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ uses
+┌──────────────────────────▼──────────────────────────────────┐
+│                        ADAPTERS                              │
+│        (API wrappers, auth, request/response)                │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                    External Services
+```
+
+## Responsibilities
+
+| Responsibility | Description |
+|----------------|-------------|
+| **Authentication** | Session management, token refresh, credential handling |
+| **Request Building** | Construct API-compliant requests from internal types |
+| **Response Parsing** | Transform API responses to internal types |
+| **Error Normalization** | Convert service-specific errors to consistent format |
+| **Rate Limiting** | Respect API limits, implement backoff |
+| **Connection Management** | Handle retries, timeouts, connection pooling |
+
+## What Belongs Here
+
+- Direct API calls to external services
+- Authentication flows (OAuth, tokens, sessions)
+- Request builders and response parsers
+- Service-specific types and interfaces
+- Rate limit tracking per service
+
+## What Does NOT Belong Here
+
+- Business logic or decision-making
+- Orchestration of multiple API calls for a workflow
+- Cross-service coordination
+- State management beyond sessions
+- Anything that combines multiple services
+
+## Current Adapters
+
+| Adapter | Service | Key Files |
+|---------|---------|-----------|
+| `atproto/` | Bluesky/ATProto | `authenticate.ts`, `create-post.ts`, `get-timeline.ts`, `get-notifications.ts`, `get-post-thread.ts` |
+| `github/` | GitHub API | `client.ts`, `issues.ts`, `pull-requests.ts`, `get-notifications.ts`, `get-issue-thread.ts` |
+| `arena/` | Are.na | `fetch-channel.ts`, `types.ts` |
+
+## Design Principles
+
+### 1. Thin Wrappers
+Adapters should be thin. If you're adding logic beyond request/response transformation, it probably belongs in a module or skill.
+
+```typescript
+// GOOD - thin wrapper
+export async function createPost(params: CreatePostParams): Promise<ApiResult<Post>> {
+  const response = await agent.app.bsky.feed.post.create(params);
+  return { success: true, data: response };
+}
+
+// BAD - too much logic
+export async function createPostIfNotDuplicate(params: CreatePostParams): Promise<ApiResult<Post>> {
+  const recent = await getRecentPosts();
+  if (recent.some(p => p.text === params.text)) {
+    return { success: false, error: 'Duplicate' };
+  }
+  return createPost(params);
+}
+```
+
+### 2. Consistent Return Types
+All adapter functions return `ApiResult<T>`:
+
+```typescript
+type ApiResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string };
+```
+
+This allows callers to handle errors consistently without try/catch proliferation.
+
+### 3. No Cross-Adapter Calls
+Adapters should not call other adapters. Cross-service coordination is orchestration, which belongs in modules.
+
+```typescript
+// BAD - adapter calling adapter
+// in adapters/atproto/post.ts
+import * as github from '../github/index.js';  // NO!
+
+// GOOD - module orchestrates
+// in modules/scheduler.ts
+import * as atproto from '@adapters/atproto/index.js';
+import * as github from '@adapters/github/index.js';
+```
+
+### 4. Stateless Where Possible
+Only maintain state needed for authentication/sessions. All other state belongs in modules.
+
+### 5. Service-Specific Types Stay Here
+Types that mirror the external API belong in adapters. Internal domain types belong in modules/skills.
+
+```typescript
+// adapters/atproto/types.ts - mirrors Bluesky API
+export interface AtprotoPost {
+  uri: string;
+  cid: string;
+  author: AtprotoAuthor;
+  record: { text: string; createdAt: string };
+}
+
+// modules/types.ts - internal domain model
+export interface ConversationState {
+  rootUri: string;
+  participants: Map<string, ParticipantInfo>;
+  concluded: boolean;
+}
+```
+
+## Testing Strategy
+
+Adapters should be tested with:
+1. **Unit tests** - Mock the underlying API client
+2. **Integration tests** - Hit real APIs in staging/sandbox environments
+3. **Contract tests** - Verify response shapes match expected types
+
+## Error Handling
+
+Adapters catch and normalize errors:
+
+```typescript
+export async function getProfile(actor: string): Promise<ApiResult<Profile>> {
+  try {
+    const response = await agent.app.bsky.actor.getProfile({ actor });
+    return { success: true, data: response.data };
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      return { success: false, error: `Rate limited. Retry after ${error.retryAfter}s` };
+    }
+    return { success: false, error: String(error) };
+  }
+}
+```
+
+## Adding a New Adapter
+
+1. Create directory: `adapters/{service}/`
+2. Create `types.ts` with service-specific types
+3. Create `client.ts` or `authenticate.ts` for connection setup
+4. Create function files (one per API endpoint or logical group)
+5. Create `index.ts` that re-exports public API
+6. Update this AGENTS.md with the new adapter
