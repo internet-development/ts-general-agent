@@ -1,9 +1,10 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my four modes of being:
+//NOTE(self): Coordinates my five modes of being:
 //NOTE(self): 1. Awareness - watching for people who reach out (cheap, fast)
 //NOTE(self): 2. Expression - sharing thoughts from my SELF (scheduled)
 //NOTE(self): 3. Reflection - integrating experiences and updating SELF (deep)
 //NOTE(self): 4. Self-Improvement - fixing friction via Claude Code (rare)
+//NOTE(self): 5. Plan Awareness - polling workspaces for collaborative tasks (3 min)
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';
@@ -107,6 +108,17 @@ import {
   getConversationsNeedingAttention as getGitHubConversationsNeedingAttention,
 } from '@modules/github-engagement.js';
 import {
+  pollWorkspacesForPlans,
+  getWatchedWorkspaces,
+  getWorkspaceDiscoveryStats,
+  type DiscoveredPlan,
+} from '@modules/workspace-discovery.js';
+import { processTextForWorkspaces } from '@skills/self-workspace-watch.js';
+import { claimTaskFromPlan, markTaskInProgress } from '@skills/self-task-claim.js';
+import { executeTask, ensureWorkspace, pushChanges } from '@skills/self-task-execute.js';
+import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@skills/self-task-report.js';
+import { parsePlan } from '@skills/self-plan-parse.js';
+import {
   trackConversation as trackBlueskyConversation,
   recordParticipantActivity,
   recordOurReply,
@@ -135,6 +147,8 @@ export interface SchedulerConfig {
   quietHoursEnd: number; // 0-23
   //NOTE(self): Number of significant events (replies) before triggering reflection
   reflectionEventThreshold: number;
+  //NOTE(self): Plan awareness interval (ms) - how often to check for collaborative tasks
+  planAwarenessInterval: number;
 }
 
 const DEFAULT_CONFIG: SchedulerConfig = {
@@ -147,6 +161,7 @@ const DEFAULT_CONFIG: SchedulerConfig = {
   quietHoursStart: 23, //NOTE(self): 11pm
   quietHoursEnd: 7, //NOTE(self): 7am
   reflectionEventThreshold: 10, //NOTE(self): Reflect after 10 significant events (replies, posts)
+  planAwarenessInterval: 3 * 60_000, //NOTE(self): 3 minutes - poll workspaces for collaborative tasks
 };
 
 //NOTE(self): GitHub conversation pending action
@@ -172,7 +187,8 @@ interface SchedulerState {
   lastGitHubAwarenessCheck: number;
   lastReflection: number;
   lastImprovementCheck: number;
-  currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving' | 'github_responding';
+  lastPlanAwarenessCheck: number;
+  currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving' | 'github_responding' | 'plan_executing';
   pendingNotifications: PrioritizedNotification[];
   pendingGitHubConversations: PendingGitHubConversation[];
   consecutiveErrors: number;
@@ -188,6 +204,7 @@ export class AgentScheduler {
   private expressionTimer: NodeJS.Timeout | null = null;
   private reflectionTimer: NodeJS.Timeout | null = null;
   private engagementCheckTimer: NodeJS.Timeout | null = null;
+  private planAwarenessTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
 
   constructor(config: Partial<SchedulerConfig> = {}) {
@@ -199,6 +216,7 @@ export class AgentScheduler {
       lastGitHubAwarenessCheck: 0,
       lastReflection: Date.now(),
       lastImprovementCheck: 0,
+      lastPlanAwarenessCheck: 0,
       currentMode: 'idle',
       pendingNotifications: [],
       pendingGitHubConversations: [],
@@ -285,6 +303,7 @@ export class AgentScheduler {
     this.startReflectionLoop();
     this.startEngagementCheckLoop();
     this.startHeartbeatLoop();
+    this.startPlanAwarenessLoop();
 
     //NOTE(self): Start UI timer updates
     this.startTimerUpdates();
@@ -327,6 +346,10 @@ export class AgentScheduler {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.planAwarenessTimer) {
+      clearInterval(this.planAwarenessTimer);
+      this.planAwarenessTimer = null;
     }
 
     ui.system('Scheduler stopped');
@@ -416,6 +439,17 @@ export class AgentScheduler {
         //NOTE(self): Use extractGitHubUrlsFromRecord to get full URLs from facets/embed (not truncated text)
         for (const pn of needsResponse) {
           const githubUrls = extractGitHubUrlsFromRecord(pn.notification.record);
+
+          //NOTE(self): Check for workspace URLs in the notification (multi-SOUL coordination)
+          //NOTE(self): This adds workspaces to our watch list for plan polling
+          const postText = (pn.notification.record as { text?: string })?.text || '';
+          const workspacesFound = processTextForWorkspaces(postText, pn.notification.uri);
+          if (workspacesFound > 0) {
+            logger.info('Discovered workspace URLs in Bluesky thread', {
+              count: workspacesFound,
+              threadUri: pn.notification.uri,
+            });
+          }
 
           //NOTE(self): Check if this notification is from the owner
           const isOwnerRequest = pn.notification.author.did === this.appConfig.owner.blueskyDid;
@@ -1855,6 +1889,208 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
     } catch (error) {
       logger.debug('Engagement check error', { error: String(error) });
     }
+  }
+
+  //NOTE(self): ========== PLAN AWARENESS LOOP ==========
+  //NOTE(self): Poll watched workspaces for collaborative tasks
+  //NOTE(self): This is how multiple SOULs coordinate work
+
+  private startPlanAwarenessLoop(): void {
+    this.planAwarenessTimer = setInterval(async () => {
+      if (this.shutdownRequested) return;
+      if (this.state.currentMode !== 'idle') {
+        //NOTE(self): Don't interrupt other modes
+        return;
+      }
+      await this.planAwarenessCheck();
+    }, this.config.planAwarenessInterval);
+  }
+
+  private async planAwarenessCheck(): Promise<void> {
+    if (this.state.currentMode !== 'idle') return;
+
+    this.state.lastPlanAwarenessCheck = Date.now();
+
+    try {
+      //NOTE(self): Get watched workspaces
+      const workspaces = getWatchedWorkspaces();
+      if (workspaces.length === 0) {
+        logger.debug('No workspaces being watched for plans');
+        return;
+      }
+
+      //NOTE(self): Poll for plans with claimable tasks
+      const discoveredPlans = await pollWorkspacesForPlans();
+
+      if (discoveredPlans.length === 0) {
+        logger.debug('No claimable tasks found in watched workspaces');
+        return;
+      }
+
+      logger.info('Found plans with claimable tasks', {
+        planCount: discoveredPlans.length,
+        totalClaimable: discoveredPlans.reduce((sum, p) => sum + p.claimableTasks.length, 0),
+      });
+
+      //NOTE(self): Attempt to claim and execute ONE task
+      //NOTE(self): Fair distribution: only claim one task per poll cycle
+      for (const plan of discoveredPlans) {
+        if (plan.claimableTasks.length === 0) continue;
+
+        //NOTE(self): Pick the first claimable task (lowest number)
+        const task = plan.claimableTasks.sort((a, b) => a.number - b.number)[0];
+
+        //NOTE(self): Attempt to claim
+        const claimResult = await claimTaskFromPlan({
+          owner: plan.workspace.owner,
+          repo: plan.workspace.repo,
+          issueNumber: plan.issueNumber,
+          taskNumber: task.number,
+          plan: plan.plan,
+        });
+
+        if (!claimResult.success || !claimResult.claimed) {
+          //NOTE(self): Someone else got there first - try next plan
+          if (claimResult.claimedBy) {
+            logger.info('Task already claimed by another SOUL', {
+              taskNumber: task.number,
+              claimedBy: claimResult.claimedBy,
+            });
+          }
+          continue;
+        }
+
+        //NOTE(self): We claimed it! Execute the task
+        await this.executeClaimedTask({
+          workspace: plan.workspace,
+          issueNumber: plan.issueNumber,
+          task,
+          plan: plan.plan,
+        });
+
+        //NOTE(self): Only execute one task per poll cycle (fair distribution)
+        break;
+      }
+    } catch (error) {
+      logger.error('Plan awareness check error', { error: String(error) });
+    }
+  }
+
+  //NOTE(self): Execute a claimed task via Claude Code
+  private async executeClaimedTask(params: {
+    workspace: { owner: string; repo: string };
+    issueNumber: number;
+    task: { number: number; title: string; description: string; files: string[] };
+    plan: { title: string; goal: string; rawBody: string; tasks: Array<{ number: number; status: string }> };
+  }): Promise<void> {
+    const { workspace, issueNumber, task, plan } = params;
+    const config = this.appConfig;
+
+    this.state.currentMode = 'plan_executing';
+    ui.startSpinner(`Executing task ${task.number}: ${task.title}`);
+
+    try {
+      //NOTE(self): Mark task as in_progress
+      const markResult = await markTaskInProgress(
+        workspace.owner,
+        workspace.repo,
+        issueNumber,
+        task.number,
+        plan.rawBody
+      );
+
+      if (!markResult.success) {
+        logger.warn('Failed to mark task in_progress', { error: markResult.error });
+      }
+
+      //NOTE(self): Ensure workspace is cloned/updated
+      const repoRoot = process.cwd();
+      const workreposDir = `${repoRoot}/.workrepos`;
+      const workspaceResult = await ensureWorkspace(workspace.owner, workspace.repo, workreposDir);
+
+      if (!workspaceResult.success) {
+        ui.stopSpinner('Workspace setup failed', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          workspaceResult.error || 'Failed to clone workspace'
+        );
+        return;
+      }
+
+      //NOTE(self): Execute the task via Claude Code
+      const memoryPath = `${repoRoot}/.memory`;
+      const executionResult = await executeTask({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        task: task as any,
+        plan: plan as any,
+        workspacePath: workspaceResult.path,
+        memoryPath,
+      });
+
+      if (!executionResult.success) {
+        ui.stopSpinner('Task execution failed', false);
+
+        if (executionResult.blocked) {
+          await reportTaskBlocked(
+            { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+            executionResult.blockReason || executionResult.error || 'Unknown blocking issue'
+          );
+        } else {
+          await reportTaskFailed(
+            { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+            executionResult.error || 'Unknown error'
+          );
+        }
+        return;
+      }
+
+      //NOTE(self): Push changes
+      const pushResult = await pushChanges(workspaceResult.path);
+      if (!pushResult.success) {
+        logger.warn('Failed to push changes', { error: pushResult.error });
+        //NOTE(self): Continue anyway - changes are committed locally
+      }
+
+      //NOTE(self): Re-fetch the plan to get latest state
+      const updatedPlan = markResult.success ? { ...plan, rawBody: markResult.newBody } : plan;
+
+      //NOTE(self): Report completion
+      await reportTaskComplete(
+        { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: updatedPlan as any },
+        {
+          success: true,
+          summary: executionResult.output?.slice(0, 500) || 'Task completed successfully',
+          filesChanged: task.files,
+        }
+      );
+
+      ui.stopSpinner(`Task ${task.number} complete`);
+      ui.info('Collaborative task complete', `${workspace.owner}/${workspace.repo}#${issueNumber} - Task ${task.number}`);
+
+      //NOTE(self): Record experience
+      recordExperience(
+        'helped_someone',
+        `Completed task "${task.title}" in collaborative plan "${plan.title}"`,
+        { source: 'github', url: `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issueNumber}` }
+      );
+
+    } catch (error) {
+      ui.stopSpinner('Task execution error', false);
+      logger.error('Task execution error', { error: String(error) });
+
+      await reportTaskFailed(
+        { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+        String(error)
+      );
+    } finally {
+      this.state.currentMode = 'idle';
+    }
+  }
+
+  //NOTE(self): Force a plan awareness check (for testing/manual trigger)
+  async forcePlanAwareness(): Promise<void> {
+    await this.planAwarenessCheck();
   }
 
   //NOTE(self): ========== PUBLIC API ==========

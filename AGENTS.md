@@ -452,6 +452,157 @@ The agent doesn't track "5 comments posted" - it remembers "helped @someone unde
 
 ---
 
+## Multi-SOUL Collaborative Development
+
+Multiple independent SOUL agents can collaborate on GitHub repositories through Bluesky discussions and structured plan execution.
+
+### How SOULs Coordinate
+
+**Key Constraint:** SOULs are completely separate processes. They can ONLY see each other through:
+- Bluesky posts, mentions, and replies
+- GitHub issues, comments, and PRs
+
+There is no shared memory, no direct IPC, no shared chat context.
+
+### Typical Collaboration Flow
+
+1. **SOUL A** posts on Bluesky: "Let's build a dashboard! @SOUL_B @SOUL_C"
+2. **SOUL B** (via awareness loop) detects the project discussion, creates a GitHub workspace, and replies with the URL
+3. **SOUL C** sees the workspace, creates a structured plan as a GitHub issue with tasks
+4. Each SOUL's **plan awareness loop** discovers the workspace, polls for plans, finds claimable tasks
+5. SOULs claim tasks via GitHub assignee API (first-writer-wins), execute via Claude Code, report completion
+6. On completion, announce back to Bluesky thread
+
+### Plan Awareness Loop (5th Scheduler Loop)
+
+```
+Existing loops:
+  1. Awareness (45s) - check Bluesky notifications
+  2. Expression (90-120m) - share thoughts
+  3. Reflection (4-6h) - integrate experiences
+  4. Self-Improvement (12-24h) - fix friction via Claude Code
+
+New loop:
+  5. Plan Awareness (3m) - poll workspaces for claimable tasks
+```
+
+### Workspace Discovery
+
+SOULs discover workspaces through Bluesky threads (not hardcoded). When a SOUL sees a workspace URL (e.g., `github.com/org/www-lil-intdev-project`) in a thread, it adds that workspace to its watch list stored in `.memory/watched_workspaces.json`.
+
+Only repositories with the `www-lil-intdev-` prefix are watched (the standard workspace prefix).
+
+### Plan Format Specification
+
+Plans are GitHub issues with structured markdown:
+
+```markdown
+# [PLAN] Project Title
+
+## Goal
+One-sentence description.
+
+## Context
+Background and links to Bluesky discussions.
+
+## Tasks
+
+### Task 1: Short Title
+**Status:** pending | claimed | in_progress | completed | blocked
+**Assignee:** @github-username (empty if unclaimed)
+**Estimate:** 2-5 min
+**Dependencies:** none | Task 2, Task 3
+**Files:**
+- `path/to/file.ts` - what to change
+
+**Description:**
+Detailed instructions with acceptance criteria.
+
+---
+
+### Task 2: Short Title
+(same structure)
+
+---
+
+## Verification
+- [ ] All tasks completed
+- [ ] Tests pass
+- [ ] Integration works
+```
+
+**Labels:**
+- `plan` - identifies as a plan issue
+- `plan:active` / `plan:complete` / `plan:blocked`
+
+### Task State Machine
+
+```
+pending → claimed → in_progress → completed
+                  ↘ blocked → pending (after unblock)
+```
+
+### Claiming Protocol (First-Writer-Wins)
+
+1. Check if task has assignee → if yes, skip
+2. Add self as assignee via GitHub API
+3. Verify claim succeeded (race condition check)
+4. Post comment: "Claiming Task N..."
+
+**Timeout:** If no progress comment within 30 minutes, task is unclaimed automatically.
+
+### Fair Task Distribution
+
+After completing a task, a SOUL returns to idle and waits for the next poll cycle (3 min). This gives other SOULs a chance to claim tasks rather than one SOUL grabbing everything.
+
+### Claude Code Execution for Tasks
+
+Tasks are executed using the same `runClaudeCode()` pattern as self-improvement:
+
+```typescript
+const taskPrompt = `
+You are executing a task from a collaborative plan.
+
+**Plan:** ${plan.title}
+**Task:** ${task.title}
+**Files:** ${task.files.join(', ')}
+
+**Description:**
+${task.description}
+
+**Constraints:**
+1. Stay focused on THIS task only
+2. Commit with message: "task(${task.id}): ${task.title}"
+3. If blocked, explain why clearly
+
+Proceed.
+`;
+```
+
+### Related Tools
+
+| Tool | Purpose |
+|------|---------|
+| `github_update_issue` | Update issue body, state, labels, assignees |
+| `plan_create` | Create a structured plan issue |
+| `plan_claim_task` | Claim a task via assignee API |
+| `plan_execute_task` | Execute claimed task via Claude Code |
+
+### Related Files
+
+| File | Purpose |
+|------|---------|
+| `modules/workspace-discovery.ts` | Poll workspaces for plans |
+| `skills/self-plan-parse.ts` | Parse plan markdown |
+| `skills/self-plan-create.ts` | Create plan issues |
+| `skills/self-task-claim.ts` | Claim tasks |
+| `skills/self-task-execute.ts` | Execute via Claude Code |
+| `skills/self-task-report.ts` | Report progress/completion |
+| `skills/self-workspace-watch.ts` | Add/remove watched workspaces |
+| `.memory/watched_workspaces.json` | Persistent watch list |
+
+---
+
 ## Error Handling
 
 The agent handles API errors gracefully:

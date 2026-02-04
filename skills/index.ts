@@ -114,3 +114,62 @@ export {
   type EnrichedProfile,
   type SocialGraphData,
 } from '@skills/self-enrich-social-context.js';
+
+// Plan coordination skills (multi-SOUL collaboration)
+export {
+  parsePlan,
+  getClaimableTasks,
+  updateTaskInPlanBody,
+  areDependenciesMet,
+  type ParsedPlan,
+  type ParsedTask,
+  type TaskStatus,
+} from '@skills/self-plan-parse.js';
+
+export {
+  generatePlanMarkdown,
+  createPlan,
+  updatePlanBody,
+  updatePlanStatus,
+  closePlan,
+  type PlanDefinition,
+  type TaskDefinition,
+  type CreatePlanParams,
+  type CreatePlanResult,
+} from '@skills/self-plan-create.js';
+
+export {
+  claimTaskFromPlan,
+  releaseTaskClaim,
+  getNextClaimableTask,
+  markTaskInProgress,
+  type ClaimTaskParams,
+  type ClaimTaskResult,
+} from '@skills/self-task-claim.js';
+
+export {
+  buildTaskPrompt,
+  executeTask,
+  ensureWorkspace,
+  pushChanges,
+  type TaskExecutionParams,
+  type TaskExecutionResult,
+} from '@skills/self-task-execute.js';
+
+export {
+  reportTaskComplete,
+  reportTaskProgress,
+  reportTaskBlocked,
+  reportTaskFailed,
+  type ReportTaskParams,
+  type TaskCompletionReport,
+} from '@skills/self-task-report.js';
+
+export {
+  extractWorkspaceUrls,
+  processTextForWorkspaces,
+  isWorkspaceUrl,
+  listWatchedWorkspaces,
+  stopWatchingWorkspace,
+  ensureWatchingDefaultWorkspace,
+} from '@skills/self-workspace-watch.js';

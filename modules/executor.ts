@@ -33,6 +33,13 @@ import {
 import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
 import { runClaudeCode } from '@skills/self-improve-run.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
+import { updateIssue } from '@adapters/github/update-issue.js';
+import { createPlan, type PlanDefinition } from '@skills/self-plan-create.js';
+import { claimTaskFromPlan, markTaskInProgress } from '@skills/self-task-claim.js';
+import { executeTask, ensureWorkspace, pushChanges } from '@skills/self-task-execute.js';
+import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@skills/self-task-report.js';
+import { parsePlan } from '@skills/self-plan-parse.js';
+import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
 import {
   logPost,
@@ -1636,6 +1643,213 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           tool_use_id: call.id,
           content: `Error: Unknown platform "${platform}". Must be "bluesky" or "github".`,
           is_error: true,
+        };
+      }
+
+      //NOTE(self): Multi-SOUL Collaboration tools
+      case 'github_update_issue': {
+        const { owner, repo, issue_number, title, body, state, labels, assignees } = call.input as {
+          owner: string;
+          repo: string;
+          issue_number: number;
+          title?: string;
+          body?: string;
+          state?: 'open' | 'closed';
+          labels?: string[];
+          assignees?: string[];
+        };
+
+        const result = await updateIssue({
+          owner,
+          repo,
+          issue_number,
+          title,
+          body,
+          state,
+          labels,
+          assignees,
+        });
+
+        if (result.success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({ success: true, issue_number: result.data.number }),
+          };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'plan_create': {
+        const { owner, repo, title, goal, context, tasks, verification } = call.input as {
+          owner: string;
+          repo: string;
+          title: string;
+          goal: string;
+          context: string;
+          tasks: Array<{
+            title: string;
+            estimate?: string;
+            dependencies?: string[];
+            files?: string[];
+            description: string;
+          }>;
+          verification?: string[];
+        };
+
+        const planDefinition: PlanDefinition = {
+          title,
+          goal,
+          context,
+          tasks,
+          verification,
+        };
+
+        const result = await createPlan({ owner, repo, plan: planDefinition });
+
+        if (result.success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              issueNumber: result.issueNumber,
+              issueUrl: result.issueUrl,
+            }),
+          };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'plan_claim_task': {
+        const { owner, repo, issue_number, task_number } = call.input as {
+          owner: string;
+          repo: string;
+          issue_number: number;
+          task_number: number;
+        };
+
+        //NOTE(self): Fetch the issue to get the plan body
+        const issuesResult = await listIssues({ owner, repo, state: 'all' });
+        if (!issuesResult.success) {
+          return { tool_use_id: call.id, content: `Error fetching issue: ${issuesResult.error}`, is_error: true };
+        }
+
+        const issue = issuesResult.data.find(i => i.number === issue_number);
+        if (!issue) {
+          return { tool_use_id: call.id, content: `Error: Issue #${issue_number} not found`, is_error: true };
+        }
+
+        const plan = parsePlan(issue.body || '', issue.title);
+        if (!plan) {
+          return { tool_use_id: call.id, content: 'Error: Issue is not a valid plan', is_error: true };
+        }
+
+        const claimResult = await claimTaskFromPlan({
+          owner,
+          repo,
+          issueNumber: issue_number,
+          taskNumber: task_number,
+          plan,
+        });
+
+        if (!claimResult.success) {
+          return { tool_use_id: call.id, content: `Error: ${claimResult.error}`, is_error: true };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            claimed: claimResult.claimed,
+            claimedBy: claimResult.claimedBy,
+          }),
+        };
+      }
+
+      case 'plan_execute_task': {
+        const { owner, repo, issue_number, task_number } = call.input as {
+          owner: string;
+          repo: string;
+          issue_number: number;
+          task_number: number;
+        };
+
+        //NOTE(self): Fetch the issue to get the plan body
+        const issuesResult = await listIssues({ owner, repo, state: 'all' });
+        if (!issuesResult.success) {
+          return { tool_use_id: call.id, content: `Error fetching issue: ${issuesResult.error}`, is_error: true };
+        }
+
+        const issue = issuesResult.data.find(i => i.number === issue_number);
+        if (!issue) {
+          return { tool_use_id: call.id, content: `Error: Issue #${issue_number} not found`, is_error: true };
+        }
+
+        const plan = parsePlan(issue.body || '', issue.title);
+        if (!plan) {
+          return { tool_use_id: call.id, content: 'Error: Issue is not a valid plan', is_error: true };
+        }
+
+        const task = plan.tasks.find(t => t.number === task_number);
+        if (!task) {
+          return { tool_use_id: call.id, content: `Error: Task ${task_number} not found in plan`, is_error: true };
+        }
+
+        //NOTE(self): Ensure workspace is cloned
+        const workreposDir = path.join(repoRoot, '.workrepos');
+        const workspaceResult = await ensureWorkspace(owner, repo, workreposDir);
+
+        if (!workspaceResult.success) {
+          return { tool_use_id: call.id, content: `Error setting up workspace: ${workspaceResult.error}`, is_error: true };
+        }
+
+        //NOTE(self): Mark task as in_progress
+        await markTaskInProgress(owner, repo, issue_number, task_number, plan.rawBody);
+
+        //NOTE(self): Execute the task
+        const memoryPath = path.join(repoRoot, '.memory');
+        const executionResult = await executeTask({
+          owner,
+          repo,
+          task,
+          plan,
+          workspacePath: workspaceResult.path,
+          memoryPath,
+        });
+
+        if (!executionResult.success) {
+          if (executionResult.blocked) {
+            await reportTaskBlocked(
+              { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+              executionResult.blockReason || executionResult.error || 'Unknown'
+            );
+          } else {
+            await reportTaskFailed(
+              { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+              executionResult.error || 'Unknown error'
+            );
+          }
+          return { tool_use_id: call.id, content: `Error: ${executionResult.error}`, is_error: true };
+        }
+
+        //NOTE(self): Push changes
+        await pushChanges(workspaceResult.path);
+
+        //NOTE(self): Report completion
+        await reportTaskComplete(
+          { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+          {
+            success: true,
+            summary: executionResult.output?.slice(0, 500) || 'Task completed',
+            filesChanged: task.files,
+          }
+        );
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            output: executionResult.output?.slice(0, 1000),
+          }),
         };
       }
 
