@@ -161,6 +161,17 @@ export async function getReplyRefs(
   };
 }
 
+//NOTE(self): Circular conversation detection
+//NOTE(self): Detects "thank you chains" where both parties keep acknowledging
+//NOTE(self): each other with no new information being exchanged
+export interface CircularConversationAnalysis {
+  isCircular: boolean;
+  confidence: 'low' | 'medium' | 'high';
+  pattern: string;
+  recentMessages: number;
+  suggestionToExit: boolean;
+}
+
 //NOTE(self): Analyze a thread to help SOUL decide whether to continue engaging
 export interface ThreadAnalysis {
   depth: number;                    //NOTE(self): How deep in the thread this reply is
@@ -170,6 +181,131 @@ export interface ThreadAnalysis {
   isAgentLastReply: boolean;        //NOTE(self): Is the agent's reply the most recent?
   threadParticipants: string[];     //NOTE(self): Unique participants in the thread
   conversationHistory: string;      //NOTE(self): Formatted thread history for LLM context
+  circularConversation: CircularConversationAnalysis; //NOTE(self): Detection of thank-you-chain patterns
+}
+
+//NOTE(self): Detect circular conversation patterns (thank-you chains)
+//NOTE(self): These are conversations where both parties keep exchanging
+//NOTE(self): acknowledgments and restated plans without new information
+function detectCircularConversation(
+  parentChain: ThreadViewPost[]
+): CircularConversationAnalysis {
+  //NOTE(self): Default - no circular pattern detected
+  const noPattern: CircularConversationAnalysis = {
+    isCircular: false,
+    confidence: 'low',
+    pattern: 'none',
+    recentMessages: 0,
+    suggestionToExit: false,
+  };
+
+  //NOTE(self): Need at least 4 messages (2 full exchanges) to detect a pattern
+  if (parentChain.length < 4) {
+    return noPattern;
+  }
+
+  //NOTE(self): Look at the last 4 messages - 2 exchanges is enough to spot the loop
+  const recentMessages = parentChain.slice(-4);
+
+  //NOTE(self): Patterns that indicate circular conversation starters
+  const gratitudeStarters = [
+    /^(thanks|thank you|thx|ty|appreciate)/i,
+    /^(perfect|sounds good|sounds great|great)/i,
+    /^(awesome|wonderful|excellent|amazing)/i,
+    /^(cool|nice|alright|got it)/i,
+  ];
+
+  //NOTE(self): Patterns that indicate plan restatement (no new info)
+  const restatementPatterns = [
+    /i'll (wait|stand by|pause|hold)/i,
+    /once it's (up|live|ready)/i,
+    /when (it|you|the)/i,
+    /excited to/i,
+    /looking forward/i,
+    /no need to wait/i,
+    /will do/i,
+  ];
+
+  let gratitudeCount = 0;
+  let restatementCount = 0;
+  let alternatingPattern = true;
+  let lastAuthor: string | null = null;
+  const uniqueAuthors = new Set<string>();
+
+  for (const post of recentMessages) {
+    const text = post.post.record.text.trim();
+    const author = post.post.author.did;
+    uniqueAuthors.add(author);
+
+    //NOTE(self): Check for gratitude starter
+    const startsWithGratitude = gratitudeStarters.some(pattern => pattern.test(text));
+    if (startsWithGratitude) {
+      gratitudeCount++;
+    }
+
+    //NOTE(self): Check for plan restatement
+    const hasRestatement = restatementPatterns.some(pattern => pattern.test(text));
+    if (hasRestatement) {
+      restatementCount++;
+    }
+
+    //NOTE(self): Check for alternating pattern (same two people going back and forth)
+    if (lastAuthor !== null && lastAuthor === author) {
+      alternatingPattern = false;
+    }
+    lastAuthor = author;
+  }
+
+  //NOTE(self): Check for questions (indicates new information exchange)
+  const hasQuestions = recentMessages.some(msg => msg.post.record.text.includes('?'));
+
+  //NOTE(self): Check if it's just two participants going back and forth
+  const isTwoPartyExchange = uniqueAuthors.size === 2;
+
+  //NOTE(self): Calculate circular confidence
+  const gratitudeRatio = gratitudeCount / recentMessages.length;
+  const restatementRatio = restatementCount / recentMessages.length;
+
+  //NOTE(self): High confidence: mostly gratitude + restatement, two parties alternating, no questions
+  if (
+    gratitudeRatio >= 0.6 &&
+    restatementRatio >= 0.5 &&
+    alternatingPattern &&
+    isTwoPartyExchange &&
+    !hasQuestions
+  ) {
+    return {
+      isCircular: true,
+      confidence: 'high',
+      pattern: 'mutual-acknowledgment-loop',
+      recentMessages: recentMessages.length,
+      suggestionToExit: true,
+    };
+  }
+
+  //NOTE(self): Medium confidence: gratitude starters + alternating + no questions
+  if (gratitudeRatio >= 0.5 && alternatingPattern && isTwoPartyExchange && !hasQuestions) {
+    return {
+      isCircular: true,
+      confidence: 'medium',
+      pattern: 'potential-acknowledgment-loop',
+      recentMessages: recentMessages.length,
+      suggestionToExit: true,
+    };
+  }
+
+  //NOTE(self): Low confidence: some gratitude pattern but not definitive
+  if ((gratitudeRatio >= 0.5 || gratitudeCount >= 3) && !hasQuestions && isTwoPartyExchange) {
+    return {
+      isCircular: true,
+      confidence: 'low',
+      pattern: 'repetitive-acknowledgments',
+      recentMessages: recentMessages.length,
+      suggestionToExit: false,
+    };
+  }
+
+  return noPattern;
 }
 
 //NOTE(self): Analyze a thread for conversation management
@@ -249,6 +385,9 @@ export async function analyzeThread(
       countReplies(parentChain[0]);
     }
 
+    //NOTE(self): Detect circular conversation patterns (thank-you chains)
+    const circularConversation = detectCircularConversation(parentChain);
+
     return {
       success: true,
       data: {
@@ -259,6 +398,7 @@ export async function analyzeThread(
         isAgentLastReply,
         threadParticipants: Array.from(participants),
         conversationHistory: historyParts.join('\n\n'),
+        circularConversation,
       },
     };
   } catch (error) {

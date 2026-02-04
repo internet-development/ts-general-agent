@@ -945,6 +945,17 @@ Remember: quality over quantity. One helpful comment is better than many.`;
             if (ta.conversationHistory) {
               threadContext += `\n\n  **Full conversation:**\n${ta.conversationHistory.split('\n').map(line => `  ${line}`).join('\n')}`;
             }
+
+            //NOTE(self): Detect and warn about circular conversations (thank-you chains)
+            if (ta.circularConversation.isCircular) {
+              const cc = ta.circularConversation;
+              threadContext += `\n\n  🔄 **CIRCULAR CONVERSATION DETECTED** (${cc.confidence} confidence)`;
+              threadContext += `\n  Pattern: ${cc.pattern} - last ${cc.recentMessages} messages are mutual acknowledgments with no new information`;
+              if (cc.suggestionToExit) {
+                threadContext += `\n  ⚠️ **RECOMMENDED:** Use graceful_exit to end warmly - this conversation has run its course`;
+                threadContext += `\n  Continuing will just add more "thanks for the thanks" - neither party benefits`;
+              }
+            }
           }
         }
 
@@ -983,6 +994,7 @@ This is a public thread - everyone can see every message. Write like you're in a
 - It's becoming argumentative rather than productive
 - The other person seems satisfied or has moved on
 - Multiple participants have stopped engaging
+- **CIRCULAR CONVERSATION / THANK-YOU CHAIN:** Both parties are just exchanging acknowledgments and restating the same plans. Neither is adding new information. This is a sign to exit gracefully - continuing only creates spam.
 
 **HOW TO END A CONVERSATION - Never Ghost:**
 When a conversation has run its course, use \`graceful_exit\` - never just stop responding.
