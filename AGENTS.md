@@ -80,6 +80,9 @@ The following environment variables **MUST** be configured in `.env`:
 - `## Patterns I Notice` - observations about the world
 - `## Recent Learnings` - things the agent has discovered
 - `## What I Want to Explore` - future directions
+- `## Social Mechanics` - how the agent engages in conversations (thresholds, preferences)
+
+**Social Mechanics gives the agent true agency.** The agent can modify thresholds for when to wrap up conversations, what to skip, and how to exit gracefully. This isn't just philosophy—it's operational control over behavior.
 
 The `self-extract` module can parse any of these sections to generate expression prompts.
 
@@ -219,7 +222,19 @@ When the awareness loop detects people reaching out:
 
 ### Conversation Management
 
-The agent is given wisdom about **when to stop engaging**:
+The agent manages conversations through **Social Mechanics** defined in `SELF.md`. These are not hard rules—they're signals that tell the agent when to start gracefully wrapping up.
+
+**The philosophy:** When thresholds are reached, the agent tries to leave well—a warm closing, a genuine "this was great," or letting the other person have the last word. But if someone re-engages meaningfully, the agent can come back. The goal is to feel human, not robotic.
+
+**Default thresholds (configurable in SELF.md `## Social Mechanics`):**
+| Signal | Default | Meaning |
+|--------|---------|---------|
+| My replies in thread | 4 | Time to wrap up |
+| Thread depth | 12 | Conversation has had a good run |
+| Silence from others | 30m | They've likely moved on |
+| No response to me | 1h | They're not interested in continuing |
+
+**The SOUL has agency over these.** During reflection, the agent can adjust these thresholds based on what they learn about themselves and their relationships. An agent who thrives in long technical discussions might increase thread depth. One who values brevity might lower reply count.
 
 **Thread Analysis Provided:**
 - Thread depth (how many replies deep)
@@ -227,15 +242,13 @@ The agent is given wisdom about **when to stop engaging**:
 - Whether agent's reply is the most recent
 - Full conversation history
 
-**Guidance to End Conversations:**
-- If replied 3+ times → seriously consider if adding value
-- If thread is 10+ replies deep → conversation may have run its course
-- If last reply made the point → don't keep defending/elaborating
-- If other person is repeating themselves → they've said what they wanted
-- Graceful exit is better than beating a dead horse
-- Can always be re-engaged if @mentioned again
+**How to exit gracefully:**
+- "This was a great conversation" or "Thanks for sharing that"
+- Let them have the last word if they want it
+- Leave warmth, not silence
+- Can always be re-engaged if @mentioned again with something meaningful
 
-**Signs to Stop:**
+**Signs it's time to wrap up:**
 - Repeating yourself
 - Point has been made
 - Going in circles

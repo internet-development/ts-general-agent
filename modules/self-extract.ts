@@ -5,6 +5,30 @@
 
 import { readSelf } from '@modules/memory.js';
 
+//NOTE(self): My preferences for how I engage in conversations
+//NOTE(self): These are signals to wrap up gracefully, not hard stops
+export interface SocialMechanics {
+  //NOTE(self): After this many replies, I start looking for a graceful exit
+  maxRepliesBeforeExit: number;
+  //NOTE(self): When thread gets this deep, conversation has likely run its course
+  maxThreadDepth: number;
+  //NOTE(self): If others are silent this long, they've probably moved on (milliseconds)
+  silenceThresholdMs: number;
+  //NOTE(self): If no response to my reply this long, they're not interested (milliseconds)
+  noResponseTimeoutMs: number;
+  //NOTE(self): Whether to skip low-value acknowledgments
+  skipLowValueAcknowledgments: boolean;
+}
+
+//NOTE(self): Default social mechanics - can be overridden by SELF.md
+const DEFAULT_SOCIAL_MECHANICS: SocialMechanics = {
+  maxRepliesBeforeExit: 4,
+  maxThreadDepth: 12,
+  silenceThresholdMs: 30 * 60 * 1000, // 30 minutes
+  noResponseTimeoutMs: 60 * 60 * 1000, // 1 hour
+  skipLowValueAcknowledgments: true,
+};
+
 //NOTE(self): What I can extract from my SELF.md
 export interface SelfExtract {
   //NOTE(self): My name and opening identity statement
@@ -35,6 +59,9 @@ export interface SelfExtract {
   //NOTE(self): People I care about connecting with
   relationships: string[];
 
+  //NOTE(self): How I engage in conversations - my social preferences
+  socialMechanics: SocialMechanics;
+
   //NOTE(self): Raw sections for fallback
   rawSections: Record<string, string>;
 }
@@ -54,6 +81,7 @@ export function extractFromSelf(selfContent?: string): SelfExtract {
     explorations: [],
     currentFocus: [],
     relationships: [],
+    socialMechanics: { ...DEFAULT_SOCIAL_MECHANICS },
     rawSections: {},
   };
 
@@ -181,8 +209,121 @@ export function extractFromSelf(selfContent?: string): SelfExtract {
     extract.rawSections['relationships'] = relationshipsSection;
   }
 
+  //NOTE(self): Extract social mechanics - how I engage in conversations
+  const socialMechanicsSection = extractSection([
+    'Social Mechanics',
+    'Engagement Preferences',
+    'Conversation Preferences',
+  ]);
+  if (socialMechanicsSection) {
+    extract.rawSections['socialMechanics'] = socialMechanicsSection;
+    extract.socialMechanics = parseSocialMechanics(socialMechanicsSection);
+  }
+
   return extract;
 }
+
+//NOTE(self): Parse Social Mechanics section from SELF.md
+//NOTE(self): These values shape how I engage - I can modify them as I learn what works for me
+function parseSocialMechanics(sectionContent: string): SocialMechanics {
+  const mechanics = { ...DEFAULT_SOCIAL_MECHANICS };
+
+  //NOTE(self): Parse table rows - looking for | Signal | Threshold | format
+  const tableRows = sectionContent.split('\n').filter(line =>
+    line.startsWith('|') && !line.includes('---') && !line.toLowerCase().includes('signal')
+  );
+
+  for (const row of tableRows) {
+    const cells = row.split('|').map(c => c.trim()).filter(c => c.length > 0);
+    if (cells.length < 2) continue;
+
+    const signal = cells[0].toLowerCase();
+    const threshold = cells[1];
+
+    //NOTE(self): Parse "My replies in thread" or similar
+    if (signal.includes('replies') || signal.includes('reply count')) {
+      const num = parseInt(threshold, 10);
+      if (!isNaN(num) && num > 0) {
+        mechanics.maxRepliesBeforeExit = num;
+      }
+    }
+
+    //NOTE(self): Parse "Thread depth" or similar
+    if (signal.includes('depth') || signal.includes('thread')) {
+      const num = parseInt(threshold, 10);
+      if (!isNaN(num) && num > 0) {
+        mechanics.maxThreadDepth = num;
+      }
+    }
+
+    //NOTE(self): Parse "Silence from others" - expecting format like "30m" or "30 minutes"
+    if (signal.includes('silence')) {
+      const ms = parseTimeToMs(threshold);
+      if (ms > 0) {
+        mechanics.silenceThresholdMs = ms;
+      }
+    }
+
+    //NOTE(self): Parse "No response to me" - expecting format like "1h" or "60m"
+    if (signal.includes('response') || signal.includes('no response')) {
+      const ms = parseTimeToMs(threshold);
+      if (ms > 0) {
+        mechanics.noResponseTimeoutMs = ms;
+      }
+    }
+  }
+
+  //NOTE(self): Parse "skip low-value" preference from bullets
+  const skipPatterns = [
+    /skip.*low.?value/i,
+    /skip.*acknowledgment/i,
+    /skip entirely/i,
+  ];
+
+  for (const pattern of skipPatterns) {
+    if (pattern.test(sectionContent)) {
+      mechanics.skipLowValueAcknowledgments = true;
+      break;
+    }
+  }
+
+  return mechanics;
+}
+
+//NOTE(self): Parse time strings like "30m", "1h", "30 minutes", "1 hour" to milliseconds
+function parseTimeToMs(timeStr: string): number {
+  const str = timeStr.toLowerCase().trim();
+
+  //NOTE(self): Handle "30m" or "30min" format
+  const minMatch = str.match(/^(\d+)\s*m(?:in(?:utes?)?)?$/);
+  if (minMatch) {
+    return parseInt(minMatch[1], 10) * 60 * 1000;
+  }
+
+  //NOTE(self): Handle "1h" or "1hr" or "1 hour" format
+  const hourMatch = str.match(/^(\d+)\s*h(?:(?:ou)?rs?)?$/);
+  if (hourMatch) {
+    return parseInt(hourMatch[1], 10) * 60 * 60 * 1000;
+  }
+
+  //NOTE(self): Handle plain numbers (assume minutes)
+  const plainNum = parseInt(str, 10);
+  if (!isNaN(plainNum) && plainNum > 0) {
+    return plainNum * 60 * 1000;
+  }
+
+  return 0;
+}
+
+//NOTE(self): Convenience function to get just the social mechanics from SELF.md
+//NOTE(self): Other modules can use this to respect my conversation preferences
+export function getSocialMechanics(selfContent?: string): SocialMechanics {
+  const extract = extractFromSelf(selfContent);
+  return extract.socialMechanics;
+}
+
+//NOTE(self): Export default mechanics for modules that need fallback values
+export { DEFAULT_SOCIAL_MECHANICS };
 
 //NOTE(self): Check if my SELF.md has enough content for rich expression
 export function assessSelfRichness(extract: SelfExtract): {

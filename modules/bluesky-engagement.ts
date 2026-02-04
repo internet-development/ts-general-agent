@@ -2,10 +2,12 @@
 //NOTE(self): Track Bluesky conversation state including all participants
 //NOTE(self): Know when a conversation has run its course
 //NOTE(self): seenAt handled by engagement.ts, this focuses on thread-level tracking
+//NOTE(self): Social mechanics (thresholds) are read from SELF.md - I can adjust them as I learn
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { getSocialMechanics, type SocialMechanics } from '@modules/self-extract.js';
 
 //NOTE(self): Path to Bluesky conversation state
 const BLUESKY_CONVERSATIONS_PATH = '.memory/bluesky_conversations.json';
@@ -286,10 +288,15 @@ export interface ConversationAnalysis {
 export function analyzeConversation(
   rootUri: string,
   agentDid: string,
-  currentThreadDepth?: number
+  currentThreadDepth?: number,
+  mechanics?: SocialMechanics
 ): ConversationAnalysis {
   const state = loadState();
   const conversation = state.conversations[rootUri];
+
+  //NOTE(self): Get my social mechanics preferences from SELF.md
+  //NOTE(self): I can adjust these as I learn what works for me
+  const socialMechanics = mechanics || getSocialMechanics();
 
   //NOTE(self): Default analysis for unknown conversations
   if (!conversation) {
@@ -309,8 +316,9 @@ export function analyzeConversation(
   const otherParticipants = participants.filter(p => p.did !== agentDid);
 
   //NOTE(self): Check for disengagement - participants who were active but stopped
+  //NOTE(self): Using my silenceThresholdMs from SELF.md - I can adjust this if I want
   const now = Date.now();
-  const disengagementThreshold = 30 * 60 * 1000; //NOTE(self): 30 minutes of silence = disengaged
+  const disengagementThreshold = socialMechanics.silenceThresholdMs;
   let activeParticipants = 0;
   let disengagedParticipants = 0;
 
@@ -330,7 +338,9 @@ export function analyzeConversation(
   //NOTE(self): Save any disengagement updates
   saveState();
 
-  //NOTE(self): Determine if we should conclude
+  //NOTE(self): Determine if I should start wrapping up
+  //NOTE(self): These are signals to exit gracefully, not hard stops
+  //NOTE(self): If someone re-engages meaningfully, I can come back
   let shouldConclude = false;
   let reason = '';
 
@@ -347,29 +357,32 @@ export function analyzeConversation(
     };
   }
 
-  //NOTE(self): We've replied many times
-  if (conversation.ourReplyCount >= 4) {
+  //NOTE(self): I've replied enough times - time to look for a graceful exit
+  //NOTE(self): Using maxRepliesBeforeExit from my SELF.md Social Mechanics
+  if (conversation.ourReplyCount >= socialMechanics.maxRepliesBeforeExit) {
     shouldConclude = true;
-    reason = `You've replied ${conversation.ourReplyCount} times - consider if you're adding value`;
+    reason = `You've replied ${conversation.ourReplyCount} times - time to wrap up gracefully`;
   }
-  //NOTE(self): Thread is very deep
-  else if (depth >= 12) {
+  //NOTE(self): Thread is deep enough - conversation has had a good run
+  //NOTE(self): Using maxThreadDepth from my SELF.md Social Mechanics
+  else if (depth >= socialMechanics.maxThreadDepth) {
     shouldConclude = true;
-    reason = `Thread is ${depth} replies deep - conversation has likely run its course`;
+    reason = `Thread is ${depth} replies deep - start looking for a graceful exit`;
   }
   //NOTE(self): All other participants seem disengaged
   else if (otherParticipants.length > 0 && activeParticipants === 0 && disengagedParticipants > 0) {
     shouldConclude = true;
-    reason = 'Other participants seem to have disengaged';
+    reason = 'Other participants seem to have disengaged - respect that';
   }
-  //NOTE(self): We replied and no one has responded in a while
+  //NOTE(self): No response to my last reply - they're not interested in continuing
+  //NOTE(self): Using noResponseTimeoutMs from my SELF.md Social Mechanics
   else if (
     conversation.state === 'awaiting_response' &&
     conversation.ourLastReplyAt &&
-    now - new Date(conversation.ourLastReplyAt).getTime() > 60 * 60 * 1000 //NOTE(self): 1 hour
+    now - new Date(conversation.ourLastReplyAt).getTime() > socialMechanics.noResponseTimeoutMs
   ) {
     shouldConclude = true;
-    reason = 'No response to your last reply for over an hour';
+    reason = 'No response to your last reply - they\'ve moved on, that\'s okay';
   }
 
   return {
@@ -383,12 +396,14 @@ export function analyzeConversation(
   };
 }
 
-//NOTE(self): Check if we should respond to a notification in a tracked conversation
+//NOTE(self): Check if I should respond to a notification in a tracked conversation
+//NOTE(self): Uses my Social Mechanics from SELF.md to decide when to wrap up
 export function shouldRespondInConversation(
   rootUri: string,
-  agentDid: string
+  agentDid: string,
+  mechanics?: SocialMechanics
 ): { shouldRespond: boolean; reason: string } {
-  const analysis = analyzeConversation(rootUri, agentDid);
+  const analysis = analyzeConversation(rootUri, agentDid, undefined, mechanics);
 
   if (analysis.shouldConclude) {
     return { shouldRespond: false, reason: analysis.reason };
