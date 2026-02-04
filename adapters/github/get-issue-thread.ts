@@ -131,11 +131,19 @@ export interface ConversationAnalysis {
   context: string;
 }
 
+export interface AnalyzeConversationOptions {
+  //NOTE(self): If true, the owner explicitly shared this issue on Bluesky
+  //NOTE(self): Owner requests should be honored unless we'd post consecutive replies
+  isOwnerRequest?: boolean;
+}
+
 export function analyzeConversation(
   thread: IssueThread,
-  agentUsername: string
+  agentUsername: string,
+  options: AnalyzeConversationOptions = {}
 ): ConversationAnalysis {
   const { issue, comments, agentHasCommented, commentsAfterAgent, isOpen } = thread;
+  const { isOwnerRequest = false } = options;
 
   //NOTE(self): Closed issues generally don't need responses
   if (!isOpen) {
@@ -148,6 +156,7 @@ export function analyzeConversation(
   }
 
   //NOTE(self): Check if the last comment is from the agent (awaiting response from others)
+  //NOTE(self): This ALWAYS applies - even for owner requests, we don't want consecutive replies
   const lastComment = comments[comments.length - 1];
   if (lastComment && lastComment.user.login.toLowerCase() === agentUsername.toLowerCase()) {
     return {
@@ -155,6 +164,17 @@ export function analyzeConversation(
       reason: 'Awaiting response from others',
       urgency: 'none',
       context: `Your last comment is still the most recent. Wait for others to respond.`,
+    };
+  }
+
+  //NOTE(self): Owner explicitly shared this issue on Bluesky - honor the request
+  //NOTE(self): This comes after consecutive reply check so we don't spam
+  if (isOwnerRequest) {
+    return {
+      shouldRespond: true,
+      reason: 'Owner shared this issue on Bluesky',
+      urgency: 'high',
+      context: `Your owner explicitly shared this issue and wants you to engage.`,
     };
   }
 

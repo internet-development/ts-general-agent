@@ -207,6 +207,72 @@ When the awareness loop detects people reaching out:
 
 ---
 
+## GitHub Engagement Flow
+
+The agent monitors GitHub issues through two pathways:
+
+### 1. Bluesky → GitHub (Owner Priority)
+
+When someone mentions the agent on Bluesky with a GitHub issue URL:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ OWNER posts on Bluesky: "@agent check out this issue:       │
+│ https://github.com/owner/repo/issues/123"                   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Awareness loop detects mention                              │
+│ - Extracts GitHub URL from post text                        │
+│ - Checks if poster is OWNER (highest priority)              │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Fetch GitHub issue thread                                   │
+│ - Analyze conversation state                                │
+│ - Check for consecutive reply prevention                    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Decision Logic:                                             │
+│ 1. If issue is closed → don't respond                       │
+│ 2. If agent's comment is most recent → don't respond        │
+│    (prevents consecutive replies)                           │
+│ 3. If OWNER shared the URL → respond (highest priority)     │
+│ 4. If agent was @mentioned in issue → respond               │
+│ 5. Otherwise → don't respond                                │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ GitHub Response Mode                                        │
+│ - LLM reviews thread with SOUL + SELF.md context            │
+│ - Creates comment if appropriate                            │
+│ - Records engagement state                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Owner Priority:** When the owner shares a GitHub URL on Bluesky, the agent will engage even if not @mentioned in the GitHub issue, unless doing so would create consecutive replies.
+
+### 2. Direct GitHub Notifications
+
+The agent also monitors GitHub notifications directly:
+- Polls every 2 minutes
+- Filters to issues where agent is `participating`
+- Same consecutive-reply prevention applies
+
+### Consecutive Reply Prevention
+
+The agent **NEVER** posts consecutive comments on GitHub issues:
+- If agent's comment is the most recent → wait for others to respond
+- This applies even for owner requests
+- Ensures the agent doesn't spam threads
+
+---
+
 ## Error Handling
 
 The agent handles API errors gracefully:

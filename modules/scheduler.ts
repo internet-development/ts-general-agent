@@ -145,7 +145,11 @@ interface PendingGitHubConversation {
   type: 'issue' | 'pull';
   url: string;
   thread: IssueThread;
-  source: 'bluesky_url' | 'github_notification';
+  //NOTE(self): Source of how we found this conversation
+  //NOTE(self): bluesky_url_owner = owner explicitly shared this on Bluesky (highest priority)
+  //NOTE(self): bluesky_url = someone else shared this on Bluesky
+  //NOTE(self): github_notification = direct GitHub notification
+  source: 'bluesky_url_owner' | 'bluesky_url' | 'github_notification';
   reason: string;
 }
 
@@ -396,16 +400,21 @@ export class AgentScheduler {
           const text = (pn.notification.record as { text?: string })?.text || '';
           const githubUrls = extractGitHubUrls(text);
 
+          //NOTE(self): Check if this notification is from the owner
+          const isOwnerRequest = pn.notification.author.did === this.appConfig.owner.blueskyDid;
+
           for (const parsed of githubUrls) {
             if (parsed.type === 'issue' || parsed.type === 'pull') {
               //NOTE(self): Track this conversation and fetch thread
+              //NOTE(self): Use different source for owner vs non-owner requests
+              const source = isOwnerRequest ? 'bluesky_url_owner' : 'bluesky_url';
               trackConversation(
                 parsed.owner,
                 parsed.repo,
                 parsed.number,
                 parsed.type,
                 parsed.url,
-                'bluesky_url'
+                source
               );
 
               //NOTE(self): Fetch the issue thread to check if we should respond
@@ -415,7 +424,13 @@ export class AgentScheduler {
               );
 
               if (threadResult.success) {
-                const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username);
+                //NOTE(self): Pass owner context to analyzeConversation
+                //NOTE(self): Owner requests are honored unless we'd post consecutive replies
+                const analysis = analyzeConversation(
+                  threadResult.data,
+                  this.appConfig.github.username,
+                  { isOwnerRequest }
+                );
                 if (analysis.shouldRespond) {
                   this.state.pendingGitHubConversations.push({
                     owner: parsed.owner,
@@ -424,12 +439,13 @@ export class AgentScheduler {
                     type: parsed.type,
                     url: parsed.url,
                     thread: threadResult.data,
-                    source: 'bluesky_url',
+                    source,
                     reason: analysis.reason,
                   });
                   logger.info('Found GitHub URL in Bluesky notification', {
                     url: parsed.url,
                     reason: analysis.reason,
+                    isOwnerRequest,
                   });
                 }
               }
@@ -636,9 +652,16 @@ Available tools:
 - github_list_issues: Check other related issues if needed
 - github_get_repo: Get repository context if needed`;
 
+        //NOTE(self): Indicate if this was shared by the owner
+        const sourceDescription = pending.source === 'bluesky_url_owner'
+          ? '🔔 **YOUR OWNER** explicitly shared this on Bluesky - they want you to engage'
+          : pending.source === 'bluesky_url'
+          ? 'Someone shared this on Bluesky'
+          : 'Direct GitHub notification';
+
         const userMessage = `# GitHub Conversation Needs Your Attention
 
-**Source:** ${pending.source === 'bluesky_url' ? 'Someone shared this on Bluesky' : 'Direct GitHub notification'}
+**Source:** ${sourceDescription}
 **Reason:** ${pending.reason}
 
 ${threadContext}
