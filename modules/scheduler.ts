@@ -82,7 +82,7 @@ import {
 import { runClaudeCode } from '@skills/self-improvement.js';
 import * as github from '@adapters/github/index.js';
 import {
-  extractGitHubUrls,
+  extractGitHubUrlsFromRecord,
   type ParsedGitHubUrl,
 } from '@adapters/github/parse-url.js';
 import {
@@ -401,9 +401,9 @@ export class AgentScheduler {
 
         //NOTE(self): Extract GitHub URLs from Bluesky notifications
         //NOTE(self): These will be processed separately in GitHub response mode
+        //NOTE(self): Use extractGitHubUrlsFromRecord to get full URLs from facets/embed (not truncated text)
         for (const pn of needsResponse) {
-          const text = (pn.notification.record as { text?: string })?.text || '';
-          const githubUrls = extractGitHubUrls(text);
+          const githubUrls = extractGitHubUrlsFromRecord(pn.notification.record);
 
           //NOTE(self): Check if this notification is from the owner
           const isOwnerRequest = pn.notification.author.did === this.appConfig.owner.blueskyDid;

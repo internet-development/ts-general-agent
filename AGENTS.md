@@ -223,6 +223,13 @@ The agent monitors GitHub issues through two pathways:
 
 When someone mentions the agent on Bluesky with a GitHub issue URL:
 
+**URL Extraction:** Bluesky truncates long URLs in displayed text, but the full URL is preserved in:
+- `facets` (rich text link features) - checked first
+- `embed` (link preview card) - checked second
+- `text` (displayed text) - fallback only
+
+This means the agent correctly handles GitHub links even when they appear truncated in the post.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ OWNER posts on Bluesky: "@agent check out this issue:       │
