@@ -49,10 +49,10 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       //NOTE(self): Bluesky tools
       case 'bluesky_post': {
         const text = call.input.text as string;
-        //NOTE(self): Print what the agent is about to say so it's easy to follow
-        ui.social(`${config.agent.name}`, text);
         const result = await atproto.createPost({ text });
         if (result.success) {
+          //NOTE(self): Only show in chat after successful post - reduces perceived duplicates
+          ui.social(`${config.agent.name}`, text);
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
@@ -66,9 +66,6 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           image_mime_type?: string;
           alt_text: string;
         };
-
-        //NOTE(self): Print what the agent is about to say so it's easy to follow
-        ui.social(`${config.agent.name} (with image)`, text);
 
         //NOTE(self): Validate we have image data via either method
         if (!image_path && (!image_base64 || image_base64.length === 0)) {
@@ -155,6 +152,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         });
 
         if (postResult.success) {
+          //NOTE(self): Only show in chat after successful post - reduces perceived duplicates
+          ui.social(`${config.agent.name} (with image)`, text);
+
           //NOTE(self): Clean up the temp image file after successful post
           if (imageFilePath) {
             try {
@@ -236,9 +236,6 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         const replyRefs = replyRefsResult.data;
         const threadRootUri = replyRefs.root.uri;
 
-        //NOTE(self): Print what the agent is about to say so it's easy to follow
-        ui.social(`${config.agent.name} (reply)`, text);
-
         const result = await atproto.createPost({
           text,
           replyTo: {
@@ -249,6 +246,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           },
         });
         if (result.success) {
+          //NOTE(self): Only show in chat after successful reply - reduces perceived duplicates
+          ui.social(`${config.agent.name} (reply)`, text);
           //NOTE(self): Mark the interaction as responded in engagement tracking
           markInteractionResponded(post_uri, result.data.uri);
           //NOTE(self): Mark this post as replied to (prevents sibling spam, allows thread conversations)
@@ -1084,8 +1083,6 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         }
 
         //NOTE(self): Create post
-        ui.social(`${config.agent.name} (arena image)`, postText);
-
         const postParams: Parameters<typeof atproto.createPost>[0] = {
           text: postText,
           images: [{
@@ -1134,6 +1131,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             is_error: true,
           };
         }
+
+        //NOTE(self): Only show in chat after successful post - reduces perceived duplicates
+        ui.social(`${config.agent.name} (arena image)`, postText);
 
         //NOTE(self): Record posted block ID for dedupe
         postedIds.push(selectedBlock.id);
