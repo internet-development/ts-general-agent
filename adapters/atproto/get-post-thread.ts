@@ -167,6 +167,113 @@ export async function getReplyRefs(
   };
 }
 
+//NOTE(self): Analyze a thread to help SOUL decide whether to continue engaging
+export interface ThreadAnalysis {
+  depth: number;                    //NOTE(self): How deep in the thread this reply is
+  agentReplyCount: number;          //NOTE(self): How many times agent has replied in this thread
+  totalReplies: number;             //NOTE(self): Total replies in the thread
+  lastAgentReplyDepth: number | null; //NOTE(self): Depth of agent's last reply (null if never replied)
+  isAgentLastReply: boolean;        //NOTE(self): Is the agent's reply the most recent?
+  threadParticipants: string[];     //NOTE(self): Unique participants in the thread
+  conversationHistory: string;      //NOTE(self): Formatted thread history for LLM context
+}
+
+/**
+ * Analyze a thread for conversation management
+ * //NOTE(self): Helps SOUL decide whether to continue engaging or gracefully exit
+ */
+export async function analyzeThread(
+  postUri: string,
+  agentDid: string
+): Promise<AtprotoResult<ThreadAnalysis>> {
+  try {
+    //NOTE(self): Fetch thread with full depth to get complete picture
+    const threadResult = await getPostThread(postUri, 100, 100);
+
+    if (!threadResult.success) {
+      return { success: false, error: threadResult.error };
+    }
+
+    const thread = threadResult.data.thread;
+
+    //NOTE(self): Walk up the parent chain to find depth and build history
+    let depth = 0;
+    let agentReplyCount = 0;
+    let lastAgentReplyDepth: number | null = null;
+    const participants = new Set<string>();
+    const historyParts: string[] = [];
+
+    //NOTE(self): Build parent chain (oldest to newest)
+    const parentChain: ThreadViewPost[] = [];
+    let current: ThreadViewPost | undefined = thread;
+
+    while (current) {
+      parentChain.unshift(current);
+      participants.add(current.post.author.handle);
+
+      if (current.post.author.did === agentDid) {
+        agentReplyCount++;
+      }
+
+      //NOTE(self): Move to parent
+      if (current.parent && current.parent.$type === 'app.bsky.feed.defs#threadViewPost') {
+        current = current.parent as ThreadViewPost;
+      } else {
+        current = undefined;
+      }
+    }
+
+    depth = parentChain.length - 1; //NOTE(self): Root is depth 0
+
+    //NOTE(self): Build conversation history
+    for (let i = 0; i < parentChain.length; i++) {
+      const post = parentChain[i];
+      const isAgent = post.post.author.did === agentDid;
+      const prefix = isAgent ? '**[YOU]**' : `@${post.post.author.handle}`;
+      historyParts.push(`${prefix}: ${post.post.record.text}`);
+
+      if (isAgent) {
+        lastAgentReplyDepth = i;
+      }
+    }
+
+    //NOTE(self): Check if agent's reply is the most recent
+    const isAgentLastReply = parentChain.length > 0 &&
+      parentChain[parentChain.length - 1].post.author.did === agentDid;
+
+    //NOTE(self): Count total replies in thread (including nested)
+    let totalReplies = parentChain.length - 1; //NOTE(self): Exclude root
+    function countReplies(node: ThreadViewPost): void {
+      if (node.replies) {
+        for (const reply of node.replies) {
+          if (reply.$type === 'app.bsky.feed.defs#threadViewPost') {
+            totalReplies++;
+            countReplies(reply as ThreadViewPost);
+          }
+        }
+      }
+    }
+    if (parentChain.length > 0) {
+      countReplies(parentChain[0]);
+    }
+
+    return {
+      success: true,
+      data: {
+        depth,
+        agentReplyCount,
+        totalReplies,
+        lastAgentReplyDepth,
+        isAgentLastReply,
+        threadParticipants: Array.from(participants),
+        conversationHistory: historyParts.join('\n\n'),
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
 //NOTE(self): Check thread API to see if we've already replied - single source of truth
 //NOTE(self): No local tracking needed - the API IS the truth
 export async function hasAgentRepliedInThread(postUri: string): Promise<boolean> {

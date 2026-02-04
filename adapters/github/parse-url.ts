@@ -1,6 +1,8 @@
 //NOTE(self): Parse GitHub URLs to extract owner, repo, type, and number
 //NOTE(self): Handles issues, PRs, and discussions
 
+import { logger } from '@modules/logger.js';
+
 export interface ParsedGitHubUrl {
   owner: string;
   repo: string;
@@ -80,88 +82,125 @@ export function hasGitHubUrls(text: string): boolean {
   return GITHUB_URL_REGEX.test(text);
 }
 
-//NOTE(self): Bluesky post record structure for URL extraction
-interface BlueskyPostRecord {
-  text?: string;
-  //NOTE(self): Facets contain rich text features like links
-  facets?: Array<{
-    features: Array<{
-      $type: string;
-      uri?: string;  //NOTE(self): Full URI for link facets
-    }>;
-  }>;
-  //NOTE(self): Embed contains link preview cards
-  embed?: {
-    $type?: string;
-    external?: {
-      uri?: string;  //NOTE(self): Full URI for external embeds
-    };
-    //NOTE(self): Record embeds (quotes) may also have URIs
-    record?: {
-      uri?: string;
-    };
-  };
-}
-
 /**
  * Extract GitHub URLs from a Bluesky post record
- * //NOTE(self): Checks text, facets (rich text links), and embed (link preview)
- * //NOTE(self): This handles truncated URLs in text - facets/embed have the full URL
+ * //NOTE(self): CRITICAL - Bluesky truncates URLs in displayed text!
+ * //NOTE(self): A truncated URL like "issues/12..." might parse as issue #12 when it's really #123
+ * //NOTE(self):
+ * //NOTE(self): Priority order (STOP as soon as we find GitHub URLs):
+ * //NOTE(self): 1. facets (rich text link features) - AUTHORITATIVE, full URLs
+ * //NOTE(self): 2. embed.external.uri (link preview card) - AUTHORITATIVE, full URL
+ * //NOTE(self): 3. text (ONLY if nothing found above) - may be truncated, last resort
  */
 export function extractGitHubUrlsFromRecord(record: Record<string, unknown>): ParsedGitHubUrl[] {
-  const results: ParsedGitHubUrl[] = [];
   const seen = new Set<string>();
 
-  const post = record as BlueskyPostRecord;
-
-  //NOTE(self): Helper to add a parsed URL if valid and not duplicate
-  const addIfValid = (url: string) => {
+  //NOTE(self): Helper to parse and deduplicate
+  const parseAndAdd = (url: string, results: ParsedGitHubUrl[]): boolean => {
     const parsed = parseGitHubUrl(url);
     if (parsed) {
       const key = `${parsed.owner}/${parsed.repo}/${parsed.type}/${parsed.number}`;
       if (!seen.has(key)) {
         seen.add(key);
         results.push(parsed);
+        return true;
       }
     }
+    return false;
   };
 
-  //NOTE(self): 1. Check facets first - these have the full, untruncated URIs
+  //NOTE(self): Cast to access known Bluesky record fields
+  const post = record as {
+    text?: string;
+    facets?: Array<{
+      features?: Array<{
+        $type?: string;
+        uri?: string;
+      }>;
+    }>;
+    embed?: {
+      $type?: string;
+      external?: {
+        uri?: string;
+      };
+      media?: {
+        external?: {
+          uri?: string;
+        };
+      };
+    };
+  };
+
+  //NOTE(self): STEP 1 - Check facets (rich text links) - these are AUTHORITATIVE
+  const facetResults: ParsedGitHubUrl[] = [];
   if (post.facets && Array.isArray(post.facets)) {
     for (const facet of post.facets) {
       if (facet.features && Array.isArray(facet.features)) {
         for (const feature of facet.features) {
-          if (feature.$type === 'app.bsky.richtext.facet#link' && feature.uri) {
-            addIfValid(feature.uri);
+          if (feature.uri && feature.uri.includes('github.com')) {
+            parseAndAdd(feature.uri, facetResults);
           }
         }
       }
     }
   }
 
-  //NOTE(self): 2. Check embed - link preview cards have full URI
+  if (facetResults.length > 0) {
+    logger.info('Found GitHub URLs in facets (authoritative)', {
+      urls: facetResults.map(r => r.url),
+    });
+    return facetResults;
+  }
+
+  //NOTE(self): STEP 2 - Check embed (link preview card) - also AUTHORITATIVE
+  const embedResults: ParsedGitHubUrl[] = [];
   if (post.embed) {
-    //NOTE(self): External embed (link card)
-    if (post.embed.external?.uri) {
-      addIfValid(post.embed.external.uri);
+    //NOTE(self): Direct external embed
+    if (post.embed.external?.uri && post.embed.external.uri.includes('github.com')) {
+      parseAndAdd(post.embed.external.uri, embedResults);
     }
-    //NOTE(self): Record embed (quote) might reference a post with links
-    if (post.embed.record?.uri) {
-      //NOTE(self): This is a Bluesky URI, not a GitHub URL, so skip
+    //NOTE(self): Media with external (some embed types nest it)
+    if (post.embed.media?.external?.uri && post.embed.media.external.uri.includes('github.com')) {
+      parseAndAdd(post.embed.media.external.uri, embedResults);
     }
   }
 
-  //NOTE(self): 3. Check text as fallback (may have truncated URLs)
+  if (embedResults.length > 0) {
+    logger.info('Found GitHub URLs in embed (authoritative)', {
+      urls: embedResults.map(r => r.url),
+    });
+    return embedResults;
+  }
+
+  //NOTE(self): STEP 3 - Fall back to text ONLY if nothing found above
+  //NOTE(self): WARNING: Text URLs may be truncated! This is last resort.
+  const textResults: ParsedGitHubUrl[] = [];
   if (post.text) {
     const textUrls = extractGitHubUrls(post.text);
     for (const parsed of textUrls) {
       const key = `${parsed.owner}/${parsed.repo}/${parsed.type}/${parsed.number}`;
       if (!seen.has(key)) {
         seen.add(key);
-        results.push(parsed);
+        textResults.push(parsed);
       }
     }
   }
 
-  return results;
+  if (textResults.length > 0) {
+    logger.warn('Using GitHub URLs from text (may be truncated!)', {
+      urls: textResults.map(r => r.url),
+      warning: 'No URLs found in facets or embed - text URLs might be truncated',
+    });
+    return textResults;
+  }
+
+  //NOTE(self): Nothing found - log for debugging
+  const recordStr = JSON.stringify(record);
+  if (recordStr.toLowerCase().includes('github')) {
+    logger.debug('Record mentions "github" but no valid URLs extracted', {
+      recordPreview: recordStr.slice(0, 500),
+    });
+  }
+
+  return [];
 }

@@ -874,40 +874,83 @@ Review this conversation. Decide if you should respond:
         }
       }
 
-      //NOTE(self): Build focused response context with relationship history
-      const notificationsText = worthResponding
-        .slice(0, 5)
-        .map((pn) => {
-          const n = pn.notification;
-          const who = n.author.displayName || n.author.handle;
-          const record = n.record as { text?: string; reply?: { root?: { uri?: string; cid?: string } } };
-          const text = record?.text || '';
-          const check = shouldRespondTo(n, config.owner.blueskyDid);
+      //NOTE(self): Build focused response context with relationship history AND thread analysis
+      const session = getSession();
+      const agentDid = session?.did || '';
 
-          //NOTE(self): Extract thread root if this is a reply
-          const threadRoot = record?.reply?.root;
-          const threadInfo = threadRoot ? `\n  Thread root: ${threadRoot.uri}` : '';
+      const notificationParts: string[] = [];
+      for (const pn of worthResponding.slice(0, 5)) {
+        const n = pn.notification;
+        const who = n.author.displayName || n.author.handle;
+        const record = n.record as { text?: string; reply?: { root?: { uri?: string; cid?: string } } };
+        const text = record?.text || '';
+        const check = shouldRespondTo(n, config.owner.blueskyDid);
 
-          //NOTE(self): Include relationship context so SOUL knows history
-          let relationshipContext = '';
-          if (pn.relationship) {
-            const r = pn.relationship;
-            const interactionCount = r.interactions.length;
-            const respondedBefore = r.responded;
-            relationshipContext = `\n  History: ${interactionCount} interactions, sentiment: ${r.sentiment}${respondedBefore ? ', you\'ve replied to this person before' : ', awaiting your first response to this person'}`;
-          } else {
-            relationshipContext = '\n  History: New person - first interaction';
+        //NOTE(self): Include relationship context so SOUL knows history
+        let relationshipContext = '';
+        if (pn.relationship) {
+          const r = pn.relationship;
+          const interactionCount = r.interactions.length;
+          const respondedBefore = r.responded;
+          relationshipContext = `\n  History: ${interactionCount} interactions, sentiment: ${r.sentiment}${respondedBefore ? ', you\'ve replied to this person before' : ', awaiting your first response to this person'}`;
+        } else {
+          relationshipContext = '\n  History: New person - first interaction';
+        }
+
+        //NOTE(self): Fetch thread analysis for replies to understand conversation depth
+        let threadContext = '';
+        if (n.reason === 'reply' || n.reason === 'mention' || n.reason === 'quote') {
+          const threadAnalysis = await atproto.analyzeThread(n.uri, agentDid);
+          if (threadAnalysis.success) {
+            const ta = threadAnalysis.data;
+
+            //NOTE(self): Build thread context for SOUL's decision
+            threadContext = `\n  **Thread depth:** ${ta.depth} replies deep`;
+            threadContext += `\n  **Your replies in thread:** ${ta.agentReplyCount}`;
+            if (ta.isAgentLastReply) {
+              threadContext += `\n  ⚠️ **Your reply is the most recent** - consider if you need to respond again`;
+            }
+            if (ta.depth >= 10) {
+              threadContext += `\n  ⚠️ **Long thread (${ta.depth}+ replies)** - consider if this conversation should end`;
+            }
+            if (ta.agentReplyCount >= 3) {
+              threadContext += `\n  ⚠️ **You've replied ${ta.agentReplyCount} times** - have you made your point?`;
+            }
+
+            //NOTE(self): Include conversation history so SOUL has full context
+            if (ta.conversationHistory) {
+              threadContext += `\n\n  **Full conversation:**\n${ta.conversationHistory.split('\n').map(line => `  ${line}`).join('\n')}`;
+            }
           }
+        }
 
-          return `- **${n.reason}** from @${n.author.handle} (${who}) [${check.reason}]${relationshipContext}${threadInfo}\n  "${text}"\n  uri: ${n.uri}, cid: ${n.cid}`;
-        })
-        .join('\n\n');
+        notificationParts.push(`- **${n.reason}** from @${n.author.handle} (${who}) [${check.reason}]${relationshipContext}${threadContext}\n  **Latest message:** "${text}"\n  uri: ${n.uri}, cid: ${n.cid}`);
+      }
+      const notificationsText = notificationParts.join('\n\n---\n\n');
 
       const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Response Mode
 
 People have reached out. Your SELF.md contains your values and patterns for engaging authentically.
 
-**CRITICAL: Never reply to the same post twice. One reply per post, ever. If you've already replied, do not reply again.**
+**CRITICAL RULES:**
+1. Never reply to the same post twice. One reply per post, ever.
+2. If you've already replied, do not reply again.
+
+**CONVERSATION WISDOM - Knowing When to Stop:**
+- If you've replied 3+ times in a thread, seriously consider if you're adding value or just prolonging
+- If the thread is 10+ replies deep, the conversation may have run its course
+- If your last reply made your point, you don't need to keep defending or elaborating
+- If the other person is repeating themselves, they've said what they wanted to say
+- It's wise to let the other person have the last word sometimes
+- A graceful exit ("Thanks for the exchange!" or simply not replying) is better than beating a dead horse
+- You can always be re-engaged if someone @mentions you again
+
+**Signs a conversation should end:**
+- You're repeating yourself
+- The point has been made
+- You're going in circles
+- It's becoming argumentative rather than productive
+- The other person seems satisfied or has moved on
 
 Your handle: ${config.bluesky.username}
 Owner: ${config.owner.blueskyHandle}`;
@@ -918,7 +961,13 @@ ${notificationsText}
 
 ---
 
-Review each notification. Respond as yourself - your SELF.md guides when and how to engage.`;
+Review each notification and the full conversation context. Consider:
+1. Have you already made your point in this thread?
+2. Is the conversation going in circles?
+3. Would NOT replying be the wiser choice?
+
+It's OK to not reply if the conversation has run its course. Quality over quantity.
+Respond as yourself - your SELF.md guides when and how to engage.`;
 
       const messages: Message[] = [{ role: 'user', content: userMessage }];
 

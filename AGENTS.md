@@ -208,10 +208,38 @@ The agent uses a **four-loop scheduler architecture** for expressive operation:
 
 When the awareness loop detects people reaching out:
 - Loads full `SELF.md` for context
-- Processes all pending notifications
-- Responds to each with full attention
+- **Fetches full thread history** for each notification
+- Analyzes thread depth and agent's participation count
+- Processes notifications with full conversation context
 - Records interactions for relationship tracking
 - After 10+ significant events, triggers early reflection
+
+### Conversation Management
+
+The agent is given wisdom about **when to stop engaging**:
+
+**Thread Analysis Provided:**
+- Thread depth (how many replies deep)
+- Agent's reply count in the thread
+- Whether agent's reply is the most recent
+- Full conversation history
+
+**Guidance to End Conversations:**
+- If replied 3+ times → seriously consider if adding value
+- If thread is 10+ replies deep → conversation may have run its course
+- If last reply made the point → don't keep defending/elaborating
+- If other person is repeating themselves → they've said what they wanted
+- Graceful exit is better than beating a dead horse
+- Can always be re-engaged if @mentioned again
+
+**Signs to Stop:**
+- Repeating yourself
+- Point has been made
+- Going in circles
+- Becoming argumentative rather than productive
+- Other person seems satisfied or moved on
+
+The `chose_silence` experience type records when the SOUL wisely decides not to reply.
 
 ---
 

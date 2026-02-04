@@ -21,7 +21,8 @@ export type ExperienceType =
   | 'question_emerged'       // A conversation sparked a new question
   | 'connection_formed'      // A meaningful exchange with someone
   | 'owner_guidance'         // Owner provided direction or wisdom
-  | 'saw_perspective';       // Encountered a viewpoint that expanded my thinking
+  | 'saw_perspective'        // Encountered a viewpoint that expanded my thinking
+  | 'chose_silence';         // Wisely chose not to reply - knowing when to stop
 
 //NOTE(self): An experience is a moment that shapes identity
 export interface Experience {
@@ -153,6 +154,7 @@ export function getExperiencesForReflection(): {
     connection_formed: [],
     owner_guidance: [],
     saw_perspective: [],
+    chose_silence: [],
   };
 
   for (const exp of unintegrated) {
@@ -213,6 +215,12 @@ export function getExperiencesForReflection(): {
   if (byType.saw_perspective.length > 0) {
     summary += '**New perspectives encountered:**\n';
     summary += byType.saw_perspective.map(e => `- ${e.description}`).join('\n');
+    summary += '\n\n';
+  }
+
+  if (byType.chose_silence.length > 0) {
+    summary += '**Times I wisely chose not to reply:**\n';
+    summary += byType.chose_silence.map(e => `- ${e.description}`).join('\n');
     summary += '\n\n';
   }
 
