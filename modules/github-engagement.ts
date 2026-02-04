@@ -314,3 +314,32 @@ export function getGitHubEngagementStats(): GitHubEngagementStats {
     totalCommentsPosted: conversations.reduce((sum, c) => sum + c.ourCommentCount, 0),
   };
 }
+
+//NOTE(self): Get recent GitHub conversations for reflection
+//NOTE(self): Returns conversations that were active in the last N hours
+export interface RecentGitHubConversation {
+  url: string;
+  repo: string;
+  state: ConversationRecord['state'];
+  ourCommentCount: number;
+  source: string;
+  lastChecked: string;
+}
+
+export function getRecentGitHubConversations(hoursAgo: number = 24): RecentGitHubConversation[] {
+  const state = loadState();
+  const cutoff = Date.now() - (hoursAgo * 60 * 60 * 1000);
+
+  return Object.values(state.conversations)
+    .filter(c => new Date(c.lastChecked).getTime() > cutoff)
+    .sort((a, b) => new Date(b.lastChecked).getTime() - new Date(a.lastChecked).getTime())
+    .slice(0, 10) //NOTE(self): Limit to 10 most recent for reflection
+    .map(c => ({
+      url: c.url,
+      repo: `${c.owner}/${c.repo}`,
+      state: c.state,
+      ourCommentCount: c.ourCommentCount,
+      source: c.source,
+      lastChecked: c.lastChecked,
+    }));
+}

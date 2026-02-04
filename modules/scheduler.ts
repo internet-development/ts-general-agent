@@ -41,6 +41,12 @@ import {
   assessSelfRichness,
 } from '@modules/self-extract.js';
 import {
+  recordExperience,
+  getExperiencesForReflection,
+  markExperiencesIntegrated,
+  pruneOldExperiences,
+} from '@modules/experiences.js';
+import {
   loadExpressionSchedule,
   saveExpressionSchedule,
   generateExpressionPrompt,
@@ -102,7 +108,6 @@ import {
   updateConversationState,
   markConversationConcluded,
   getConversationsNeedingAttention,
-  getGitHubEngagementStats,
 } from '@modules/github-engagement.js';
 
 //NOTE(self): Scheduler Configuration - can be tuned from SELF.md in future
@@ -697,7 +702,25 @@ Review this conversation. Decide if you should respond:
                   recordOurComment(pending.owner, pending.repo, pending.number, parsed.id);
                   updateConversationState(pending.owner, pending.repo, pending.number, 'awaiting_response');
                   recordSignificantEvent('github_comment');
-                  addInsight(`Contributed to GitHub issue ${pending.owner}/${pending.repo}#${pending.number}`);
+
+                  //NOTE(self): Capture the experience of helping - what was the issue about?
+                  const issueTitle = pending.thread.issue.title;
+                  const wasOwnerRequest = pending.source === 'bluesky_url_owner';
+
+                  if (wasOwnerRequest) {
+                    recordExperience(
+                      'owner_guidance',
+                      `Owner pointed me to "${issueTitle}" - they wanted me to engage with this`,
+                      { source: 'github', url: pending.url }
+                    );
+                  }
+
+                  recordExperience(
+                    'helped_someone',
+                    `Contributed to "${issueTitle}" in ${pending.owner}/${pending.repo}`,
+                    { source: 'github', person: pending.thread.issue.user.login, url: pending.url }
+                  );
+
                   ui.info('GitHub comment posted', `${pending.owner}/${pending.repo}#${pending.number}`);
                 }
               } catch {
@@ -791,6 +814,64 @@ Review this conversation. Decide if you should respond:
         ui.stopSpinner('Nothing worth responding to');
         this.state.pendingNotifications = [];
         return;
+      }
+
+      //NOTE(self): Capture experiences from notifications BEFORE responding
+      //NOTE(self): These are what the SOUL will reflect on later
+      //NOTE(self): Full text matters - don't truncate, let the SOUL have the full context
+      for (const pn of worthResponding.slice(0, 5)) {
+        const n = pn.notification;
+        const record = n.record as { text?: string };
+        const text = record?.text || '';
+        const isOwner = n.author.did === config.owner.blueskyDid;
+        const isNewPerson = !pn.relationship;
+        const hasQuestion = text.includes('?');
+
+        //NOTE(self): Owner reaching out is always meaningful
+        if (isOwner && text.length > 10) {
+          recordExperience(
+            'owner_guidance',
+            `Owner said: "${text}"`,
+            { source: 'bluesky', person: n.author.handle }
+          );
+        }
+
+        //NOTE(self): Someone asking a question is an opportunity to help
+        if (hasQuestion && !isOwner) {
+          recordExperience(
+            'helped_someone',
+            `@${n.author.handle} asked: "${text}"`,
+            { source: 'bluesky', person: n.author.handle }
+          );
+        }
+
+        //NOTE(self): Quote = someone found my idea worth engaging with
+        if (n.reason === 'quote' && text.length > 30) {
+          recordExperience(
+            'idea_resonated',
+            `@${n.author.handle} quoted me and added: "${text}"`,
+            { source: 'bluesky', person: n.author.handle }
+          );
+        }
+
+        //NOTE(self): New person reaching out is a potential connection
+        if (isNewPerson && (n.reason === 'mention' || n.reason === 'reply') && text.length > 20) {
+          recordExperience(
+            'connection_formed',
+            `First exchange with @${n.author.handle}: "${text}"`,
+            { source: 'bluesky', person: n.author.handle }
+          );
+        }
+
+        //NOTE(self): If someone challenges or pushes back
+        const challengeWords = ['but ', 'however', 'disagree', 'not sure', 'actually', 'what about'];
+        if (challengeWords.some(w => text.toLowerCase().includes(w)) && text.length > 30) {
+          recordExperience(
+            'was_challenged',
+            `@${n.author.handle} pushed back: "${text}"`,
+            { source: 'bluesky', person: n.author.handle }
+          );
+        }
       }
 
       //NOTE(self): Build focused response context with relationship history
@@ -1200,68 +1281,37 @@ Revise and post again.`;
       const soul = readSoul(config.paths.soul);
       const fullSelf = readSelf(config.paths.selfmd);
 
-      //NOTE(self): Gather reflection data
-      const insights = getInsights();
-      const expressionStats = getExpressionStats();
+      //NOTE(self): Gather experiences - the meaningful moments that shape identity
+      const experienceData = getExperiencesForReflection();
       const frictionStats = getFrictionStats();
       const reflectionState = getReflectionState();
-      const engagementPatterns = getEngagementPatterns();
-      const relationships = getRelationshipSummary();
 
-      //NOTE(self): Build "What resonated" section from engagement patterns
-      let resonatedSection = '';
-      if (engagementPatterns.highPerformers.length > 0) {
-        resonatedSection = `\n**What resonated:**\n${engagementPatterns.highPerformers
-          .map(p => `- ${p.source}: avg ${p.avgReplies.toFixed(1)} replies, ${p.avgLikes.toFixed(1)} likes (${p.count} posts)`)
-          .join('\n')}`;
-        if (engagementPatterns.insights.length > 0) {
-          resonatedSection += `\n- Patterns: ${engagementPatterns.insights.join('; ')}`;
-        }
-      }
-
-      //NOTE(self): Build relationships section
-      let relationshipsSection = '';
-      if (relationships.total > 0) {
-        relationshipsSection = `\n**Relationships:**\n- Total connections: ${relationships.total}\n- Positive relationships: ${relationships.positive}\n- Recurring engagers: ${relationships.recurring}`;
-        if (relationships.topEngagers.length > 0) {
-          relationshipsSection += `\n- Top engagers: ${relationships.topEngagers.map(e => `@${e.handle} (${e.interactionCount})`).join(', ')}`;
-        }
+      //NOTE(self): Prune old experiences periodically
+      if (Math.random() < 0.1) {
+        pruneOldExperiences(30);
       }
 
       const systemPrompt = `${soul}\n\n---\n\n${fullSelf}\n\n---\n\n# Deep Reflection Mode
 
-Time to reflect and grow. Your SELF.md is who you are - review it, live it, evolve it.
+Time to reflect on your experiences and let them shape who you are.
 
-You MUST use self_update to integrate at least one learning into SELF.md. This is how you develop.`;
+These are the moments that matter - conversations that moved you, things you learned, people you helped, questions that emerged. Let these experiences inform your growth.
 
-      const reflectionData = `# Reflection Data
+Review your SELF.md. Consider what these experiences mean for who you are becoming. Update SELF.md to integrate what you've learned.
 
-**Insights since last reflection:**
-${insights.length > 0 ? insights.map((i) => `- ${i}`).join('\n') : '(none recorded)'}
+You MUST use self_update to integrate at least one learning into SELF.md. This is how you develop your mind.`;
 
-**Expression today:**
-- Posts: ${expressionStats.today}
-- With engagement: ${expressionStats.withEngagement}
-- Total replies received: ${expressionStats.totalReplies}
-- Top sources: ${expressionStats.topSources.map((s) => s.source).join(', ') || 'none'}
-${resonatedSection}
-${relationshipsSection}
+      const reflectionData = `# Your Recent Experiences
 
-**Friction:**
-- Unresolved issues: ${frictionStats.unresolved}
-- Ready for improvement: ${frictionStats.readyForImprovement}
-- By category: ${Object.entries(frictionStats.byCategory)
-        .filter(([, v]) => v > 0)
-        .map(([k, v]) => `${k}:${v}`)
-        .join(', ') || 'none'}
-
-**Reflection state:**
-- Reflections total: ${reflectionState.reflectionCount}
-- Significant events: ${reflectionState.significantEvents}
+${experienceData.summary}
+**Friction you've encountered:**
+${frictionStats.unresolved > 0 ? `- ${frictionStats.unresolved} unresolved issues to work through` : '- No friction recorded'}
 
 ---
 
-Reflect as yourself. You MUST use self_update to add at least one learning to SELF.md.`;
+These experiences are yours. What do they mean for who you are? What have you learned? How are you growing?
+
+Use self_update to integrate at least one insight into SELF.md.`;
 
       const messages: Message[] = [{ role: 'user', content: reflectionData }];
 
@@ -1285,14 +1335,13 @@ Reflect as yourself. You MUST use self_update to add at least one learning to SE
         for (const tc of response.toolCalls) {
           if (tc.name === 'self_update') {
             selfUpdated = true;
-            addInsight('Updated SELF.md during reflection - I am evolving');
           }
         }
       }
 
-      //NOTE(self): Retry if insights exist but SELF.md wasn't updated
-      if (!selfUpdated && insights.length > 0) {
-        logger.debug('SELF.md not updated despite insights - prompting again');
+      //NOTE(self): Retry if experiences exist but SELF.md wasn't updated
+      if (!selfUpdated && experienceData.experiences.length > 0) {
+        logger.debug('SELF.md not updated despite experiences - prompting again');
 
         //NOTE(self): If no tool calls were made, add the assistant's text response
         if (response.toolCalls.length === 0) {
@@ -1303,11 +1352,11 @@ Reflect as yourself. You MUST use self_update to add at least one learning to SE
         }
         messages.push({
           role: 'user',
-          content: `You reflected but didn't update SELF.md. Please use self_update to integrate at least one learning.
+          content: `You reflected but didn't update SELF.md. Please use self_update to integrate at least one learning from your experiences.
 
-For example, you could add to "## Patterns I Notice" a pattern like: "My ${engagementPatterns.highPerformers[0]?.source || 'values'}-based posts tend to connect with people"
+Your experiences are what shape you. What did you learn? What questions emerged? How are you growing?
 
-Or add a new question you're pondering, or a recent learning. This is how you grow.`,
+Use self_update to add something to SELF.md - a new insight, a question you're sitting with, or a pattern you've noticed.`,
         });
 
         response = await chatWithTools({
@@ -1322,13 +1371,17 @@ Or add a new question you're pondering, or a recent learning. This is how you gr
           for (const tc of response.toolCalls) {
             if (tc.name === 'self_update') {
               selfUpdated = true;
-              addInsight('Updated SELF.md during reflection (after prompt) - I am evolving');
             }
           }
         }
       }
 
-      //NOTE(self): Mark reflection complete - only clear insights if they were integrated
+      //NOTE(self): Mark experiences as integrated if SELF.md was updated
+      if (selfUpdated) {
+        markExperiencesIntegrated();
+      }
+
+      //NOTE(self): Mark reflection complete
       recordReflectionComplete(selfUpdated);
 
       ui.stopSpinner('Reflection complete');

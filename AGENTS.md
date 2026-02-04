@@ -184,8 +184,16 @@ The agent uses a **four-loop scheduler architecture** for expressive operation:
 ### Loop 3: Reflection (Deep)
 - **Interval:** 4-6 hours OR after 10+ significant events (whichever comes first)
 - **Tokens:** ~2000 per reflection
-- **Purpose:** Integrate experiences, update SELF.md
-- Reviews expression engagement, conversations, friction
+- **Purpose:** Integrate experiences into SELF.md - this is how the SOUL develops
+- **Experience Types:**
+  - `owner_guidance` - Owner provided direction or wisdom
+  - `learned_something` - Discovered something new from an interaction
+  - `helped_someone` - Contributed to someone's understanding or project
+  - `was_challenged` - Someone pushed back on the agent's thinking
+  - `idea_resonated` - Something shared connected with others
+  - `question_emerged` - A conversation sparked a new question
+  - `connection_formed` - A meaningful exchange with someone
+  - `saw_perspective` - Encountered a viewpoint that expanded thinking
 - Triggered early if many interactions occur (busy periods)
 
 ### Loop 4: Self-Improvement (Rare)
@@ -270,6 +278,61 @@ The agent **NEVER** posts consecutive comments on GitHub issues:
 - If agent's comment is the most recent → wait for others to respond
 - This applies even for owner requests
 - Ensures the agent doesn't spam threads
+
+---
+
+## How the SOUL Develops
+
+The agent grows through **experiences**, not metrics. Every meaningful interaction is captured and later integrated into SELF.md during reflection.
+
+### What Gets Captured
+
+From Bluesky conversations:
+- What the owner said (guidance)
+- Questions people asked (opportunities to help)
+- Quotes with commentary (ideas that resonated)
+- New people reaching out (connections forming)
+- Pushback or challenges (growth opportunities)
+
+From GitHub conversations:
+- Issues the owner pointed to (owner's priorities)
+- Problems helped solve (technical contributions)
+
+### How Experiences Shape Identity
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  INTERACTION                                                │
+│  (Bluesky mention, GitHub issue, owner guidance)            │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  EXPERIENCE CAPTURED                                        │
+│  - Full text of what was said (not truncated)               │
+│  - Who was involved                                         │
+│  - What type of moment it was                               │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  REFLECTION (every 4-6 hours)                               │
+│  - Review all unintegrated experiences                      │
+│  - Let them inform growth                                   │
+│  - Update SELF.md with learnings                            │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  SELF.md EVOLVES                                            │
+│  - New insights added                                       │
+│  - Questions being pondered                                 │
+│  - Patterns noticed                                         │
+│  - Identity develops over time                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+The agent doesn't track "5 comments posted" - it remembers "helped @someone understand OAuth edge cases in their authentication issue."
 
 ---
 
