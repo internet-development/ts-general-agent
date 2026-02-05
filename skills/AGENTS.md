@@ -62,7 +62,9 @@ All skill files use a **flat structure** with semantic prefixes:
 | `self-capture-` | Capture | Recording data (experiences, etc.) |
 | `self-enrich-` | Enrichment | Adding context (social graph, etc.) |
 | `self-manage-` | Management | Managing state (attribution, etc.) |
-| `self-validate-` | Validation | Checking/validating content |
+| `self-plan-` | Planning | Multi-SOUL plan creation and parsing |
+| `self-task-` | Task execution | Claiming and executing tasks from plans |
+| `self-workspace-` | Workspaces | Collaborative workspace discovery and management |
 
 ## Current Skills
 
@@ -135,10 +137,23 @@ All skill files use a **flat structure** with semantic prefixes:
 |-------|---------|---------------|
 | `manage-attribution` | Track and manage post attribution | `modules/attribution.ts` |
 
-### Validation (`self-validate-*`)
-| Skill | Purpose | Migrated From |
-|-------|---------|---------------|
-| `validate-invitation` | Validate posts have invitations | `modules/expression.ts` (partial) |
+### Plan Management (`self-plan-*`)
+| Skill | Purpose |
+|-------|---------|
+| `plan-create` | Create structured plan issues with tasks, status, and verification steps |
+| `plan-parse` | Parse plan markdown from GitHub issues into structured data |
+
+### Task Execution (`self-task-*`)
+| Skill | Purpose |
+|-------|---------|
+| `task-claim` | Claim tasks via GitHub assignee API (first-writer-wins protocol) |
+| `task-execute` | Execute claimed tasks via Claude Code |
+| `task-report` | Report task progress, completion, blocked status, or failure |
+
+### Workspace Management (`self-workspace-*`)
+| Skill | Purpose |
+|-------|---------|
+| `workspace-watch` | Add/remove workspaces from watch list, extract workspace URLs from text |
 
 ## Design Principles
 

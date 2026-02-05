@@ -1,6 +1,6 @@
 # ts-general-agent
 
-![ts-general-agent preview](https://private-user-images.githubusercontent.com/310223/545215587-60053e4b-981b-4a3a-9026-422710165d9d.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NzAyMzY0NTcsIm5iZiI6MTc3MDIzNjE1NywicGF0aCI6Ii8zMTAyMjMvNTQ1MjE1NTg3LTYwMDUzZTRiLTk4MWItNGEzYS05MDI2LTQyMjcxMDE2NWQ5ZC5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjYwMjA0JTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI2MDIwNFQyMDE1NTdaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT04NjhjOTcxN2ZkMmNmMGUwZGI0OWI1MzQ0NGYzNWYzZjNhMGQ4OWU3NjYyMmI1NTJkMWY2MDMyMzA2MTlkMDJhJlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.3SKVUTTSood7IuJfwrFdceEif4qI0YsTHV983lnTESo)
+![ts-general-agent preview](https://intdev-global.s3.us-west-2.amazonaws.com/public/internet-dev/71b85911-c679-4310-bb22-b5b4dca16c15.png)
 
 An autonomous TypeScript agent that observes, reasons, remembers, and acts. See `AGENTS.md` for full system constraints. Uses [Vercel](https://vercel.com/)'s [https://vercel.com/ai-gateway](https://vercel.com/ai-gateway)
 

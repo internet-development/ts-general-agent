@@ -56,8 +56,8 @@ Adapters are **low-level API wrappers** for external services. They form the bou
 
 | Adapter | Service | Key Files |
 |---------|---------|-----------|
-| `atproto/` | Bluesky/ATProto | `authenticate.ts`, `create-post.ts`, `get-timeline.ts`, `get-notifications.ts`, `get-post-thread.ts` |
-| `github/` | GitHub API | `client.ts`, `issues.ts`, `pull-requests.ts`, `get-notifications.ts`, `get-issue-thread.ts` |
+| `atproto/` | Bluesky/ATProto | `authenticate.ts`, `create-post.ts`, `get-timeline.ts`, `get-notifications.ts`, `get-post-thread.ts`, `get-profile.ts`, `get-followers.ts`, `get-follows.ts`, `follow-user.ts`, `unfollow-user.ts`, `like-post.ts`, `repost.ts`, `upload-blob.ts` |
+| `github/` | GitHub API | `authenticate.ts`, `create-issue.ts`, `create-comment-issue.ts`, `create-comment-pull-request.ts`, `create-pull-request.ts`, `create-repository-from-template.ts`, `clone-repository.ts`, `list-issues.ts`, `list-pull-requests.ts`, `list-org-repos.ts`, `get-notifications.ts`, `get-issue-thread.ts`, `get-repository.ts`, `get-user.ts`, `follow-user.ts`, `star-repository.ts`, `parse-url.ts`, `add-issue-assignee.ts`, `remove-issue-assignee.ts`, `update-issue.ts` |
 | `arena/` | Are.na | `fetch-channel.ts`, `types.ts` |
 
 ## Design Principles

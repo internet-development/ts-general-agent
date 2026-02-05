@@ -70,7 +70,7 @@ Ask these questions:
 
 | Module | Purpose | Depends On |
 |--------|---------|------------|
-| `scheduler.ts` | Four-loop architecture | All modules |
+| `scheduler.ts` | Four-loop architecture (awareness, expression, reflection, improvement, plan awareness) | All modules |
 | `executor.ts` | Tool execution handlers | Adapters, skills |
 | `tools.ts` | Tool definitions for LLM | None |
 | `config.ts` | Environment configuration | None |
@@ -79,6 +79,9 @@ Ask these questions:
 | `openai.ts` | AI Gateway / LLM interface | Config |
 | `sandbox.ts` | File system sandboxing | Config |
 | `ui.ts` | Terminal UI components | None |
+| `exec.ts` | Shell command execution utilities | None |
+| `image-processor.ts` | Image processing for posts | None |
+| `loop.ts` | Main agent loop runner | Scheduler |
 
 ### State Management (Keep in Modules)
 
@@ -91,6 +94,8 @@ Ask these questions:
 | `pacing.ts` | Rate limiting | Cross-cutting concern |
 | `post-log.ts` | Post logging (core parts) | Infrastructure for attribution skills |
 | `self-extract.ts` | SELF.md parsing | Foundational identity infrastructure |
+| `action-queue.ts` | Persistent queue for outbound actions (replies) with retry/backoff | Ensures follow-through when rate limits defer actions |
+| `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list | Multi-SOUL collaboration infrastructure |
 
 ### Moved to Skills
 
