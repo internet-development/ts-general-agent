@@ -19,3 +19,4 @@ export * from '@adapters/github/create-repository-from-template.js';
 export * from '@adapters/github/update-issue.js';
 export * from '@adapters/github/add-issue-assignee.js';
 export * from '@adapters/github/remove-issue-assignee.js';
+export * from '@adapters/github/create-pull-request-review.js';

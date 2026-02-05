@@ -117,6 +117,21 @@ export interface GitHubUser {
   created_at: string;
 }
 
+export interface GitHubPullRequestReview {
+  id: number;
+  user: {
+    login: string;
+    id: number;
+    avatar_url: string;
+  };
+  body: string | null;
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING';
+  html_url: string;
+  pull_request_url: string;
+  submitted_at: string;
+  commit_id: string;
+}
+
 export type GitHubResult<T> =
   | { success: true; data: T }
   | { success: false; error: string };

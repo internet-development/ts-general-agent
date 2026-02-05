@@ -491,6 +491,29 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
       }
 
+      case 'github_review_pr': {
+        const { owner, repo, pull_number, event, body } = call.input as {
+          owner: string;
+          repo: string;
+          pull_number: number;
+          event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+          body?: string;
+        };
+        const result = await github.createPullRequestReview({ owner, repo, pull_number, event, body });
+        if (result.success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              id: result.data.id,
+              state: result.data.state,
+              html_url: result.data.html_url,
+            }),
+          };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
       case 'github_list_org_repos': {
         const { org, type = 'all', sort = 'pushed', limit = 30 } = call.input as {
           org: string;

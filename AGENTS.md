@@ -584,6 +584,7 @@ Proceed.
 | Tool | Purpose |
 |------|---------|
 | `github_update_issue` | Update issue body, state, labels, assignees |
+| `github_review_pr` | Approve, request changes, or comment on a PR |
 | `plan_create` | Create a structured plan issue |
 | `plan_claim_task` | Claim a task via assignee API |
 | `plan_execute_task` | Execute claimed task via Claude Code |

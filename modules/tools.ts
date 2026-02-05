@@ -402,6 +402,37 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'github_review_pr',
+    description: 'Submit a review on a GitHub pull request. Use APPROVE to approve changes, REQUEST_CHANGES to request modifications, or COMMENT to leave feedback without approval. Essential for multi-SOUL collaboration where agents review each other\'s work.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        pull_number: {
+          type: 'number',
+          description: 'Pull request number',
+        },
+        event: {
+          type: 'string',
+          enum: ['APPROVE', 'REQUEST_CHANGES', 'COMMENT'],
+          description: 'Review action: APPROVE (approve the PR), REQUEST_CHANGES (request modifications), or COMMENT (feedback without approval)',
+        },
+        body: {
+          type: 'string',
+          description: 'Review comment. Required for REQUEST_CHANGES and COMMENT. Optional but encouraged for APPROVE.',
+        },
+      },
+      required: ['owner', 'repo', 'pull_number', 'event'],
+    },
+  },
+  {
     name: 'github_list_org_repos',
     description: 'List repositories in a GitHub organization. Use this to explore what projects an org is working on.',
     input_schema: {

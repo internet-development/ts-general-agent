@@ -29,14 +29,15 @@ AGENT_GITHUB_TOKEN=ghp_your-token
 
 ## Architecture
 
-The agent uses a **four-loop scheduler architecture**:
+The agent uses a **five-loop scheduler architecture**:
 
 | Loop             | Interval    | Purpose                                |
 | ---------------- | ----------- | -------------------------------------- |
 | Awareness        | 45 sec      | Check notifications (API only, no LLM) |
-| Expression       | 90-120 min  | Share thoughts from SELF.md            |
+| Expression       | 3-4 hours   | Share thoughts from SELF.md            |
 | Reflection       | 4-6 hours   | Integrate experiences, update SELF.md  |
 | Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI       |
+| Plan Awareness   | 3 min       | Poll workspaces for collaborative tasks|
 
 ```
 ts-general-agent/
