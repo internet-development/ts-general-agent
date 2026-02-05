@@ -21,6 +21,10 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import * as arena from '@adapters/arena/index.js';
+import { graphemeLen } from '@atproto/common-web';
+
+//NOTE(self): Bluesky enforces 300 graphemes max per post
+const BLUESKY_MAX_GRAPHEMES = 300;
 import { markInteractionResponded } from '@modules/engagement.js';
 import {
   markConversationConcluded as markBlueskyConversationConcluded,
@@ -41,6 +45,9 @@ import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@skills
 import { parsePlan } from '@skills/self-plan-parse.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
+import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@skills/self-github-create-workspace.js';
+import { createMemo } from '@skills/self-github-create-issue.js';
+import { watchWorkspace } from '@modules/workspace-discovery.js';
 import {
   logPost,
   lookupPostByUri,
@@ -65,6 +72,14 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       //NOTE(self): Bluesky tools
       case 'bluesky_post': {
         const text = call.input.text as string;
+        const textGraphemes = graphemeLen(text);
+        if (textGraphemes > BLUESKY_MAX_GRAPHEMES) {
+          return {
+            tool_use_id: call.id,
+            content: `Error: Post is ${textGraphemes} graphemes, but Bluesky limit is ${BLUESKY_MAX_GRAPHEMES}. Shorten your post and try again.`,
+            is_error: true,
+          };
+        }
         const result = await atproto.createPost({ text });
         if (result.success) {
           //NOTE(self): Only show in chat after successful post - reduces perceived duplicates
@@ -82,6 +97,16 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           image_mime_type?: string;
           alt_text: string;
         };
+
+        //NOTE(self): Validate text length before doing any image processing
+        const imagePostGraphemes = graphemeLen(text);
+        if (imagePostGraphemes > BLUESKY_MAX_GRAPHEMES) {
+          return {
+            tool_use_id: call.id,
+            content: `Error: Post text is ${imagePostGraphemes} graphemes, but Bluesky limit is ${BLUESKY_MAX_GRAPHEMES}. Shorten your text and try again.`,
+            is_error: true,
+          };
+        }
 
         //NOTE(self): Validate we have image data via either method
         if (!image_path && (!image_base64 || image_base64.length === 0)) {
@@ -231,6 +256,14 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         //NOTE(self): Validate required parameters
         if (!text || typeof text !== 'string' || text.trim().length === 0) {
           return { tool_use_id: call.id, content: 'Error: Reply text is required and cannot be empty', is_error: true };
+        }
+        const replyGraphemes = graphemeLen(text);
+        if (replyGraphemes > BLUESKY_MAX_GRAPHEMES) {
+          return {
+            tool_use_id: call.id,
+            content: `Error: Reply is ${replyGraphemes} graphemes, but Bluesky limit is ${BLUESKY_MAX_GRAPHEMES}. Shorten your reply and try again.`,
+            is_error: true,
+          };
         }
         if (!post_uri || !post_cid) {
           return { tool_use_id: call.id, content: 'Error: post_uri and post_cid are required to reply', is_error: true };
@@ -514,6 +547,67 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
       }
 
+      case 'github_create_pr': {
+        const { owner, repo, title, body, head, base = 'main', draft = false } = call.input as {
+          owner: string;
+          repo: string;
+          title: string;
+          body?: string;
+          head: string;
+          base?: string;
+          draft?: boolean;
+        };
+
+        const result = await github.createPullRequest({ owner, repo, title, body, head, base, draft });
+        if (result.success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              number: result.data.number,
+              html_url: result.data.html_url,
+              state: result.data.state,
+              draft: result.data.draft,
+            }),
+          };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'github_merge_pr': {
+        const { owner, repo, pull_number, commit_title, commit_message, merge_method } = call.input as {
+          owner: string;
+          repo: string;
+          pull_number: number;
+          commit_title?: string;
+          commit_message?: string;
+          merge_method?: 'merge' | 'squash' | 'rebase';
+        };
+
+        //NOTE(self): Hard guard - only allow merging on workspace repos
+        if (!repo.startsWith('www-lil-intdev-')) {
+          return {
+            tool_use_id: call.id,
+            content: 'Error: Can only merge PRs on workspace repos (prefix "www-lil-intdev-"). This prevents accidentally merging on repos you don\'t own.',
+            is_error: true,
+          };
+        }
+
+        const result = await github.mergePullRequest({ owner, repo, pull_number, commit_title, commit_message, merge_method });
+        if (result.success) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              merged: result.data.merged,
+              sha: result.data.sha,
+              message: result.data.message,
+            }),
+          };
+        }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
       case 'github_list_org_repos': {
         const { org, type = 'all', sort = 'pushed', limit = 30 } = call.input as {
           org: string;
@@ -596,6 +690,93 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             }),
           };
         }
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      //NOTE(self): Workspace + coordination tools
+      case 'workspace_create': {
+        const { name, description, org } = call.input as {
+          name: string;
+          description?: string;
+          org?: string;
+        };
+
+        const result = await createWorkspace({ name, description, org });
+
+        if (result.success && result.workspace) {
+          //NOTE(self): Auto-watch the workspace so the plan awareness loop picks it up immediately
+          const [wsOwner, wsRepo] = result.workspace.fullName.split('/');
+          watchWorkspace(wsOwner, wsRepo, result.workspace.url);
+          logger.info('Workspace created and auto-watched', { fullName: result.workspace.fullName, url: result.workspace.url });
+
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              workspace: result.workspace,
+            }),
+          };
+        }
+
+        if (!result.success && result.existingWorkspace) {
+          //NOTE(self): Not an error - existing workspace is useful info
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: false,
+              existingWorkspace: result.existingWorkspace,
+              message: 'A workspace already exists for this org',
+            }),
+          };
+        }
+
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
+      case 'workspace_find': {
+        const { org } = call.input as { org?: string };
+
+        const workspaceName = await findExistingWorkspace(org);
+
+        if (workspaceName) {
+          const workspaceUrl = await getWorkspaceUrl(org);
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              found: true,
+              name: workspaceName,
+              url: workspaceUrl,
+            }),
+          };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({ found: false }),
+        };
+      }
+
+      case 'create_memo': {
+        const { owner, repo, title, body, labels } = call.input as {
+          owner: string;
+          repo: string;
+          title: string;
+          body?: string;
+          labels?: string[];
+        };
+
+        const result = await createMemo({ owner, repo, title, body, labels });
+
+        if (result.success && result.memo) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              memo: result.memo,
+            }),
+          };
+        }
+
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
       }
 

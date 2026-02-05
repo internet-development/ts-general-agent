@@ -1220,8 +1220,22 @@ Quality over quantity. Respond as yourself - your SELF.md guides when and how to
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
 
+      //NOTE(self): Log diagnostic info for debugging expression issues
+      logger.info('Expression cycle starting', {
+        soulLength: soul.length,
+        selfLength: selfContent.length,
+        selfEmpty: selfContent.length === 0,
+        blueskyUsername: config.bluesky.username,
+      });
+
       //NOTE(self): Get the prompt derived from SELF.md
       const { prompt, source } = getPendingPrompt();
+
+      logger.debug('Expression prompt generated', {
+        source,
+        promptLength: prompt.length,
+        promptPreview: prompt.slice(0, 100),
+      });
 
       //NOTE(self): Check SELF richness and maybe suggest improvements
       const extract = extractFromSelf(selfContent);
@@ -1236,7 +1250,7 @@ Quality over quantity. Respond as yourself - your SELF.md guides when and how to
       const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Expression Mode
 
 Share a thought on Bluesky as yourself. Your SELF.md defines who you are and how you express.
-Platform limit: 300 characters.
+STRICT platform limit: 300 graphemes maximum. Posts exceeding this WILL be rejected. Keep well under 300.
 Your handle: ${config.bluesky.username}${richnessNote}`;
 
       const userMessage = `# Time to Express\n\n**Prompt (from your ${source}):**\n${prompt}\n\n---\n\nShare ONE thought inspired by this prompt. Use bluesky_post to post it.`;
@@ -1247,6 +1261,16 @@ Your handle: ${config.bluesky.username}${richnessNote}`;
         system: systemPrompt,
         messages,
         tools: AGENT_TOOLS,
+      });
+
+      //NOTE(self): Log the AI response for debugging
+      logger.info('Expression AI response', {
+        hasText: !!response.text,
+        textLength: response.text?.length || 0,
+        textPreview: response.text?.slice(0, 100),
+        toolCallCount: response.toolCalls.length,
+        toolNames: response.toolCalls.map(tc => tc.name),
+        stopReason: response.stopReason,
       });
 
       //NOTE(self): Identity with utility - validate invitation before posting
@@ -1350,12 +1374,27 @@ Revise and post again.`;
               //NOTE(self): Not JSON, continue
             }
           } else {
+            //NOTE(self): Show the actual error, not just "Expression failed"
+            const errorDetail = result.content.length > 100
+              ? result.content.slice(0, 100) + '...'
+              : result.content;
             ui.stopSpinner('Expression failed', false);
+            ui.error('Post failed', errorDetail);
+            logger.error('Expression post failed', {
+              toolName: result.tool_name,
+              error: result.content,
+            });
             recordFriction('expression', 'Failed to post expression', result.content);
           }
         }
       } else {
         ui.stopSpinner('No post generated', false);
+        //NOTE(self): Log what the model said instead of posting
+        logger.warn('Model did not generate a post', {
+          responseText: response.text?.slice(0, 200),
+          toolCallCount: response.toolCalls.length,
+        });
+        ui.warn('No post', response.text ? response.text.slice(0, 80) + '...' : 'Model returned empty response');
         recordFriction('expression', 'Model did not generate a post', prompt);
       }
 

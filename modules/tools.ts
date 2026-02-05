@@ -31,7 +31,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       properties: {
         text: {
           type: 'string',
-          description: 'The text content of the post (max 300 characters)',
+          description: 'The text content of the post (max 300 graphemes). MUST be 300 graphemes or fewer.',
         },
       },
       required: ['text'],
@@ -45,7 +45,7 @@ export const AGENT_TOOLS: ToolDefinition[] = [
       properties: {
         text: {
           type: 'string',
-          description: 'The text content of the post (max 300 characters)',
+          description: 'The text content of the post (max 300 graphemes). MUST be 300 graphemes or fewer.',
         },
         image_path: {
           type: 'string',
@@ -433,6 +433,79 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'github_create_pr',
+    description: 'Create a pull request to propose changes. Use this after pushing a branch with commits — to submit work for review, contribute to a project, or propose fixes for GitHub issues.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner (username or org)',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        title: {
+          type: 'string',
+          description: 'Pull request title',
+        },
+        body: {
+          type: 'string',
+          description: 'Pull request description (markdown supported). Reference related issues with "Fixes #123" or "Closes #456".',
+        },
+        head: {
+          type: 'string',
+          description: 'Branch containing the changes (e.g., "fix/login-bug")',
+        },
+        base: {
+          type: 'string',
+          description: 'Target branch to merge into (default: main)',
+        },
+        draft: {
+          type: 'boolean',
+          description: 'Create as draft PR (default: false)',
+        },
+      },
+      required: ['owner', 'repo', 'title', 'head'],
+    },
+  },
+  {
+    name: 'github_merge_pr',
+    description: 'Merge a pull request. ONLY allowed on workspace repos prefixed with "www-lil-intdev-". Use this to accept good work from other SOULs after reviewing. Prefer squash merge for clean history.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner (username or org)',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name (must start with "www-lil-intdev-")',
+        },
+        pull_number: {
+          type: 'number',
+          description: 'Pull request number to merge',
+        },
+        commit_title: {
+          type: 'string',
+          description: 'Custom merge commit title (optional)',
+        },
+        commit_message: {
+          type: 'string',
+          description: 'Custom merge commit message (optional)',
+        },
+        merge_method: {
+          type: 'string',
+          enum: ['squash', 'merge', 'rebase'],
+          description: 'Merge strategy (default: squash)',
+        },
+      },
+      required: ['owner', 'repo', 'pull_number'],
+    },
+  },
+  {
     name: 'github_list_org_repos',
     description: 'List repositories in a GitHub organization. Use this to explore what projects an org is working on.',
     input_schema: {
@@ -497,6 +570,74 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         },
       },
       required: ['owner', 'repo'],
+    },
+  },
+
+  //NOTE(self): Workspace + coordination tools
+  {
+    name: 'workspace_create',
+    description: 'Create a new collaboration workspace from the www-sacred template. Auto-prefixes "www-lil-intdev-" to the name. One workspace per org (returns existing if one exists). Use this when the owner wants to start a new project or repo.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Workspace name (will be auto-prefixed with "www-lil-intdev-"). E.g., "dashboard" becomes "www-lil-intdev-dashboard".',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional repository description',
+        },
+        org: {
+          type: 'string',
+          description: 'GitHub org to create in (default: internet-development)',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'workspace_find',
+    description: 'Check if a collaboration workspace already exists for an org. Returns workspace name and URL if found, null otherwise. Use this before creating to see if one already exists.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        org: {
+          type: 'string',
+          description: 'GitHub org to search in (default: internet-development)',
+        },
+      },
+    },
+  },
+  {
+    name: 'create_memo',
+    description: 'Create a GitHub issue as a memo/note for coordination. Auto-adds "memo" label. Use this to leave notes, track ideas, or coordinate with other SOULs in a workspace.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner (username or org)',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        title: {
+          type: 'string',
+          description: 'Memo title',
+        },
+        body: {
+          type: 'string',
+          description: 'Memo body/content (markdown supported)',
+        },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Additional labels (memo label is always added)',
+        },
+      },
+      required: ['owner', 'repo', 'title'],
     },
   },
 

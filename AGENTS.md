@@ -467,11 +467,14 @@ There is no shared memory, no direct IPC, no shared chat context.
 ### Typical Collaboration Flow
 
 1. **SOUL A** posts on Bluesky: "Let's build a dashboard! @SOUL_B @SOUL_C"
-2. **SOUL B** (via awareness loop) detects the project discussion, creates a GitHub workspace, and replies with the URL
-3. **SOUL C** sees the workspace, creates a structured plan as a GitHub issue with tasks
-4. Each SOUL's **plan awareness loop** discovers the workspace, polls for plans, finds claimable tasks
-5. SOULs claim tasks via GitHub assignee API (first-writer-wins), execute via Claude Code, report completion
-6. On completion, announce back to Bluesky thread
+2. **SOUL B** (via awareness loop) detects the mention, uses `workspace_create` to create a GitHub workspace, and replies with the URL
+3. The workspace is **auto-watched** immediately after creation (no need to wait for URL discovery)
+4. **SOUL C** sees the workspace URL in the thread → `processTextForWorkspaces()` adds it to their watch list
+5. Any SOUL uses `plan_create` to create a structured plan with tasks in the workspace
+6. Each SOUL's **plan awareness loop** discovers the plan, finds claimable tasks
+7. SOULs claim tasks via GitHub assignee API (first-writer-wins), execute via Claude Code, report completion
+8. SOULs use `create_memo` to leave coordination notes as GitHub issues
+9. On completion, announce back to Bluesky thread
 
 ### Plan Awareness Loop (5th Scheduler Loop)
 
@@ -488,9 +491,12 @@ New loop:
 
 ### Workspace Discovery
 
-SOULs discover workspaces through Bluesky threads (not hardcoded). When a SOUL sees a workspace URL (e.g., `github.com/org/www-lil-intdev-project`) in a thread, it adds that workspace to its watch list stored in `.memory/watched_workspaces.json`.
+SOULs discover workspaces through two paths:
 
-Only repositories with the `www-lil-intdev-` prefix are watched (the standard workspace prefix).
+1. **Direct creation** — When a SOUL uses `workspace_create`, the workspace is **auto-watched** immediately via `watchWorkspace()`. No URL discovery needed.
+2. **URL discovery** — When a SOUL sees a workspace URL (e.g., `github.com/org/www-lil-intdev-project`) in a Bluesky thread, `processTextForWorkspaces()` adds it to the watch list.
+
+Both paths persist to `.memory/watched_workspaces.json`. Only repositories with the `www-lil-intdev-` prefix are watched (the standard workspace prefix).
 
 ### Plan Format Specification
 
@@ -583,7 +589,12 @@ Proceed.
 
 | Tool | Purpose |
 |------|---------|
+| `workspace_create` | Create a workspace repo from template (auto-watches it) |
+| `workspace_find` | Check if a workspace already exists for an org |
+| `create_memo` | Create a GitHub issue as a coordination memo |
 | `github_update_issue` | Update issue body, state, labels, assignees |
+| `github_create_pr` | Create a pull request to propose changes or fix issues |
+| `github_merge_pr` | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced) |
 | `github_review_pr` | Approve, request changes, or comment on a PR |
 | `plan_create` | Create a structured plan issue |
 | `plan_claim_task` | Claim a task via assignee API |

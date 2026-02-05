@@ -43,6 +43,62 @@ interface Facet {
   }>;
 }
 
+//NOTE(self): Detect @mentions in text and return handle + character positions
+//NOTE(self): Regex based on AT Protocol spec — handles are domain-like (segments.separated.by.dots)
+function detectMentions(text: string): { handle: string; start: number; end: number }[] {
+  const mentionRegex = /(^|[\s(])(@(([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))/g;
+  const matches: { handle: string; start: number; end: number }[] = [];
+
+  let match;
+  while ((match = mentionRegex.exec(text)) !== null) {
+    const prefix = match[1];
+    const mentionWithAt = match[2];
+    const handle = match[3];
+
+    const start = match.index + prefix.length;
+    const end = start + mentionWithAt.length;
+
+    matches.push({ handle, start, end });
+  }
+
+  return matches;
+}
+
+//NOTE(self): Detect $CASHTAG patterns in text (e.g. $TSMC, $AAPL, $NVDA)
+//NOTE(self): Uses app.bsky.richtext.facet#tag so they show up as clickable tags on Bluesky
+function detectCashtags(text: string): { tag: string; start: number; end: number }[] {
+  const cashtagRegex = /(^|[\s(])(\$([A-Z]{1,6}))(?=[\s).,!?;:\-]|$)/g;
+  const matches: { tag: string; start: number; end: number }[] = [];
+
+  let match;
+  while ((match = cashtagRegex.exec(text)) !== null) {
+    const prefix = match[1];
+    const cashtagWithDollar = match[2];
+    const tag = match[3];
+
+    const start = match.index + prefix.length;
+    const end = start + cashtagWithDollar.length;
+
+    matches.push({ tag, start, end });
+  }
+
+  return matches;
+}
+
+//NOTE(self): Resolve a Bluesky handle to its DID for mention facets
+async function resolveHandleToDid(handle: string): Promise<string | null> {
+  try {
+    const response = await fetch(
+      `${BSKY_SERVICE}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`
+    );
+    if (!response.ok) return null;
+    const { did } = await response.json();
+    return did;
+  } catch {
+    return null;
+  }
+}
+
 //NOTE(self): Detect URLs in text and create link facets
 function detectUrls(text: string): { url: string; start: number; end: number }[] {
   const urlRegex = /https?:\/\/[^\s<>"\]]+/g;
@@ -160,7 +216,49 @@ export async function createPost(
       });
     }
 
-    //NOTE(self): Add facets if any URLs found
+    //NOTE(self): Detect @mentions and create mention facets
+    //NOTE(self): Resolve handles to DIDs in parallel for efficiency
+    const mentions = detectMentions(params.text);
+    if (mentions.length > 0) {
+      const resolutions = await Promise.all(
+        mentions.map(async (m) => ({
+          ...m,
+          did: await resolveHandleToDid(m.handle),
+        }))
+      );
+
+      for (const { did, start, end } of resolutions) {
+        if (did) {
+          facets.push({
+            index: {
+              byteStart: charToByteOffset(params.text, start),
+              byteEnd: charToByteOffset(params.text, end),
+            },
+            features: [{
+              $type: 'app.bsky.richtext.facet#mention',
+              did,
+            }],
+          });
+        }
+      }
+    }
+
+    //NOTE(self): Detect $CASHTAG patterns and create tag facets
+    const cashtags = detectCashtags(params.text);
+    for (const { tag, start, end } of cashtags) {
+      facets.push({
+        index: {
+          byteStart: charToByteOffset(params.text, start),
+          byteEnd: charToByteOffset(params.text, end),
+        },
+        features: [{
+          $type: 'app.bsky.richtext.facet#tag',
+          tag,
+        }],
+      });
+    }
+
+    //NOTE(self): Add facets if any URLs, mentions, or tags found
     if (facets.length > 0) {
       record.facets = facets;
     }
