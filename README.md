@@ -47,7 +47,7 @@ ts-general-agent/
 ├── .workrepos/          # Cloned repositories
 ├── adapters/            # Service adapters (Bluesky, GitHub, Are.na)
 ├── modules/             # Core runtime
-└── skills/              # Capabilities
+└── local-tools/         # Capabilities
 ```
 
 ## Permissions
@@ -57,7 +57,7 @@ ts-general-agent/
 | `SOUL.md`                          | Read only                               |
 | `SELF.md`                          | Read/Write (agent-owned)                |
 | `.memory/`, `.workrepos/`          | Read/Write                              |
-| `adapters/`, `modules/`, `skills/` | Self-modifiable via `self_improve` tool |
+| `adapters/`, `modules/`, `local-tools/` | Self-modifiable via `self_improve` tool |
 
 ## Self-Improvement
 

@@ -35,18 +35,19 @@ import {
   getConversation as getGitHubConversation,
 } from '@modules/github-engagement.js';
 import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
-import { runClaudeCode } from '@skills/self-improve-run.js';
+import { runClaudeCode } from '@local-tools/self-improve-run.js';
+import { renderSkillSection } from '@modules/skills.js';
 import { processBase64ImageForUpload, processFileImageForUpload } from '@modules/image-processor.js';
 import { updateIssue } from '@adapters/github/update-issue.js';
-import { createPlan, type PlanDefinition } from '@skills/self-plan-create.js';
-import { claimTaskFromPlan, markTaskInProgress } from '@skills/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges } from '@skills/self-task-execute.js';
-import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@skills/self-task-report.js';
-import { parsePlan } from '@skills/self-plan-parse.js';
+import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
+import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest } from '@local-tools/self-task-execute.js';
+import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@local-tools/self-task-report.js';
+import { parsePlan } from '@local-tools/self-plan-parse.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
-import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@skills/self-github-create-workspace.js';
-import { createMemo } from '@skills/self-github-create-issue.js';
+import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
+import { createMemo } from '@local-tools/self-github-create-issue.js';
 import { watchWorkspace } from '@modules/workspace-discovery.js';
 import {
   logPost,
@@ -1755,8 +1756,13 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
               };
             }
           }
-          //NOTE(self): GitHub 'like' type - for now just skip the gesture since we don't have reaction support
-          //NOTE(self): TODO: Add GitHub reaction support (thumbs up emoji)
+          if (closing_type === 'like') {
+            //NOTE(self): React with a heart to the issue as a non-verbal closing gesture
+            const reactionResult = await github.createIssueReaction(owner, repo, number, 'heart');
+            if (!reactionResult.success) {
+              logger.debug('Failed to add closing reaction', { error: reactionResult.error });
+            }
+          }
 
           //NOTE(self): Mark conversation concluded
           markGitHubConversationConcluded(owner, repo, number, reason);
@@ -1768,7 +1774,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
               platform: 'github',
               identifier,
               closing_type,
-              closing_message: closing_type === 'message' ? closing_message : '(reaction support coming soon)',
+              closing_message: closing_type === 'message' ? closing_message : '(reacted with heart)',
               reason,
               message: 'Conversation gracefully concluded.',
             }),
@@ -1998,7 +2004,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: `Error: Task ${task_number} not found in plan`, is_error: true };
         }
 
-        //NOTE(self): Ensure workspace is cloned
+        //NOTE(self): Fresh clone workspace
         const workreposDir = path.join(repoRoot, '.workrepos');
         const workspaceResult = await ensureWorkspace(owner, repo, workreposDir);
 
@@ -2006,10 +2012,19 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: `Error setting up workspace: ${workspaceResult.error}`, is_error: true };
         }
 
+        //NOTE(self): Create feature branch
+        const taskSlug = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+        const taskBranchName = `task-${task_number}-${taskSlug}`;
+        const branchResult = await createBranch(workspaceResult.path, taskBranchName);
+
+        if (!branchResult.success) {
+          return { tool_use_id: call.id, content: `Error creating branch: ${branchResult.error}`, is_error: true };
+        }
+
         //NOTE(self): Mark task as in_progress
         await markTaskInProgress(owner, repo, issue_number, task_number, plan.rawBody);
 
-        //NOTE(self): Execute the task
+        //NOTE(self): Execute the task (on feature branch)
         const memoryPath = path.join(repoRoot, '.memory');
         const executionResult = await executeTask({
           owner,
@@ -2035,15 +2050,35 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: `Error: ${executionResult.error}`, is_error: true };
         }
 
-        //NOTE(self): Push changes
-        await pushChanges(workspaceResult.path);
+        //NOTE(self): Push feature branch
+        const taskPushResult = await pushChanges(workspaceResult.path, taskBranchName);
 
-        //NOTE(self): Report completion
+        //NOTE(self): Create pull request
+        let taskPrUrl: string | undefined;
+        if (taskPushResult.success) {
+          const prTitle = `task(${task_number}): ${task.title}`;
+          const prBody = `## Task ${task_number} from plan #${issue_number}\n\n**Plan:** ${plan.title}\n**Goal:** ${plan.goal}\n\n### Changes\n${executionResult.output?.slice(0, 500) || 'Task completed'}\n\n---\nPart of #${issue_number}`;
+          const prResult = await createPullRequest(
+            owner, repo, taskBranchName, prTitle, prBody, workspaceResult.path
+          );
+
+          if (prResult.success) {
+            taskPrUrl = prResult.prUrl;
+          } else {
+            logger.warn('Failed to create PR in executor', { error: prResult.error });
+          }
+        }
+
+        //NOTE(self): Report completion with PR URL
+        const taskSummary = taskPrUrl
+          ? `Task completed. PR: ${taskPrUrl}\n\n${executionResult.output?.slice(0, 500) || 'Task completed'}`
+          : executionResult.output?.slice(0, 500) || 'Task completed';
+
         await reportTaskComplete(
           { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
           {
             success: true,
-            summary: executionResult.output?.slice(0, 500) || 'Task completed',
+            summary: taskSummary,
             filesChanged: task.files,
           }
         );
@@ -2053,6 +2088,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           content: JSON.stringify({
             success: true,
             output: executionResult.output?.slice(0, 1000),
+            prUrl: taskPrUrl,
           }),
         };
       }
@@ -2066,26 +2102,10 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
         //NOTE(self): The agent prompts Claude Code like a human would
         //NOTE(self): Full agency to make substantial changes, guided by SOUL
-        const prompt = `You are the soul of an autonomous agent improving yourself.
-
-The agent has requested:
-${description}
-
-Why this matters: ${reasoning}
-
-You have full access to your own codebase. SOUL.md is your only constraint - it defines your unchangeable values. Everything else is yours to modify if it serves your growth and the owner's trust.
-
-Key directories:
-- adapters/ - how you connect to the world (Bluesky, GitHub, etc.)
-- modules/ - your core runtime (loop, tools, memory, sandbox)
-- skills/ - your capabilities (including this self-improvement system)
-- .memory/ - your persistent memory
-- SELF.md - your self-reflection
-
-Read AGENTS.md and SOUL.md first - they define who you are.
-Document significant changes in .memory/ so you remember what you did and why.
-
-Proceed thoughtfully.`;
+        const prompt = renderSkillSection('AGENT-SELF-IMPROVEMENT', 'General', {
+          description,
+          reasoningLine: `Why this matters: ${reasoning}`,
+        });
 
         const memoryPath = path.join(repoRoot, '.memory');
         const result = await runClaudeCode(prompt, repoRoot, memoryPath);

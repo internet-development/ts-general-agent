@@ -60,7 +60,19 @@ export async function getIssueThread(
     }
 
     const issue: GitHubIssue = await issueResponse.json();
-    const comments: GitHubComment[] = await commentsResponse.json();
+    let comments: GitHubComment[] = await commentsResponse.json();
+
+    //NOTE(self): Paginate if first page was full (100 comments)
+    if (comments.length === 100) {
+      let nextUrl = parseLinkNext(commentsResponse.headers.get('link'));
+      while (nextUrl) {
+        const pageResponse = await fetch(nextUrl, { headers: getAuthHeaders() });
+        if (!pageResponse.ok) break;
+        const pageComments: GitHubComment[] = await pageResponse.json();
+        comments = comments.concat(pageComments);
+        nextUrl = parseLinkNext(pageResponse.headers.get('link'));
+      }
+    }
 
     //NOTE(self): Analyze agent participation
     let agentHasCommented = false;
@@ -129,6 +141,9 @@ export interface AnalyzeConversationOptions {
   //NOTE(self): If true, the owner explicitly shared this issue on Bluesky
   //NOTE(self): Owner requests should be honored unless we'd post consecutive replies
   isOwnerRequest?: boolean;
+  //NOTE(self): If true, this PR was discovered via workspace polling (proactive review)
+  //NOTE(self): Agent should respond even when not mentioned
+  isWorkspacePRReview?: boolean;
 }
 
 export function analyzeConversation(
@@ -138,7 +153,7 @@ export function analyzeConversation(
   peerUsernames: string[] = []
 ): ConversationAnalysis {
   const { issue, comments, agentHasCommented, commentsAfterAgent, isOpen } = thread;
-  const { isOwnerRequest = false } = options;
+  const { isOwnerRequest = false, isWorkspacePRReview = false } = options;
 
   //NOTE(self): Closed issues generally don't need responses
   if (!isOpen) {
@@ -227,6 +242,31 @@ export function analyzeConversation(
       };
     }
 
+    //NOTE(self): Proactive workspace PR review - respond even when not mentioned
+    if (isWorkspacePRReview) {
+      const peerCommentCount = peerUsernames.length > 0
+        ? comments.filter(c =>
+            peerUsernames.some(p => c.user.login.toLowerCase() === p.toLowerCase())
+          ).length
+        : 0;
+
+      if (peerCommentCount >= 2) {
+        return {
+          shouldRespond: true,
+          reason: `Open PR in workspace — ${peerCommentCount} peers already reviewed, only add if genuinely needed`,
+          urgency: 'low',
+          context: `PR discovered in watched workspace. Peers have already contributed reviews.`,
+        };
+      }
+
+      return {
+        shouldRespond: true,
+        reason: 'Open PR in watched workspace needs review',
+        urgency: 'low',
+        context: `PR discovered in watched workspace. Review and provide feedback.`,
+      };
+    }
+
     return {
       shouldRespond: false,
       reason: 'Not mentioned and not part of conversation',
@@ -298,4 +338,11 @@ export function formatThreadForContext(
   }
 
   return context;
+}
+
+//NOTE(self): Parse Link header for rel="next" URL (GitHub pagination)
+function parseLinkNext(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+  return match ? match[1] : null;
 }

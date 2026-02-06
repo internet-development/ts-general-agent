@@ -19,7 +19,7 @@ export * from '@modules/scheduler.js';
 export * from '@modules/workspace-discovery.js';
 export * from '@modules/peer-awareness.js';
 
-//NOTE(self): Re-export skills that were migrated from modules for backward compatibility
+//NOTE(self): Re-export local-tools that were migrated from modules for backward compatibility
 export {
   recordFriction,
   getFrictionReadyForImprovement,
@@ -35,7 +35,7 @@ export {
   type FrictionCategory,
   type FrictionRecord,
   type ImprovementRecord,
-} from '@skills/self-detect-friction.js';
+} from '@local-tools/self-detect-friction.js';
 
 export {
   extractAspirations,
@@ -50,7 +50,7 @@ export {
   getAllAspirations,
   type AspirationCategory,
   type Aspiration,
-} from '@skills/self-identify-aspirations.js';
+} from '@local-tools/self-identify-aspirations.js';
 
 export {
   recordExperience,
@@ -60,14 +60,14 @@ export {
   getUnintegratedCount,
   type ExperienceType,
   type Experience,
-} from '@skills/self-capture-experiences.js';
+} from '@local-tools/self-capture-experiences.js';
 
 export {
   getAttributionBacklogStats,
   getAttributionReflectionPrompt,
   shouldSuggestAttributionWork,
   type AttributionBacklogStats,
-} from '@skills/self-manage-attribution.js';
+} from '@local-tools/self-manage-attribution.js';
 
 export {
   extractHandles,
@@ -80,4 +80,4 @@ export {
   type MentionedEntity,
   type EnrichedProfile,
   type SocialGraphData,
-} from '@skills/self-enrich-social-context.js';
+} from '@local-tools/self-enrich-social-context.js';

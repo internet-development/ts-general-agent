@@ -33,6 +33,10 @@ interface ConversationRecord {
   conclusionReason?: string;
   //NOTE(self): Source that triggered our engagement (e.g., "bluesky_mention", "github_notification")
   source: string;
+  //NOTE(self): When the conversation was concluded (for re-engagement detection)
+  concludedAt: string | null;
+  //NOTE(self): How many times we've re-engaged after concluding (cap at 1)
+  reengagementCount: number;
 }
 
 interface GitHubEngagementState {
@@ -162,6 +166,8 @@ export function trackConversation(
     ourCommentCount: 0,
     state: 'new',
     source,
+    concludedAt: null,
+    reengagementCount: 0,
   };
 
   state.conversations[key] = record;
@@ -214,6 +220,9 @@ export function updateConversationState(
   if (reason) {
     state.conversations[key].conclusionReason = reason;
   }
+  if (newState === 'concluded') {
+    state.conversations[key].concludedAt = new Date().toISOString();
+  }
   saveState();
 
   logger.debug('Updated conversation state', { key, newState, reason });
@@ -238,9 +247,30 @@ export function getConversationsNeedingAttention(): ConversationNeedingAttention
   const state = loadState();
   const results: ConversationNeedingAttention[] = [];
 
-  for (const conversation of Object.values(state.conversations)) {
-    //NOTE(self): Skip concluded or closed conversations
-    if (conversation.state === 'concluded' || conversation.state === 'closed') {
+  for (const [key, conversation] of Object.entries(state.conversations)) {
+    //NOTE(self): Skip closed conversations entirely
+    if (conversation.state === 'closed') {
+      continue;
+    }
+
+    //NOTE(self): Check concluded conversations for re-engagement
+    if (conversation.state === 'concluded') {
+      const reengageCount = conversation.reengagementCount ?? 0;
+      if (reengageCount < 1 && conversation.concludedAt) {
+        const concludedTime = new Date(conversation.concludedAt).getTime();
+        const lastCheckedTime = new Date(conversation.lastChecked).getTime();
+        //NOTE(self): If lastChecked is newer than concludedAt, someone may have updated it
+        //NOTE(self): This is a lightweight signal — the actual comment check happens when we fetch the thread
+        if (lastCheckedTime > concludedTime) {
+          conversation.state = 'active';
+          conversation.reengagementCount = reengageCount + 1;
+          saveState();
+          results.push({
+            conversation,
+            reason: 'Re-engagement detected after conclusion',
+          });
+        }
+      }
       continue;
     }
 

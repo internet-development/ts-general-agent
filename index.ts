@@ -10,6 +10,7 @@ import { initSandbox } from '@modules/sandbox.js';
 import { runSchedulerLoop } from '@modules/loop.js';
 import { authenticate as authBluesky } from '@adapters/atproto/authenticate.js';
 import { setAuth as authGitHub } from '@adapters/github/authenticate.js';
+import { loadAllSkills, validateSkills } from '@modules/skills.js';
 
 //NOTE(self): Get the directory of this file (repo root)
 const __filename = fileURLToPath(import.meta.url);
@@ -57,7 +58,20 @@ async function main(): Promise<void> {
   //NOTE(self): Initialize SELF.md with agent name on first run
   initializeSelf(config);
 
+  //NOTE(self): Initialize logger early so skill loading errors persist to disk
   initLogger(config.paths.memory, 'info');
+
+  //NOTE(self): Load skill templates before anything else needs them
+  loadAllSkills();
+
+  //NOTE(self): Validate all skill directories loaded successfully
+  const skillValidation = validateSkills();
+  if (!skillValidation.valid) {
+    logger.error('Skills validation failed', { missing: skillValidation.missing, loaded: skillValidation.loaded });
+    console.error(`\n❌ Skills validation failed. Missing: ${skillValidation.missing.join(', ')}`);
+    console.error(`   Loaded: ${skillValidation.loaded.join(', ')}`);
+    process.exit(1);
+  }
 
   logger.info('Initializing', {
     owner: config.owner.blueskyHandle,

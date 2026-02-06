@@ -1,6 +1,6 @@
 //NOTE(self): Main Loop Module
-//NOTE(self): The heart of the agent - powered by the four-loop scheduler.
-//NOTE(self): Awareness (cheap) + Expression (scheduled) + Reflection (deep) + Self-Improvement (rare)
+//NOTE(self): The heart of the agent - powered by the five-loop scheduler.
+//NOTE(self): Awareness (cheap) + Expression (scheduled) + Reflection (deep) + Self-Improvement (rare) + Plan Awareness (collaborative)
 //NOTE(self): Self-discovery through expression, not passive waiting.
 
 import { logger } from '@modules/logger.js';
@@ -16,12 +16,13 @@ import { readSoul, readSelf } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools } from '@modules/executor.js';
 import { ui } from '@modules/ui.js';
+import { buildSystemPrompt } from '@modules/skills.js';
 import {
   recordSignificantEvent,
   addInsight,
 } from '@modules/engagement.js';
 import { getScheduler } from '@modules/scheduler.js';
-import { recordFriction } from '@skills/self-detect-friction.js';
+import { recordFriction } from '@local-tools/self-detect-friction.js';
 import { createRequire } from 'module';
 
 //NOTE(self): Read version from package.json
@@ -48,7 +49,7 @@ export interface LoopCallbacks {
 
 
 //NOTE(self): ========== SCHEDULER-BASED LOOP ==========
-//NOTE(self): Uses the four-loop architecture: awareness, expression, reflection, self-improvement
+//NOTE(self): Uses the five-loop architecture: awareness, expression, reflection, self-improvement, plan awareness
 //NOTE(self): More efficient, more expressive, better self-discovery
 
 
@@ -195,20 +196,10 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
     const soul = readSoul(config.paths.soul);
     const fullSelf = readSelf(config.paths.selfmd);
 
-    const systemPrompt = `${soul}\n\n---\n\n${fullSelf}\n\n---\n\n# Owner Communication
-
-Your owner is speaking. You have full agency to decide how to respond and what actions to take.
-
-You can:
-- Respond conversationally
-- Update your SELF.md (self_update) if you learn something about yourself
-- Improve your own code (self_improve) if you're inspired to grow
-- Take any action that aligns with who you are
-
-Your SELF.md defines who you are. Act from that understanding with complete freedom.
-
-Your handle: ${config.bluesky.username}
-Owner: ${config.owner.blueskyHandle}`;
+    const systemPrompt = buildSystemPrompt(soul, fullSelf, 'AGENT-OWNER-COMMUNICATION', {
+      blueskyUsername: config.bluesky.username,
+      ownerHandle: config.owner.blueskyHandle,
+    });
 
     const messages: Message[] = [{ role: 'user', content: input }];
 

@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Modules are **core runtime infrastructure**. They provide the foundational systems that skills depend on but should not duplicate.
+Modules are **core runtime infrastructure**. They provide the foundational systems that local-tools depend on but should not duplicate.
 
 ## Architectural Role
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         SKILLS                               │
+│                       LOCAL-TOOLS                              │
 │        (high-level capabilities, business logic)             │
 └──────────────────────────┬──────────────────────────────────┘
                            │ uses
@@ -27,8 +27,8 @@ Modules are **core runtime infrastructure**. They provide the foundational syste
 
 | Responsibility | Description |
 |----------------|-------------|
-| **Orchestration** | Coordinate multi-step workflows across skills and adapters |
-| **Scheduling** | Manage the four-loop architecture (awareness, expression, reflection, improvement) |
+| **Orchestration** | Coordinate multi-step workflows across local-tools and adapters |
+| **Scheduling** | Manage the five-loop architecture (awareness, expression, reflection, improvement, plan awareness) |
 | **State Management** | Persist and manage runtime state (engagement, conversations, relationships) |
 | **Tool System** | Define tools for LLM and execute tool calls |
 | **Configuration** | Load and validate environment configuration |
@@ -39,30 +39,30 @@ Modules are **core runtime infrastructure**. They provide the foundational syste
 
 - The scheduler and main loops
 - Tool definitions (`tools.ts`) and execution (`executor.ts`)
-- State that multiple skills depend on (engagement, conversation tracking)
+- State that multiple local-tools depend on (engagement, conversation tracking)
 - Configuration management
 - Logging infrastructure
 - LLM interface (`openai.ts`)
-- Shared utilities used by multiple skills
+- Shared utilities used by multiple local-tools
 
 ## What Does NOT Belong Here
 
 - Direct API calls (use adapters)
-- Single-purpose capabilities (use skills)
+- Single-purpose capabilities (use local-tools)
 - Business logic that only one feature needs
 - Optional features that could be toggled off
 
-## Decision Framework: Module vs Skill
+## Decision Framework: Module vs Local Tool
 
 Ask these questions:
 
 | Question | If YES → | If NO → |
 |----------|----------|---------|
-| Is this used by multiple skills? | Module | Skill |
-| Would the agent break without this? | Module | Skill |
-| Is this orchestration/coordination? | Module | Skill |
-| Is this a discrete, toggleable capability? | Skill | Module |
-| Does this combine adapters for a specific purpose? | Skill | Module |
+| Is this used by multiple local-tools? | Module | Local Tool |
+| Would the agent break without this? | Module | Local Tool |
+| Is this orchestration/coordination? | Module | Local Tool |
+| Is this a discrete, toggleable capability? | Local Tool | Module |
+| Does this combine adapters for a specific purpose? | Local Tool | Module |
 
 ## Current Modules
 
@@ -70,8 +70,8 @@ Ask these questions:
 
 | Module | Purpose | Depends On |
 |--------|---------|------------|
-| `scheduler.ts` | Four-loop architecture (awareness, expression, reflection, improvement, plan awareness) | All modules |
-| `executor.ts` | Tool execution handlers | Adapters, skills |
+| `scheduler.ts` | Five-loop architecture (awareness, expression, reflection, improvement, plan awareness) | All modules |
+| `executor.ts` | Tool execution handlers | Adapters, local-tools |
 | `tools.ts` | Tool definitions for LLM | None |
 | `config.ts` | Environment configuration | None |
 | `logger.ts` | Logging infrastructure | None |
@@ -82,26 +82,28 @@ Ask these questions:
 | `exec.ts` | Shell command execution utilities | None |
 | `image-processor.ts` | Image processing for posts | None |
 | `loop.ts` | Main agent loop runner | Scheduler |
+| `skills.ts` | Skills framework (loads `skills/*/SKILL.md`, interpolation, prompt assembly) | Logger |
+| `peer-awareness.ts` | Dynamic peer SOUL discovery from plans, workspaces, threads | Config, Memory |
 
 ### State Management (Keep in Modules)
 
 | Module | Purpose | Why It Stays |
 |--------|---------|--------------|
-| `engagement.ts` | Relationship tracking, notification prioritization | Used by scheduler, multiple skills depend on it |
+| `engagement.ts` | Relationship tracking, notification prioritization | Used by scheduler, multiple local-tools depend on it |
 | `bluesky-engagement.ts` | Bluesky conversation state | Essential for response loop |
 | `github-engagement.ts` | GitHub conversation state | Essential for response loop |
 | `expression.ts` | Expression scheduling (core parts) | Orchestration infrastructure |
 | `pacing.ts` | Rate limiting | Cross-cutting concern |
-| `post-log.ts` | Post logging (core parts) | Infrastructure for attribution skills |
+| `post-log.ts` | Post logging (core parts) | Infrastructure for attribution local-tools |
 | `self-extract.ts` | SELF.md parsing | Foundational identity infrastructure |
 | `action-queue.ts` | Persistent queue for outbound actions (replies) with retry/backoff | Ensures follow-through when rate limits defer actions |
 | `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list | Multi-SOUL collaboration infrastructure |
 
-### Moved to Skills
+### Moved to Local-Tools
 
-These were previously modules but have been migrated to skills as they represent discrete, toggleable capabilities:
+These were previously modules but have been migrated to local-tools as they represent discrete, toggleable capabilities:
 
-| Former Module | New Skill | Reason Moved |
+| Former Module | New Local Tool | Reason Moved |
 |---------------|-----------|--------------|
 | `friction.ts` | `self-detect-friction.ts` | Optional self-improvement trigger |
 | `aspiration.ts` | `self-identify-aspirations.ts` | Optional growth tracking |
@@ -112,7 +114,7 @@ These were previously modules but have been migrated to skills as they represent
 ## Design Principles
 
 ### 1. Infrastructure, Not Features
-Modules provide the rails; skills run on them. If something is a "feature," it's a skill.
+Modules provide the rails; local-tools run on them. If something is a "feature," it's a local-tool.
 
 ```typescript
 // GOOD - infrastructure
@@ -121,22 +123,22 @@ export function recordSignificantEvent(type: string): void {
   saveState(state);
 }
 
-// BAD - this is a feature/skill
+// BAD - this is a feature/local-tool
 export async function analyzeThreadSentiment(threadUri: string): Promise<Sentiment> {
   // This is a discrete capability, not infrastructure
 }
 ```
 
 ### 2. Shared Dependencies
-If multiple skills need it, it's a module. If only one skill needs it, put it in that skill.
+If multiple local-tools need it, it's a module. If only one local-tool needs it, put it in that local-tool.
 
 ```typescript
-// Module - used by multiple skills
+// Module - used by multiple local-tools
 // modules/engagement.ts
 export function getRelationship(handle: string): RelationshipRecord | null
 
-// Skill - only used by self-improvement
-// skills/self-detect-friction.ts
+// Local-tool - only used by self-improvement
+// local-tools/self-detect-friction.ts
 export function buildImprovementPrompt(friction: FrictionEntry): string
 ```
 
@@ -190,16 +192,16 @@ scheduler.ts
 ├── awareness loop
 │   ├── atproto adapter (notifications)
 │   ├── engagement module (prioritization)
-│   └── skills (response generation)
+│   └── local-tools (response generation)
 ├── expression loop
 │   ├── expression module (scheduling)
-│   └── skills (post creation)
+│   └── local-tools (post creation)
 ├── reflection loop
-│   ├── experiences skill (gather)
-│   └── skills (SELF.md update)
+│   ├── experiences local-tool (gather)
+│   └── local-tools (SELF.md update)
 └── improvement loop
-    ├── friction skill (identify)
-    └── improvement skill (execute)
+    ├── friction local-tool (identify)
+    └── improvement local-tool (execute)
 ```
 
 ### Tool Execution Flow
@@ -214,7 +216,7 @@ tools.ts (definition lookup)
 executor.ts (dispatch)
        │
        ├── Adapter calls (direct API)
-       ├── Skill calls (capabilities)
+       ├── Local-tool calls (capabilities)
        └── Module calls (state updates)
 ```
 
@@ -244,7 +246,7 @@ export function loadState(): EngagementState {
 ## Adding a New Module
 
 Before adding a module, verify it meets the criteria:
-- [ ] Used by multiple skills
+- [ ] Used by multiple local-tools
 - [ ] Agent would break without it
 - [ ] It's infrastructure, not a feature
 

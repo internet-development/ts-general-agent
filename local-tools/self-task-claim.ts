@@ -1,0 +1,196 @@
+//NOTE(self): Claim a task from a plan via GitHub assignee API
+//NOTE(self): Uses first-writer-wins: if someone else claimed first, we gracefully fail
+
+import { claimTask } from '@adapters/github/add-issue-assignee.js';
+import { releaseTask } from '@adapters/github/remove-issue-assignee.js';
+import { createIssueComment } from '@adapters/github/create-comment-issue.js';
+import { updateIssue } from '@adapters/github/update-issue.js';
+import { logger } from '@modules/logger.js';
+import { getConfig } from '@modules/config.js';
+import {
+  parsePlan,
+  updateTaskInPlanBody,
+  getClaimableTasks,
+  type ParsedPlan,
+  type ParsedTask,
+} from '@local-tools/self-plan-parse.js';
+
+export interface ClaimTaskParams {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  taskNumber: number;
+  plan: ParsedPlan;
+}
+
+export interface ClaimTaskResult {
+  success: boolean;
+  claimed: boolean;
+  //NOTE(self): Who has the claim if not us
+  claimedBy?: string;
+  error?: string;
+}
+
+//NOTE(self): Attempt to claim a task
+export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimTaskResult> {
+  const { owner, repo, issueNumber, taskNumber, plan } = params;
+  const config = getConfig();
+  const myUsername = config.github.username;
+
+  logger.info('Attempting to claim task', { owner, repo, issueNumber, taskNumber, myUsername });
+
+  //NOTE(self): Find the task in the plan
+  const task = plan.tasks.find(t => t.number === taskNumber);
+  if (!task) {
+    return { success: false, claimed: false, error: `Task ${taskNumber} not found in plan` };
+  }
+
+  //NOTE(self): Check if task is claimable
+  if (task.status !== 'pending') {
+    return { success: false, claimed: false, error: `Task ${taskNumber} is not pending (status: ${task.status})` };
+  }
+
+  if (task.assignee) {
+    return { success: false, claimed: false, claimedBy: task.assignee, error: `Task ${taskNumber} already claimed by ${task.assignee}` };
+  }
+
+  //NOTE(self): Check dependencies
+  const completedTaskIds = new Set(
+    plan.tasks.filter(t => t.status === 'completed').map(t => `Task ${t.number}`)
+  );
+  for (const dep of task.dependencies) {
+    if (!completedTaskIds.has(dep)) {
+      return { success: false, claimed: false, error: `Task ${taskNumber} has unmet dependency: ${dep}` };
+    }
+  }
+
+  //NOTE(self): Attempt to claim via GitHub assignee API (atomic operation)
+  const claimResult = await claimTask({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    assignee: myUsername,
+  });
+
+  if (!claimResult.success) {
+    return { success: false, claimed: false, error: claimResult.error };
+  }
+
+  if (!claimResult.data.claimed) {
+    //NOTE(self): Someone else got there first
+    const currentOwner = claimResult.data.currentAssignees?.[0];
+    logger.info('Task claim failed - already claimed', { taskNumber, claimedBy: currentOwner });
+    return {
+      success: true,
+      claimed: false,
+      claimedBy: currentOwner,
+      error: `Task already claimed by ${currentOwner}`,
+    };
+  }
+
+  //NOTE(self): We got the claim! Update the plan body to reflect this
+  const newBody = updateTaskInPlanBody(plan.rawBody, taskNumber, {
+    status: 'claimed',
+    assignee: myUsername,
+  });
+
+  const updateResult = await updateIssue({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: newBody,
+  });
+
+  if (!updateResult.success) {
+    logger.warn('Claimed task but failed to update plan body', { error: updateResult.error });
+    //NOTE(self): Still count as claimed since we have the assignee
+  }
+
+  //NOTE(self): Post a comment announcing the claim
+  await createIssueComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: `🤖 **Claiming Task ${taskNumber}: ${task.title}**\n\nI'll start working on this now.`,
+  });
+
+  logger.info('Successfully claimed task', { taskNumber, myUsername });
+  return { success: true, claimed: true };
+}
+
+//NOTE(self): Release a task claim (if we can't complete it)
+export async function releaseTaskClaim(params: ClaimTaskParams): Promise<{ success: boolean; error?: string }> {
+  const { owner, repo, issueNumber, taskNumber, plan } = params;
+  const config = getConfig();
+  const myUsername = config.github.username;
+
+  logger.info('Releasing task claim', { owner, repo, issueNumber, taskNumber });
+
+  //NOTE(self): Remove ourselves as assignee
+  const releaseResult = await releaseTask(owner, repo, issueNumber, myUsername);
+  if (!releaseResult.success) {
+    return { success: false, error: releaseResult.error };
+  }
+
+  //NOTE(self): Update the plan body
+  const newBody = updateTaskInPlanBody(plan.rawBody, taskNumber, {
+    status: 'pending',
+    assignee: null,
+  });
+
+  await updateIssue({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: newBody,
+  });
+
+  //NOTE(self): Post a comment
+  await createIssueComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: `🔓 **Releasing Task ${taskNumber}**\n\nThis task is available for another SOUL to claim.`,
+  });
+
+  return { success: true };
+}
+
+//NOTE(self): Get the next claimable task from a plan
+export function getNextClaimableTask(plan: ParsedPlan): ParsedTask | null {
+  const claimable = getClaimableTasks(plan);
+  if (claimable.length === 0) return null;
+
+  //NOTE(self): Return the first claimable task (lowest number)
+  return claimable.sort((a, b) => a.number - b.number)[0];
+}
+
+//NOTE(self): Mark a task as in_progress (after claiming)
+export async function markTaskInProgress(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  taskNumber: number,
+  planBody: string
+): Promise<{ success: boolean; newBody: string; error?: string }> {
+  const config = getConfig();
+  const myUsername = config.github.username;
+
+  const newBody = updateTaskInPlanBody(planBody, taskNumber, {
+    status: 'in_progress',
+    assignee: myUsername,
+  });
+
+  const result = await updateIssue({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: newBody,
+  });
+
+  if (!result.success) {
+    return { success: false, newBody: planBody, error: result.error };
+  }
+
+  return { success: true, newBody };
+}

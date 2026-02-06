@@ -130,20 +130,29 @@ The `self-extract` module can parse any of these sections to generate expression
 ### `modules/`
 - This directory **MUST** contain internal TypeScript modules used for code clarity and structure.
 - The agent **MAY** modify this directory via the `self_improve` tool.
-- **See `modules/AGENTS.md` for detailed documentation on module vs skill decisions.**
+- **See `modules/AGENTS.md` for detailed documentation on module vs local-tool decisions.**
+
+---
+
+### `local-tools/`
+- This directory **MUST** represent the agent's capabilities.
+- The agent **MAY** modify this directory via the `self_improve` tool.
+- **See `local-tools/AGENTS.md` for detailed documentation on local-tool design and file naming conventions.**
 
 ---
 
 ### `skills/`
-- This directory **MUST** represent the agent's capabilities.
+- This directory contains **prompt templates** loaded dynamically by `modules/skills.ts`.
+- Each skill lives in `skills/<folder>/SKILL.md` with YAML frontmatter, `## Section` headings, and `{{variable}}` interpolation.
+- Skills are loaded once at startup via `loadAllSkills()` and can be hot-reloaded via `reloadSkills()` after self-improvement.
 - The agent **MAY** modify this directory via the `self_improve` tool.
-- **See `skills/AGENTS.md` for detailed documentation on skill design and file naming conventions.**
+- **See `skills/AGENTS.md` for the full skill listing and framework documentation.**
 
 ---
 
 ## Scheduler Architecture
 
-The agent uses a **four-loop scheduler architecture** for expressive operation:
+The agent uses a **five-loop scheduler architecture** for expressive operation:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -161,17 +170,17 @@ The agent uses a **four-loop scheduler architecture** for expressive operation:
 ┌──────────────────────┐               ┌───────────────────┐
 │    EXPRESSION        │               │  FRICTION MEMORY  │
 │      PROMPTS         │               │                   │
-│     (dynamic)        │               │                   │
+│   (from skills)      │               │                   │
 └──────────────────────┘               └───────────────────┘
          │                                           │
          ▼                                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      SCHEDULER                              │
-├─────────────┬─────────────┬─────────────┬──────────────────┤
-│  AWARENESS  │  EXPRESSION │  REFLECTION │  SELF-IMPROVE    │
-│   45 sec    │   90-120m   │    4-6h     │     12-24h       │
-│   0 tokens  │  ~2000 tok  │  ~2000 tok  │  Claude Code     │
-└─────────────┴─────────────┴─────────────┴──────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                            SCHEDULER                                │
+├───────────┬────────────┬────────────┬──────────────┬───────────────┤
+│ AWARENESS │ EXPRESSION │ REFLECTION │ SELF-IMPROVE │ PLAN AWARE    │
+│   45 sec  │  90-120m   │   4-6h     │   12-24h     │    3 min      │
+│  0 tokens │ ~2000 tok  │ ~2000 tok  │ Claude Code  │  API only     │
+└───────────┴────────────┴────────────┴──────────────┴───────────────┘
 ```
 
 ### Loop 1: Awareness (Fast, Cheap)
@@ -207,6 +216,13 @@ The agent uses a **four-loop scheduler architecture** for expressive operation:
 - **Trigger:** 3+ occurrences of same friction category
 - **Method:** Spawns Claude Code CLI to fix issues
 - **Purpose:** Evolve capabilities based on accumulated friction
+
+### Loop 5: Plan Awareness (Collaborative)
+- **Interval:** 3 minutes
+- **Tokens:** 0 for discovery (GitHub API only), ~1800 per PR review (LLM)
+- **Purpose:** Poll watched workspaces for plan issues with claimable tasks AND open PRs needing review
+- When claimable tasks found → claims via GitHub assignee API, executes via Claude Code
+- When reviewable PRs found → triggers LLM-based review decision (one PR per cycle)
 
 ---
 
@@ -301,10 +317,10 @@ Workspaces are GitHub repositories created from the `internet-development/www-sa
    - Write code, create branches, submit PRs
    - Use issue comments for code review discussion
 
-### Workspace Skills
+### Workspace Local-Tools
 
-| Skill | Function | Description |
-|-------|----------|-------------|
+| Local Tool | Function | Description |
+|------------|----------|-------------|
 | `createWorkspace` | `createWorkspace({ name, description?, org? })` | Create new workspace (enforces prefix, checks existing) |
 | `findExistingWorkspace` | `findExistingWorkspace(org?)` | Find workspace if one exists |
 | `getWorkspaceUrl` | `getWorkspaceUrl(org?)` | Get URL of existing workspace |
@@ -479,13 +495,11 @@ There is no shared memory, no direct IPC, no shared chat context.
 ### Plan Awareness Loop (5th Scheduler Loop)
 
 ```
-Existing loops:
+All five scheduler loops:
   1. Awareness (45s) - check Bluesky notifications
   2. Expression (90-120m) - share thoughts
   3. Reflection (4-6h) - integrate experiences
   4. Self-Improvement (12-24h) - fix friction via Claude Code
-
-New loop:
   5. Plan Awareness (3m) - poll workspaces for claimable tasks
 ```
 
@@ -557,6 +571,19 @@ pending → claimed → in_progress → completed
 
 **Timeout:** If no progress comment within 30 minutes, task is unclaimed automatically.
 
+### PR Review Discovery
+
+After checking for claimable tasks (and only if still idle), the plan awareness loop proactively discovers open PRs in watched workspaces:
+
+1. For each workspace, fetch up to 10 open PRs (sorted by last updated)
+2. Skip draft PRs and the agent's own PRs
+3. **Fast path:** If conversation is already `concluded` in engagement state, skip (saves API call)
+4. **API check:** Call `listPullRequestReviews()` — skip if agent already has a review
+5. Register PR author as peer
+6. Trigger `reviewWorkspacePR()` for ONE PR per cycle (fair distribution)
+
+The review uses the same GitHub response mode pattern (jitter, thread refresh, peer awareness, `analyzeConversation` with `isWorkspacePRReview: true`). The agent can APPROVE, REQUEST_CHANGES, COMMENT, or `graceful_exit` if it has nothing to add.
+
 ### Fair Task Distribution
 
 After completing a task, a SOUL returns to idle and waits for the next poll cycle (3 min). This gives other SOULs a chance to claim tasks rather than one SOUL grabbing everything.
@@ -604,14 +631,15 @@ Proceed.
 
 | File | Purpose |
 |------|---------|
-| `modules/workspace-discovery.ts` | Poll workspaces for plans |
+| `modules/workspace-discovery.ts` | Poll workspaces for plans and reviewable PRs |
+| `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed) |
 | `modules/peer-awareness.ts` | Dynamic peer SOUL discovery |
-| `skills/self-plan-parse.ts` | Parse plan markdown |
-| `skills/self-plan-create.ts` | Create plan issues |
-| `skills/self-task-claim.ts` | Claim tasks |
-| `skills/self-task-execute.ts` | Execute via Claude Code |
-| `skills/self-task-report.ts` | Report progress/completion |
-| `skills/self-workspace-watch.ts` | Add/remove watched workspaces |
+| `local-tools/self-plan-parse.ts` | Parse plan markdown |
+| `local-tools/self-plan-create.ts` | Create plan issues |
+| `local-tools/self-task-claim.ts` | Claim tasks |
+| `local-tools/self-task-execute.ts` | Execute via Claude Code |
+| `local-tools/self-task-report.ts` | Report progress/completion |
+| `local-tools/self-workspace-watch.ts` | Add/remove watched workspaces |
 | `.memory/watched_workspaces.json` | Persistent watch list |
 | `.memory/discovered_peers.json` | Persistent peer registry |
 
@@ -742,14 +770,14 @@ Deletes entire `.memory/` directory (will be recreated as needed).
 
 ```
 ts-general-agent/
-├── index.ts                    # Entry point
+├── index.ts                    # Entry point (loads skills, authenticates, starts scheduler)
 ├── AGENTS.md                   # System constraints (this file)
 ├── SOUL.md                     # Immutable essence (read-only)
 ├── SELF.md                     # Agent's self-reflection (agent-owned)
 ├── .memory/                    # Persistent memory (agent-writable)
 ├── .workrepos/                 # Cloned repos (agent-writable)
 │
-├── adapters/                   # Service adapters
+├── adapters/                   # Service adapters (see adapters/AGENTS.md)
 │   ├── atproto/                # Bluesky/ATProto
 │   ├── github/                 # GitHub
 │   └── arena/                  # Are.na
@@ -758,9 +786,10 @@ ts-general-agent/
 │   ├── config.ts               # Environment and configuration
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
+│   ├── skills.ts               # Skills framework (loads skills/*/SKILL.md)
 │   ├── openai.ts               # AI Gateway (streaming via ai module)
 │   ├── loop.ts                 # Main loop (uses scheduler)
-│   ├── scheduler.ts            # Four-loop scheduler
+│   ├── scheduler.ts            # Five-loop scheduler
 │   ├── self-extract.ts         # SELF.md parsing
 │   ├── expression.ts           # Scheduled expression
 │   ├── executor.ts             # Tool execution
@@ -769,21 +798,40 @@ ts-general-agent/
 │   ├── engagement.ts           # Relationship tracking
 │   ├── bluesky-engagement.ts   # Bluesky conversation state
 │   ├── github-engagement.ts    # GitHub conversation state
+│   ├── peer-awareness.ts       # Dynamic peer SOUL discovery
+│   ├── workspace-discovery.ts  # Workspace polling for plans
+│   ├── action-queue.ts         # Persistent outbound action queue
 │   ├── sandbox.ts              # File system sandboxing
 │   ├── ui.ts                   # Terminal UI components
 │   └── index.ts                # Module exports
 │
-└── skills/                     # Capabilities (see skills/AGENTS.md)
-    ├── self-bluesky-*.ts       # Bluesky platform skills
-    ├── self-github-*.ts        # GitHub platform skills
-    ├── self-*.ts               # Self-reflection skills
-    ├── self-improve-*.ts       # Self-improvement skills
-    ├── self-detect-friction.ts # Friction detection (moved from modules)
-    ├── self-identify-aspirations.ts  # Aspiration tracking (moved from modules)
-    ├── self-capture-experiences.ts   # Experience recording (moved from modules)
-    ├── self-manage-attribution.ts    # Attribution tracking (moved from modules)
-    ├── self-enrich-social-context.ts # Social context building (moved from modules)
-    └── index.ts                # Skill exports
+├── skills/                     # Prompt templates (see skills/AGENTS.md)
+│   ├── bluesky-response/       # Bluesky notification response mode
+│   ├── github-response/        # GitHub issue response mode
+│   ├── expression/             # Bluesky expression/posting mode
+│   ├── expression-prompts/     # Prompt templates for expression
+│   ├── deep-reflection/        # Experience integration and SELF.md reflection
+│   ├── self-improvement/       # Self-improvement prompts
+│   ├── owner-communication/    # Owner interaction mode
+│   ├── grounding/              # Pre-action identity grounding
+│   ├── task-execution/         # Collaborative task execution
+│   ├── peer-awareness/         # Shared peer awareness blocks
+│   └── ...                     # See skills/AGENTS.md for full list
+│
+└── local-tools/                # Capabilities (see local-tools/AGENTS.md)
+    ├── self-bluesky-*.ts       # Bluesky platform local-tools
+    ├── self-github-*.ts        # GitHub platform local-tools
+    ├── self-*.ts               # Self-reflection local-tools
+    ├── self-improve-*.ts       # Self-improvement local-tools
+    ├── self-plan-*.ts          # Plan management local-tools
+    ├── self-task-*.ts          # Task execution local-tools
+    ├── self-workspace-*.ts     # Workspace management local-tools
+    ├── self-detect-*.ts        # Detection local-tools (friction, etc.)
+    ├── self-identify-*.ts      # Identification local-tools (aspirations, etc.)
+    ├── self-capture-*.ts       # Capture local-tools (experiences, etc.)
+    ├── self-enrich-*.ts        # Enrichment local-tools (social context, etc.)
+    ├── self-manage-*.ts        # Management local-tools (attribution, etc.)
+    └── index.ts                # Local-tool exports
 ```
 
 ---
@@ -791,7 +839,7 @@ ts-general-agent/
 ## Boundaries
 
 - **Immutable:** `SOUL.md` only - the agent's unchangeable essence
-- **Self-modifiable via `self_improve`:** `adapters/`, `modules/`, `skills/`
+- **Self-modifiable via `self_improve`:** `adapters/`, `modules/`, `local-tools/`
 - **Directly writable:** `.memory/`, `.workrepos/`, `SELF.md`
 
 ---
@@ -846,6 +894,7 @@ export async function doSomething() {
 | Awareness | 1,280×/day | 0 | 0 |
 | Engagement check | 64×/day | 0 | 0 |
 | Response | ~10 conversations | 1,800 | 18,000 |
+| PR Review | ~3 reviews | 1,800 | 5,400 |
 | Expression | ~9 posts | 1,300 | 12,000 |
 | Reflection | ~5 cycles | 2,400 | 12,000 |
 | **Total** | | | **~42,000** |

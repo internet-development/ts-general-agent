@@ -1,5 +1,5 @@
 //NOTE(self): Workspace Discovery Module
-//NOTE(self): Poll watched workspaces for plan issues and claimable tasks
+//NOTE(self): Poll watched workspaces for plan issues, claimable tasks, and reviewable PRs
 //NOTE(self): Workspaces are discovered via Bluesky threads (not hardcoded)
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
@@ -7,9 +7,13 @@ import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { getRepository } from '@adapters/github/get-repository.js';
-import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@skills/self-plan-parse.js';
+import { listPullRequests } from '@adapters/github/list-pull-requests.js';
+import { listPullRequestReviews } from '@adapters/github/list-pull-request-reviews.js';
+import type { GitHubPullRequest } from '@adapters/github/types.js';
+import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { registerPeer } from '@modules/peer-awareness.js';
 import { getConfig } from '@modules/config.js';
+import { getConversation } from '@modules/github-engagement.js';
 
 //NOTE(self): Path to watched workspaces state
 const WATCHED_WORKSPACES_PATH = '.memory/watched_workspaces.json';
@@ -293,4 +297,87 @@ export function getWorkspaceDiscoveryStats(): WorkspaceDiscoveryStats {
     lastFullPoll: state.lastFullPoll,
     totalActivePlans: workspaces.reduce((sum, w) => sum + w.activePlanIssues.length, 0),
   };
+}
+
+//NOTE(self): A PR in a watched workspace that needs review
+export interface ReviewablePR {
+  workspace: WatchedWorkspace;
+  pr: GitHubPullRequest;
+}
+
+//NOTE(self): Poll watched workspaces for open PRs the agent hasn't reviewed yet
+export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  const results: ReviewablePR[] = [];
+
+  if (workspaces.length === 0) {
+    logger.debug('No workspaces to poll for reviewable PRs');
+    return [];
+  }
+
+  const config = getConfig();
+  const agentUsername = config.github.username.toLowerCase();
+
+  logger.debug('Polling workspaces for reviewable PRs', { workspaceCount: workspaces.length });
+
+  for (const workspace of workspaces) {
+    try {
+      const prsResult = await listPullRequests({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        state: 'open',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 10,
+      });
+
+      if (!prsResult.success) {
+        logger.warn('Failed to fetch PRs for workspace', {
+          workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+          error: prsResult.error,
+        });
+        continue;
+      }
+
+      for (const pr of prsResult.data) {
+        //NOTE(self): Skip draft PRs
+        if (pr.draft === true) continue;
+
+        //NOTE(self): Never review own PRs
+        if (pr.user.login.toLowerCase() === agentUsername) continue;
+
+        //NOTE(self): Fast path — if conversation is already concluded, skip (saves API call)
+        const existing = getConversation(workspace.owner, workspace.repo, pr.number);
+        if (existing && existing.state === 'concluded') continue;
+
+        //NOTE(self): API check — skip if agent already has a review on this PR
+        const reviewsResult = await listPullRequestReviews({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          pull_number: pr.number,
+        });
+
+        if (reviewsResult.success) {
+          const agentAlreadyReviewed = reviewsResult.data.some(
+            r => r.user.login.toLowerCase() === agentUsername
+          );
+          if (agentAlreadyReviewed) continue;
+        }
+
+        //NOTE(self): Register PR author as peer (they're active in workspace)
+        const key = getWorkspaceKey(workspace.owner, workspace.repo);
+        registerPeer(pr.user.login, 'workspace', key);
+
+        results.push({ workspace, pr });
+      }
+    } catch (err) {
+      logger.error('Error polling workspace for reviewable PRs', {
+        workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+        error: String(err),
+      });
+    }
+  }
+
+  return results;
 }

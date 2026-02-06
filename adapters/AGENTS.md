@@ -8,7 +8,7 @@ Adapters are **low-level API wrappers** for external services. They form the bou
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         SKILLS                               │
+│                       LOCAL-TOOLS                              │
 │        (high-level capabilities, business logic)             │
 └──────────────────────────┬──────────────────────────────────┘
                            │ uses
@@ -57,13 +57,13 @@ Adapters are **low-level API wrappers** for external services. They form the bou
 | Adapter | Service | Key Files |
 |---------|---------|-----------|
 | `atproto/` | Bluesky/ATProto | `authenticate.ts`, `create-post.ts`, `get-timeline.ts`, `get-notifications.ts`, `get-post-thread.ts`, `get-profile.ts`, `get-followers.ts`, `get-follows.ts`, `follow-user.ts`, `unfollow-user.ts`, `like-post.ts`, `repost.ts`, `upload-blob.ts` |
-| `github/` | GitHub API | `authenticate.ts`, `create-issue.ts`, `create-comment-issue.ts`, `create-comment-pull-request.ts`, `create-pull-request.ts`, `create-pull-request-review.ts`, `create-repository-from-template.ts`, `clone-repository.ts`, `list-issues.ts`, `list-pull-requests.ts`, `list-org-repos.ts`, `get-notifications.ts`, `get-issue-thread.ts`, `get-repository.ts`, `get-user.ts`, `follow-user.ts`, `star-repository.ts`, `parse-url.ts`, `add-issue-assignee.ts`, `remove-issue-assignee.ts`, `update-issue.ts` |
+| `github/` | GitHub API | `authenticate.ts`, `create-issue.ts`, `create-comment-issue.ts`, `create-comment-pull-request.ts`, `create-pull-request.ts`, `create-pull-request-review.ts`, `create-reaction.ts`, `create-repository-from-template.ts`, `clone-repository.ts`, `merge-pull-request.ts`, `list-issues.ts`, `list-pull-requests.ts`, `list-org-repos.ts`, `get-notifications.ts`, `get-issue-thread.ts`, `get-repository.ts`, `get-user.ts`, `follow-user.ts`, `star-repository.ts`, `parse-url.ts`, `add-issue-assignee.ts`, `remove-issue-assignee.ts`, `update-issue.ts` |
 | `arena/` | Are.na | `fetch-channel.ts`, `types.ts` |
 
 ## Design Principles
 
 ### 1. Thin Wrappers
-Adapters should be thin. If you're adding logic beyond request/response transformation, it probably belongs in a module or skill.
+Adapters should be thin. If you're adding logic beyond request/response transformation, it probably belongs in a module or local-tool.
 
 ```typescript
 // GOOD - thin wrapper
@@ -111,7 +111,7 @@ import * as github from '@adapters/github/index.js';
 Only maintain state needed for authentication/sessions. All other state belongs in modules.
 
 ### 5. Service-Specific Types Stay Here
-Types that mirror the external API belong in adapters. Internal domain types belong in modules/skills.
+Types that mirror the external API belong in adapters. Internal domain types belong in modules/local-tools.
 
 ```typescript
 // adapters/atproto/types.ts - mirrors Bluesky API

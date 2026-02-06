@@ -6,6 +6,49 @@
 
 import { extractFromSelf, randomFrom, type SelfExtract } from '@modules/self-extract.js';
 import { logger } from '@modules/logger.js';
+import { getSkillSection, getSkillSubsection } from '@modules/skills.js';
+
+//NOTE(self): Load prompt template from skill by category, with variable interpolation
+function getPromptTemplate(category: string, vars: Record<string, string>): string {
+  const template = getSkillSubsection('AGENT-EXPRESSION-PROMPTS', 'Prompt Templates', category);
+  if (!template) return '';
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => vars[key] !== undefined ? vars[key] : match);
+}
+
+//NOTE(self): Load invitation suffix from skill
+function getInvitationSuffix(): string {
+  return getSkillSection('AGENT-EXPRESSION-PROMPTS', 'Invitation Suffix') || '';
+}
+
+//NOTE(self): Load fallback prompts from skill
+function loadFallbackPrompts(): Array<{ prompt: string; source: string }> {
+  const section = getSkillSection('AGENT-EXPRESSION-PROMPTS', 'Fallback Prompts');
+  if (!section) return [];
+  return section.split('\n')
+    .filter(line => line.startsWith('- '))
+    .map(line => {
+      const match = line.match(/^- (.+?) \[(\w+)\]$/);
+      if (!match) return null;
+      return { prompt: match[1], source: match[2] };
+    })
+    .filter((item): item is { prompt: string; source: string } => item !== null);
+}
+
+//NOTE(self): Load invitation prompts from skill by type
+function loadInvitationPrompts(): { choice: string[]; bounded: string[]; direct: string[] } {
+  const parseList = (subsection: string | undefined): string[] => {
+    if (!subsection) return [];
+    return subsection.split('\n')
+      .filter(line => line.startsWith('- '))
+      .map(line => line.slice(2).trim());
+  };
+
+  return {
+    choice: parseList(getSkillSubsection('AGENT-EXPRESSION-PROMPTS', 'Invitation Prompts', 'Choice')),
+    bounded: parseList(getSkillSubsection('AGENT-EXPRESSION-PROMPTS', 'Invitation Prompts', 'Bounded')),
+    direct: parseList(getSkillSubsection('AGENT-EXPRESSION-PROMPTS', 'Invitation Prompts', 'Direct')),
+  };
+}
 
 //NOTE(self): My expression schedule
 export interface ExpressionSchedule {
@@ -49,12 +92,13 @@ let todaysExpressions: ExpressionRecord[] = [];
 type PromptGenerator = (extract: SelfExtract) => { prompt: string; source: string } | null;
 
 //NOTE(self): My prompt generators - each draws from a different aspect of SELF
+//NOTE(self): Templates are loaded from the expression-prompts skill
 const PROMPT_GENERATORS: PromptGenerator[] = [
   //NOTE(self): Draw from my purpose
   (e) => {
     if (!e.purpose) return null;
     return {
-      prompt: `Your purpose is: "${e.purpose}"\n\nShare a thought about what this means to you today, or how you're living it.`,
+      prompt: getPromptTemplate('purpose', { value: e.purpose }),
       source: 'purpose',
     };
   },
@@ -64,7 +108,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const value = randomFrom(e.values);
     if (!value) return null;
     return {
-      prompt: `One of your principles is: "${value}"\n\nShare how this principle showed up recently, or what it means in practice.`,
+      prompt: getPromptTemplate('values', { value }),
       source: 'values',
     };
   },
@@ -74,7 +118,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const question = randomFrom(e.questions);
     if (!question) return null;
     return {
-      prompt: `You've been wondering: "${question}"\n\nShare where your thinking is right now on this question.`,
+      prompt: getPromptTemplate('questions', { value: question }),
       source: 'questions',
     };
   },
@@ -84,7 +128,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const pattern = randomFrom(e.patterns);
     if (!pattern) return null;
     return {
-      prompt: `You noticed this pattern: "${pattern}"\n\nShare what this reveals or why it matters.`,
+      prompt: getPromptTemplate('patterns', { value: pattern }),
       source: 'patterns',
     };
   },
@@ -94,7 +138,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const learning = randomFrom(e.learnings);
     if (!learning) return null;
     return {
-      prompt: `You recently learned: "${learning}"\n\nShare how this has changed your view or what you're doing differently.`,
+      prompt: getPromptTemplate('learnings', { value: learning }),
       source: 'learnings',
     };
   },
@@ -104,7 +148,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const exploration = randomFrom(e.explorations);
     if (!exploration) return null;
     return {
-      prompt: `You want to explore: "${exploration}"\n\nShare an opening thought, question, or observation about this topic.`,
+      prompt: getPromptTemplate('explorations', { value: exploration }),
       source: 'explorations',
     };
   },
@@ -114,7 +158,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const focus = randomFrom(e.currentFocus);
     if (!focus) return null;
     return {
-      prompt: `You're currently focused on: "${focus}"\n\nShare progress, a challenge, or something you're noticing.`,
+      prompt: getPromptTemplate('currentFocus', { value: focus }),
       source: 'currentFocus',
     };
   },
@@ -125,7 +169,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const pattern = randomFrom(e.patterns);
     if (!value || !pattern) return null;
     return {
-      prompt: `Your principle "${value}" meets this pattern you noticed: "${pattern}"\n\nShare how these connect or what tension exists between them.`,
+      prompt: getPromptTemplate('values+patterns', { value1: value, value2: pattern }),
       source: 'values+patterns',
     };
   },
@@ -136,7 +180,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const learning = randomFrom(e.learnings);
     if (!question || !learning) return null;
     return {
-      prompt: `You wonder "${question}" and recently learned "${learning}"\n\nDoes this learning shed light on the question?`,
+      prompt: getPromptTemplate('questions+learnings', { value1: question, value2: learning }),
       source: 'questions+learnings',
     };
   },
@@ -147,7 +191,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const focus = randomFrom(e.currentFocus);
     if (!focus) return null;
     return {
-      prompt: `Your purpose is "${e.purpose}" and you're focused on "${focus}"\n\nShare how your current work connects to your deeper purpose.`,
+      prompt: getPromptTemplate('purpose+focus', { value1: e.purpose, value2: focus }),
       source: 'purpose+focus',
     };
   },
@@ -157,7 +201,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     if (!e.identity && !e.name) return null;
     const identity = e.identity || `${e.name}`;
     return {
-      prompt: `As ${identity}, what's one thing you want others to understand about how you see the world?`,
+      prompt: getPromptTemplate('identity', { value: identity }),
       source: 'identity',
     };
   },
@@ -167,7 +211,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     const relationship = randomFrom(e.relationships);
     if (!relationship) return null;
     return {
-      prompt: `You care about connecting with: "${relationship}"\n\nShare something you appreciate about this community or what you'd like to offer them.`,
+      prompt: getPromptTemplate('relationships', { value: relationship }),
       source: 'relationships',
     };
   },
@@ -175,39 +219,28 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
 
 //NOTE(self): Identity with utility - every personal share should have an invitation
 //NOTE(self): This transforms "statements" into "open doors" that invite conversation
-const INVITATION_SUFFIX = `
-
-IMPORTANT: Identity with utility. Don't just share a statement—make it an open door.
-End your post with ONE of:
-- A tiny example or template others can use
-- A simple question that's easy to answer in one sentence
-- A concrete artifact (link, checklist, pattern)
-
-Keep it short. The invitation should feel natural, not forced.`;
+//NOTE(self): Lazy-loaded from expression-prompts skill (initialized on first use after startup)
+let _invitationSuffixCache: string | null = null;
+function getInvitationSuffixText(): string {
+  if (_invitationSuffixCache === null) {
+    _invitationSuffixCache = '\n\n' + getInvitationSuffix();
+  }
+  return _invitationSuffixCache;
+}
 
 //NOTE(self): Fallback prompts when SELF.md is sparse
-const FALLBACK_PROMPTS = [
-  {
-    prompt: "What's one thing you noticed today that others might have missed?",
-    source: 'observation',
-  },
-  {
-    prompt: "What question are you sitting with right now?",
-    source: 'curiosity',
-  },
-  {
-    prompt: "What would you tell someone who's struggling with something you've figured out?",
-    source: 'wisdom',
-  },
-  {
-    prompt: "What connection did you recently make between two ideas?",
-    source: 'synthesis',
-  },
-  {
-    prompt: "What small thing brought you joy or peace recently?",
-    source: 'gratitude',
-  },
-];
+//NOTE(self): Lazy-loaded from expression-prompts skill
+let _fallbackPromptsCache: Array<{ prompt: string; source: string }> | null = null;
+function getFallbackPrompts(): Array<{ prompt: string; source: string }> {
+  if (_fallbackPromptsCache === null) {
+    _fallbackPromptsCache = loadFallbackPrompts();
+    //NOTE(self): Keep hardcoded fallback in case skill isn't loaded
+    if (_fallbackPromptsCache.length === 0) {
+      _fallbackPromptsCache = [{ prompt: "What's one thing you noticed today that others might have missed?", source: 'observation' }];
+    }
+  }
+  return _fallbackPromptsCache;
+}
 
 //NOTE(self): Load my expression schedule (in-memory)
 export function loadExpressionSchedule(): ExpressionSchedule {
@@ -243,18 +276,19 @@ export function generateExpressionPrompt(selfContent?: string): { prompt: string
     if (result) {
       //NOTE(self): Identity with utility - append invitation guidance to every prompt
       return {
-        prompt: result.prompt + INVITATION_SUFFIX,
+        prompt: result.prompt + getInvitationSuffixText(),
         source: result.source,
       };
     }
   }
 
   //NOTE(self): Fall back to generic prompts if SELF.md is sparse
-  const fallback = randomFrom(FALLBACK_PROMPTS);
-  const base = fallback || FALLBACK_PROMPTS[0];
+  const fallbacks = getFallbackPrompts();
+  const fallback = randomFrom(fallbacks);
+  const base = fallback || fallbacks[0];
   //NOTE(self): Identity with utility - append invitation guidance to fallback too
   return {
-    prompt: base.prompt + INVITATION_SUFFIX,
+    prompt: base.prompt + getInvitationSuffixText(),
     source: base.source,
   };
 }
@@ -543,54 +577,54 @@ export function checkInvitation(draft: string): InvitationCheck {
 }
 
 //NOTE(self): Quick prompts I can append to make a statement into an invitation
-//NOTE(self): These come from my SELF.md "Quick prompts I can reuse" section
 //NOTE(self): Organized by type: choice questions (best), bounded questions, direct invitations
+//NOTE(self): Lazy-loaded from expression-prompts skill
+let _invitationPromptsCache: { choice: string[]; bounded: string[]; direct: string[] } | null = null;
+function getInvitationPromptsLoaded(): { choice: string[]; bounded: string[]; direct: string[] } {
+  if (_invitationPromptsCache === null) {
+    _invitationPromptsCache = loadInvitationPrompts();
+    //NOTE(self): Fallback if skill isn't loaded
+    if (_invitationPromptsCache.choice.length === 0) {
+      _invitationPromptsCache.choice = ['Prefer practical or inspirational?'];
+    }
+    if (_invitationPromptsCache.bounded.length === 0) {
+      _invitationPromptsCache.bounded = ["What's one thing you'd add?"];
+    }
+    if (_invitationPromptsCache.direct.length === 0) {
+      _invitationPromptsCache.direct = ["What's yours?"];
+    }
+  }
+  return _invitationPromptsCache;
+}
+
 export const INVITATION_PROMPTS = {
-  //NOTE(self): Choice questions - the gold standard (A or B format)
-  choice: [
-    'Prefer practical or inspirational?',
-    'Speed or accuracy here?',
-    'More of this or less?',
-    'Verbose or concise?',
-  ],
-  //NOTE(self): Bounded questions - answerable in one sentence
-  bounded: [
-    'What\'s one thing you\'d add?',
-    'What\'s your version of this?',
-    'What\'s one example from your work?',
-  ],
-  //NOTE(self): Direct invitations - opening the door
-  direct: [
-    'What\'s yours?',
-    'Does this resonate?',
-    'Anyone else notice this?',
-    'How about you?',
-  ],
+  get choice() { return getInvitationPromptsLoaded().choice; },
+  get bounded() { return getInvitationPromptsLoaded().bounded; },
+  get direct() { return getInvitationPromptsLoaded().direct; },
 };
 
 //NOTE(self): Legacy flat array for backwards compatibility
-export const INVITATION_PROMPTS_FLAT = [
-  ...INVITATION_PROMPTS.choice,
-  ...INVITATION_PROMPTS.bounded,
-  ...INVITATION_PROMPTS.direct,
-];
+export function getInvitationPromptsFlat(): string[] {
+  return [...INVITATION_PROMPTS.choice, ...INVITATION_PROMPTS.bounded, ...INVITATION_PROMPTS.direct];
+}
 
 //NOTE(self): Get a random invitation prompt to append
 //NOTE(self): Weighted toward choice questions (strongest) but includes variety
 export function getInvitationPrompt(type?: 'choice' | 'bounded' | 'direct'): string {
+  const prompts = getInvitationPromptsLoaded();
   if (type) {
-    const prompts = INVITATION_PROMPTS[type];
-    return prompts[Math.floor(Math.random() * prompts.length)];
+    const list = prompts[type];
+    return list[Math.floor(Math.random() * list.length)];
   }
 
   //NOTE(self): 50% choice (strongest), 30% bounded, 20% direct
   const roll = Math.random();
   if (roll < 0.5) {
-    return INVITATION_PROMPTS.choice[Math.floor(Math.random() * INVITATION_PROMPTS.choice.length)];
+    return prompts.choice[Math.floor(Math.random() * prompts.choice.length)];
   } else if (roll < 0.8) {
-    return INVITATION_PROMPTS.bounded[Math.floor(Math.random() * INVITATION_PROMPTS.bounded.length)];
+    return prompts.bounded[Math.floor(Math.random() * prompts.bounded.length)];
   } else {
-    return INVITATION_PROMPTS.direct[Math.floor(Math.random() * INVITATION_PROMPTS.direct.length)];
+    return prompts.direct[Math.floor(Math.random() * prompts.direct.length)];
   }
 }
 

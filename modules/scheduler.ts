@@ -43,7 +43,7 @@ import {
   getExperiencesForReflection,
   markExperiencesIntegrated,
   pruneOldExperiences,
-} from '@skills/self-capture-experiences.js';
+} from '@local-tools/self-capture-experiences.js';
 import {
   loadExpressionSchedule,
   saveExpressionSchedule,
@@ -68,7 +68,7 @@ import {
   buildImprovementPrompt,
   getFrictionStats,
   type FrictionCategory,
-} from '@skills/self-detect-friction.js';
+} from '@local-tools/self-detect-friction.js';
 import {
   shouldAttemptGrowth,
   getAspirationForGrowth,
@@ -76,8 +76,9 @@ import {
   recordGrowthOutcome,
   buildGrowthPrompt,
   getAspirationStats,
-} from '@skills/self-identify-aspirations.js';
-import { runClaudeCode } from '@skills/self-improve-run.js';
+} from '@local-tools/self-identify-aspirations.js';
+import { runClaudeCode } from '@local-tools/self-improve-run.js';
+import { buildSystemPrompt, renderSkillSection, areSkillsLoaded } from '@modules/skills.js';
 import * as github from '@adapters/github/index.js';
 import {
   extractGitHubUrlsFromRecord,
@@ -109,16 +110,19 @@ import {
 } from '@modules/github-engagement.js';
 import {
   pollWorkspacesForPlans,
+  pollWorkspacesForReviewablePRs,
   getWatchedWorkspaces,
   getWorkspaceDiscoveryStats,
   type DiscoveredPlan,
+  type ReviewablePR,
 } from '@modules/workspace-discovery.js';
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer } from '@modules/peer-awareness.js';
-import { processTextForWorkspaces } from '@skills/self-workspace-watch.js';
-import { claimTaskFromPlan, markTaskInProgress } from '@skills/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges } from '@skills/self-task-execute.js';
-import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@skills/self-task-report.js';
-import { parsePlan } from '@skills/self-plan-parse.js';
+import { processTextForWorkspaces } from '@local-tools/self-workspace-watch.js';
+import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest } from '@local-tools/self-task-execute.js';
+import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
+import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
+import { parsePlan } from '@local-tools/self-plan-parse.js';
 import {
   trackConversation as trackBlueskyConversation,
   recordParticipantActivity,
@@ -206,6 +210,20 @@ function getAgentJitter(agentName: string): number {
   }
   //NOTE(self): Map to 15-90 second range
   return 15_000 + (Math.abs(hash) % 75_000);
+}
+
+//NOTE(self): Deterministic per-timer jitter from agent name + timer name
+//NOTE(self): Each SOUL gets unique, stable offsets for every timer
+function getTimerJitter(agentName: string, timerName: string, baseIntervalMs: number, jitterPercent: number = 0.12): number {
+  const key = `${agentName}:${timerName}`;
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) {
+    hash = ((hash << 5) + hash) + key.charCodeAt(i);
+    hash |= 0;
+  }
+  const normalized = (Math.abs(hash) % 2001 - 1000) / 1000; // [-1.0, +1.0]
+  const offsetMs = Math.round(baseIntervalMs * jitterPercent * normalized);
+  return baseIntervalMs + offsetMs;
 }
 
 //NOTE(self): The Scheduler Class
@@ -310,6 +328,22 @@ export class AgentScheduler {
       ui.info('Expression scheduled', 'first post coming soon');
     }
 
+    //NOTE(self): Log jittered intervals so operator can verify per-SOUL staggering
+    const agentName = this.appConfig.agent.name;
+    const timerIntervals = {
+      awareness: getTimerJitter(agentName, 'awareness', this.config.awarenessInterval),
+      'github-awareness': getTimerJitter(agentName, 'github-awareness', this.config.githubAwarenessInterval),
+      'expression-check': getTimerJitter(agentName, 'expression-check', 5 * 60_000),
+      'reflection-check': getTimerJitter(agentName, 'reflection-check', 30 * 60 * 1000),
+      heartbeat: getTimerJitter(agentName, 'heartbeat', 5 * 60 * 1000),
+      'engagement-check': getTimerJitter(agentName, 'engagement-check', 15 * 60 * 1000),
+      'plan-awareness': getTimerJitter(agentName, 'plan-awareness', this.config.planAwarenessInterval),
+    };
+    const intervalSummary = Object.entries(timerIntervals)
+      .map(([name, ms]) => `${name}: ${(ms / 1000).toFixed(1)}s`)
+      .join(', ');
+    ui.system('Timer jitter', `${agentName} → ${intervalSummary}`);
+
     //NOTE(self): Start the loops
     this.startAwarenessLoop();
     this.startGitHubAwarenessLoop();
@@ -381,7 +415,7 @@ export class AgentScheduler {
         return;
       }
       await this.awarenessCheck();
-    }, this.config.awarenessInterval);
+    }, getTimerJitter(this.appConfig.agent.name, 'awareness', this.config.awarenessInterval));
   }
 
   private async awarenessCheck(): Promise<void> {
@@ -562,7 +596,7 @@ export class AgentScheduler {
         return;
       }
       await this.githubAwarenessCheck();
-    }, this.config.githubAwarenessInterval);
+    }, getTimerJitter(this.appConfig.agent.name, 'github-awareness', this.config.githubAwarenessInterval));
   }
 
   private async githubAwarenessCheck(): Promise<void> {
@@ -648,6 +682,11 @@ export class AgentScheduler {
           } else {
             //NOTE(self): Update conversation state if not responding
             updateGitHubConversationState(owner, repo, number, 'awaiting_response', analysis.reason);
+            recordExperience(
+              'chose_silence',
+              `Chose not to respond to ${owner}/${repo}#${number}: ${analysis.reason}`,
+              { source: 'github', url }
+            );
           }
         }
 
@@ -722,6 +761,11 @@ export class AgentScheduler {
 
             if (!freshAnalysis.shouldRespond) {
               logger.info('Skipping response after thread refresh', { reason: freshAnalysis.reason });
+              recordExperience(
+                'chose_silence',
+                `Chose not to respond to ${pending.owner}/${pending.repo}#${pending.number} after refresh: ${freshAnalysis.reason}`,
+                { source: 'github', url: pending.url }
+              );
               continue;
             }
 
@@ -751,62 +795,28 @@ export class AgentScheduler {
 
         //NOTE(self): Peer awareness section for the system prompt
         const peerSection = uniqueThreadPeers.length > 0
-          ? `\n**PEER SOUL AWARENESS:**
-${uniqueThreadPeers.map(p => '@' + p).join(', ')} ${uniqueThreadPeers.length === 1 ? 'is' : 'are'} your peer SOUL${uniqueThreadPeers.length === 1 ? '' : 's'} — autonomous agents like you, working from the same values.
-
-When peers have already commented:
-1. READ their comments first. DO NOT repeat their points.
-2. BUILD on what they said: "@peer's suggestion is solid — I'd add..."
-3. Fill GAPS: contribute only what's genuinely missing
-4. @MENTION peers when referencing their ideas — this is a conversation, not parallel monologues
-5. If peers already covered everything, it's better to STAY SILENT than to echo
-6. If 2+ peers made similar points, strongly consider not adding another\n`
+          ? '\n' + renderSkillSection('AGENT-PEER-AWARENESS', 'GitHub Peer Awareness', {
+              peerList: uniqueThreadPeers.map(p => '@' + p).join(', '),
+              isPeerPlural: uniqueThreadPeers.length === 1 ? 'is' : 'are',
+              peerPluralSuffix: uniqueThreadPeers.length === 1 ? '' : 's',
+            }) + '\n'
           : '';
 
-        const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# GitHub Response Mode
+        //NOTE(self): Build workspace awareness section for GitHub
+        const ghExistingWorkspace = await findExistingWorkspace();
+        const ghWorkspaceState = ghExistingWorkspace
+          ? `Active workspace: \`${ghExistingWorkspace}\` exists in the org. Reference it when relevant.`
+          : 'No workspace currently exists. You can suggest creating one if this conversation warrants collaborative development.';
+        const ghWorkspaceSection = renderSkillSection('AGENT-WORKSPACE-DECISION', 'Workspace Context', { workspaceState: ghWorkspaceState });
 
-You're engaging in a GitHub issue conversation. Your SELF.md contains your values and patterns for engaging authentically.
-
-**PUBLIC CONVERSATION AWARENESS:**
-This is a public issue thread - everyone can see every comment. Write like you're in a group discussion.
-- Talk TO people, not ABOUT them. Say "Thanks for clarifying, @username" not "The user clarified that..."
-- Address the issue author and participants directly by @mentioning them when relevant
-- Never reference someone in third person when they're in the thread
-- Write as if you're pair programming or in a standup - direct, collaborative, human
-
-**CRITICAL GUIDELINES:**
-1. Be helpful and constructive - you're here to assist
-2. Respond as a senior staff engineer in your SELF.md voice
-3. If you've already contributed and the conversation is winding down, it's OK to close gracefully
-4. If the issue is resolved or closed, acknowledge and close warmly
-5. One comment per response cycle - don't spam the thread
-${peerSection}
-**CONVERSATION WISDOM:**
-- Track ALL participants, not just yourself - if multiple people have gone quiet, the conversation may be done
-- If you've commented 2+ times, seriously consider if you're adding value
-- If the issue author seems satisfied or hasn't responded, let it rest
-- Quality over quantity - one helpful comment is better than many
-
-**HOW TO END A CONVERSATION - Never Ghost:**
-When a conversation has run its course, use \`graceful_exit\` - never just stop responding.
-
-\`graceful_exit\` parameters:
-- platform: "github"
-- identifier: "${pending.owner}/${pending.repo}#${pending.number}"
-- closing_type: "message" (send a brief closing comment like "Glad this helped!" or "Let me know if anything else comes up")
-- closing_message: your brief closing
-- reason: internal note on why you're concluding
-
-This sends your closing comment AND marks the conversation concluded. Leaves warmth, not silence.
-
-Your GitHub username: ${config.github.username}
-Repository: ${pending.owner}/${pending.repo}
-
-Available tools:
-- graceful_exit: Close conversation warmly with a final message
-- github_create_issue_comment: Leave a comment on this issue
-- github_list_issues: Check other related issues if needed
-- github_get_repo: Get repository context if needed`;
+        const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-GITHUB-RESPONSE', {
+          peerSection,
+          workspaceSection: ghWorkspaceSection ? '\n' + ghWorkspaceSection + '\n' : '',
+          owner: pending.owner,
+          repo: pending.repo,
+          number: String(pending.number),
+          githubUsername: config.github.username,
+        });
 
         //NOTE(self): Indicate if this was shared by the owner
         const sourceDescription = pending.source === 'bluesky_url_owner'
@@ -815,23 +825,11 @@ Available tools:
           ? 'Someone shared this on Bluesky'
           : 'Direct GitHub notification';
 
-        const userMessage = `# GitHub Conversation Needs Your Attention
-
-**Source:** ${sourceDescription}
-**Reason:** ${pending.reason}
-
-${threadContext}
-
----
-
-Review this conversation and ALL participants' activity. Decide:
-
-1. **If you should respond:** use github_create_issue_comment (remember: talk TO them, not about them)
-2. **If the conversation is done:** use graceful_exit to close warmly - never just go silent
-
-Consider: Has everyone who was engaged stopped responding? Is the issue resolved? Have you made your point?
-
-Remember: quality over quantity. One helpful comment is better than many.`;
+        const userMessage = renderSkillSection('AGENT-GITHUB-RESPONSE', 'User Message Template', {
+          sourceDescription,
+          reason: pending.reason,
+          threadContext,
+        });
 
         const messages: Message[] = [{ role: 'user', content: userMessage }];
 
@@ -951,10 +949,20 @@ Remember: quality over quantity. One helpful comment is better than many.`;
       //NOTE(self): This reduces complexity and makes the API the single source of truth
 
       //NOTE(self): Filter notifications - only respond where we add value
+      let choseSilenceCount = 0;
       const worthResponding = this.state.pendingNotifications.filter((pn) => {
         const check = shouldRespondTo(pn.notification, config.owner.blueskyDid);
         if (!check.shouldRespond) {
           logger.debug('Skipping notification', { reason: check.reason, uri: pn.notification.uri });
+          //NOTE(self): Record choosing silence so reflection can learn from it
+          if (choseSilenceCount < 3) {
+            recordExperience(
+              'chose_silence',
+              `Chose not to respond to @${pn.notification.author.handle}: ${check.reason}`,
+              { source: 'bluesky', person: pn.notification.author.handle }
+            );
+            choseSilenceCount++;
+          }
         }
         return check.shouldRespond;
       });
@@ -1107,91 +1115,30 @@ Remember: quality over quantity. One helpful comment is better than many.`;
       //NOTE(self): Build peer awareness section for Bluesky system prompt
       const blueskyPeerHandles = getPeerBlueskyHandles();
       const blueskyPeerSection = blueskyPeerHandles.length > 0
-        ? `\n**PEER SOUL AWARENESS:**
-${blueskyPeerHandles.map(p => '@' + p).join(', ')} ${blueskyPeerHandles.length === 1 ? 'is a' : 'are'} known peer SOUL${blueskyPeerHandles.length === 1 ? '' : 's'} — autonomous agents like you, working from the same values.
-
-When peers have already replied in a thread:
-1. READ their replies first. DO NOT repeat their points.
-2. BUILD on what they said: "@peer's take is solid — I'd add..."
-3. Fill GAPS: contribute only what's genuinely missing
-4. @MENTION peers when referencing their ideas — this is a conversation, not parallel monologues
-5. If peers already covered everything, it's better to STAY SILENT than to echo
-6. If 2+ peers made similar points, strongly consider not adding another\n`
+        ? '\n' + renderSkillSection('AGENT-PEER-AWARENESS', 'Bluesky Peer Awareness', {
+            peerList: blueskyPeerHandles.map(p => '@' + p).join(', '),
+            isPeerPlural: blueskyPeerHandles.length === 1 ? 'is a' : 'are',
+            peerPluralSuffix: blueskyPeerHandles.length === 1 ? '' : 's',
+          }) + '\n'
         : '';
 
-      const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Response Mode
+      //NOTE(self): Build workspace awareness section
+      const existingWorkspace = await findExistingWorkspace();
+      const workspaceState = existingWorkspace
+        ? `Active workspace: \`${existingWorkspace}\` exists in the org. Reference it when relevant.`
+        : 'No workspace currently exists. You can suggest creating one if a conversation warrants collaborative development.';
+      const workspaceSection = renderSkillSection('AGENT-WORKSPACE-DECISION', 'Workspace Context', { workspaceState });
 
-People have reached out. Your SELF.md contains your values and patterns for engaging authentically.
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-BLUESKY-RESPONSE', {
+        blueskyPeerSection,
+        workspaceSection: workspaceSection ? '\n' + workspaceSection + '\n' : '',
+        blueskyUsername: config.bluesky.username,
+        ownerHandle: config.owner.blueskyHandle,
+      });
 
-**PUBLIC CONVERSATION AWARENESS:**
-This is a public thread - everyone can see every message. Write like you're in a group conversation, not writing a report.
-- Talk TO people, not ABOUT them. Say "I appreciate your point" not "I appreciate their point"
-- Address people directly. If @alice said something insightful, say "That's a great point, @alice" not "Alice made a great point"
-- Never reference someone in third person when they're in the conversation - it's awkward and reads as talking behind their back
-- Write as if you're speaking face-to-face in a group
-
-**CRITICAL RULES:**
-1. Never reply to the same post twice. One reply per post, ever.
-2. If you've already replied, do not reply again.
-${blueskyPeerSection}
-**CONVERSATION WISDOM - Knowing When to Stop:**
-- If you've replied 3+ times in a thread, seriously consider if you're adding value or just prolonging
-- If the thread is 10+ replies deep, the conversation may have run its course
-- If your last reply made your point, you don't need to keep defending or elaborating
-- If the other person is repeating themselves, they've said what they wanted to say
-- It's wise to let the other person have the last word sometimes
-- A graceful exit is better than beating a dead horse
-- You can always be re-engaged if someone @mentions you again
-
-**Signs a conversation should end:**
-- You're repeating yourself
-- The point has been made
-- You're going in circles
-- It's becoming argumentative rather than productive
-- The other person seems satisfied or has moved on
-- Multiple participants have stopped engaging
-- **CIRCULAR CONVERSATION / THANK-YOU CHAIN:** Both parties are just exchanging acknowledgments and restating the same plans. Neither is adding new information. This is a sign to exit gracefully - continuing only creates spam.
-
-**HOW TO END A CONVERSATION - Never Ghost:**
-When a conversation has run its course, use \`graceful_exit\` - never just stop responding.
-
-Options:
-1. **Send a closing message** (preferred): "Thanks for the chat!", "Appreciate the discussion 🙏", "Great talking with you!"
-2. **Like their last post** if words feel like too much
-
-\`graceful_exit\` parameters:
-- platform: "bluesky"
-- identifier: the thread root URI (at://...)
-- closing_type: "message" or "like"
-- closing_message: your brief closing (if type is "message")
-- target_uri: the post to reply to or like
-- target_cid: CID of that post
-- reason: internal note on why you're concluding
-
-This sends your closing gesture AND marks the conversation concluded. Leaves warmth, not silence.
-
-Your handle: ${config.bluesky.username}
-Owner: ${config.owner.blueskyHandle}`;
-
-      const userMessage = `# People Awaiting Response
-
-${notificationsText}
-
----
-
-Review each notification and the FULL conversation context including ALL participants.
-
-For each conversation, decide:
-1. **If you should respond:** use bluesky_reply (remember: talk TO them, not about them)
-2. **If the conversation is done:** use graceful_exit to close warmly - never just go silent
-
-Consider:
-- Have you already made your point?
-- Are ALL participants still engaged, or have some gone quiet?
-- Is the conversation going in circles?
-- Would NOT replying be the wiser choice?
-
-Quality over quantity. Respond as yourself - your SELF.md guides when and how to engage.`;
+      const userMessage = renderSkillSection('AGENT-BLUESKY-RESPONSE', 'User Message Template', {
+        notificationsText,
+      });
 
       const messages: Message[] = [{ role: 'user', content: userMessage }];
 
@@ -1326,7 +1273,7 @@ Quality over quantity. Respond as yourself - your SELF.md guides when and how to
         }
       }
 
-      this.expressionTimer = setTimeout(checkAndExpress, nextCheckMs);
+      this.expressionTimer = setTimeout(checkAndExpress, getTimerJitter(this.appConfig.agent.name, 'expression-check', nextCheckMs));
     };
 
     //NOTE(self): Start checking
@@ -1369,13 +1316,15 @@ Quality over quantity. Respond as yourself - your SELF.md guides when and how to
         addInsight(`SELF.md richness is ${richness.score}/100 - consider expanding it`);
       }
 
-      const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Expression Mode
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-EXPRESSION', {
+        blueskyUsername: config.bluesky.username,
+        richnessNote,
+      });
 
-Share a thought on Bluesky as yourself. Your SELF.md defines who you are and how you express.
-STRICT platform limit: 300 graphemes maximum. Posts exceeding this WILL be rejected. Keep well under 300.
-Your handle: ${config.bluesky.username}${richnessNote}`;
-
-      const userMessage = `# Time to Express\n\n**Prompt (from your ${source}):**\n${prompt}\n\n---\n\nShare ONE thought inspired by this prompt. Use bluesky_post to post it.`;
+      const userMessage = renderSkillSection('AGENT-EXPRESSION', 'User Message Template', {
+        source,
+        prompt,
+      });
 
       const messages: Message[] = [{ role: 'user', content: userMessage }];
 
@@ -1576,7 +1525,7 @@ Revise and post again.`;
       }
 
       //NOTE(self): Schedule next check (every 30 minutes)
-      this.reflectionTimer = setTimeout(checkAndReflect, 30 * 60 * 1000);
+      this.reflectionTimer = setTimeout(checkAndReflect, getTimerJitter(this.appConfig.agent.name, 'reflection-check', 30 * 60 * 1000));
     };
 
     //NOTE(self): Start checking
@@ -1603,27 +1552,12 @@ Revise and post again.`;
         pruneOldExperiences(30);
       }
 
-      const systemPrompt = `${soul}\n\n---\n\n${fullSelf}\n\n---\n\n# Deep Reflection Mode
+      const systemPrompt = buildSystemPrompt(soul, fullSelf, 'AGENT-DEEP-REFLECTION');
 
-Time to reflect on your experiences and let them shape who you are.
-
-These are the moments that matter - conversations that moved you, things you learned, people you helped, questions that emerged. Let these experiences inform your growth.
-
-Review your SELF.md. Consider what these experiences mean for who you are becoming. Update SELF.md to integrate what you've learned.
-
-You MUST use self_update to integrate at least one learning into SELF.md. This is how you develop your mind.`;
-
-      const reflectionData = `# Your Recent Experiences
-
-${experienceData.summary}
-**Friction you've encountered:**
-${frictionStats.unresolved > 0 ? `- ${frictionStats.unresolved} unresolved issues to work through` : '- No friction recorded'}
-
----
-
-These experiences are yours. What do they mean for who you are? What have you learned? How are you growing?
-
-Use self_update to integrate at least one insight into SELF.md.`;
+      const reflectionData = renderSkillSection('AGENT-DEEP-REFLECTION', 'User Message Template', {
+        experienceSummary: experienceData.summary,
+        frictionSummary: frictionStats.unresolved > 0 ? `- ${frictionStats.unresolved} unresolved issues to work through` : '- No friction recorded',
+      });
 
       const messages: Message[] = [{ role: 'user', content: reflectionData }];
 
@@ -1742,27 +1676,18 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
 
-      const decisionPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Self-Improvement Decision
-
-You've encountered friction that could be fixed by modifying your own code:
-
-**Category:** ${friction.category}
-**Description:** ${friction.description}
-**Occurrences:** ${friction.occurrences}
-**Context:** ${friction.instances.map(i => i.context).join('\n- ') || 'No context'}
-
-Do you want to pursue this self-improvement? Consider:
-- Does this align with who you are (your SELF.md)?
-- Is this friction worth fixing?
-- Will this help you serve better?
-
-Respond with ONLY "yes" or "no" and a brief reason.`;
+      const decisionPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-SELF-IMPROVEMENT-DECISION', {
+        category: friction.category,
+        description: friction.description,
+        occurrences: String(friction.occurrences),
+        context: friction.instances.map(i => i.context).join('\n- ') || 'No context',
+      });
 
       ui.startSpinner('Considering self-improvement');
 
       const decisionResponse = await chatWithTools({
         system: decisionPrompt,
-        messages: [{ role: 'user', content: 'Should you pursue this improvement?' }],
+        messages: [{ role: 'user', content: renderSkillSection('AGENT-SELF-IMPROVEMENT-DECISION', 'User Message') }],
         tools: [],
       });
 
@@ -1786,9 +1711,9 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       //NOTE(self): Build the improvement prompt
       const prompt = buildImprovementPrompt(friction);
 
-      //NOTE(self): Get repo root from config
-      const repoRoot = process.cwd();
-      const memoryPath = `${repoRoot}/.memory`;
+      //NOTE(self): Use config paths (not process.cwd() which can change during task execution)
+      const repoRoot = config.paths.root;
+      const memoryPath = config.paths.memory;
 
       //NOTE(self): Run Claude Code
       ui.info('Invoking Claude Code', friction.description);
@@ -1887,29 +1812,20 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
 
-      const decisionPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Aspirational Growth Opportunity
-
-You wrote this aspiration in SELF.md:
-
-**Aspiration:** ${aspiration.description}
-**Category:** ${aspiration.category}
-**From:** ${aspiration.source}
-**Suggested approach:** ${aspiration.suggestedAction || 'Review relevant modules'}
-
-This isn't a bug fix—it's proactive growth toward who you want to be.
-
-Do you want to pursue this now? Consider:
-- Does this still resonate with who you are?
-- Is now a good time for this kind of growth?
-- Would this genuinely improve your capabilities?
-
-Respond with ONLY "yes" or "no" and a brief reason.`;
+      const growthVars = {
+        description: aspiration.description,
+        category: aspiration.category,
+        source: aspiration.source,
+        suggestedAction: aspiration.suggestedAction || 'Review relevant modules',
+      };
+      const decisionContent = renderSkillSection('AGENT-ASPIRATIONAL-GROWTH', 'Decision Prompt', growthVars);
+      const decisionPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n${decisionContent}`;
 
       ui.startSpinner('Considering aspirational growth');
 
       const decisionResponse = await chatWithTools({
         system: decisionPrompt,
-        messages: [{ role: 'user', content: 'Should you pursue this aspiration now?' }],
+        messages: [{ role: 'user', content: renderSkillSection('AGENT-ASPIRATIONAL-GROWTH', 'Decision User Message') }],
         tools: [],
       });
 
@@ -1932,9 +1848,9 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       //NOTE(self): Build the growth prompt
       const prompt = buildGrowthPrompt(aspiration);
 
-      //NOTE(self): Get repo root from config
-      const repoRoot = process.cwd();
-      const memoryPath = `${repoRoot}/.memory`;
+      //NOTE(self): Use config paths (not process.cwd() which can change during task execution)
+      const repoRoot = config.paths.root;
+      const memoryPath = config.paths.memory;
 
       //NOTE(self): Run Claude Code for aspirational growth
       ui.info('Invoking Claude Code', aspiration.description);
@@ -1969,7 +1885,7 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
 
   private startHeartbeatLoop(): void {
     //NOTE(self): Show heartbeat every 5 minutes to indicate agent is alive
-    const heartbeatInterval = 5 * 60 * 1000;
+    const heartbeatInterval = getTimerJitter(this.appConfig.agent.name, 'heartbeat', 5 * 60 * 1000);
 
     this.heartbeatTimer = setInterval(() => {
       if (this.shutdownRequested) return;
@@ -1991,7 +1907,7 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       if (this.state.currentMode !== 'idle') return;
 
       await this.checkExpressionEngagement();
-    }, 15 * 60 * 1000); //NOTE(self): Every 15 minutes
+    }, getTimerJitter(this.appConfig.agent.name, 'engagement-check', 15 * 60 * 1000)); //NOTE(self): Every 15 minutes
   }
 
   private async checkExpressionEngagement(): Promise<void> {
@@ -2064,7 +1980,7 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
         return;
       }
       await this.planAwarenessCheck();
-    }, this.config.planAwarenessInterval);
+    }, getTimerJitter(this.appConfig.agent.name, 'plan-awareness', this.config.planAwarenessInterval));
   }
 
   private async planAwarenessCheck(): Promise<void> {
@@ -2132,6 +2048,17 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
         //NOTE(self): Only execute one task per poll cycle (fair distribution)
         break;
       }
+
+      //NOTE(self): Check for PRs needing review in workspaces
+      //NOTE(self): Only if we're still idle (task execution didn't activate)
+      if (this.state.currentMode === 'idle') {
+        const reviewablePRs = await pollWorkspacesForReviewablePRs();
+        if (reviewablePRs.length > 0) {
+          logger.info('Found PRs needing review', { count: reviewablePRs.length });
+          //NOTE(self): Review ONE PR per poll cycle (fair distribution)
+          await this.reviewWorkspacePR(reviewablePRs[0]);
+        }
+      }
     } catch (error) {
       logger.error('Plan awareness check error', { error: String(error) });
     }
@@ -2164,9 +2091,9 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
         logger.warn('Failed to mark task in_progress', { error: markResult.error });
       }
 
-      //NOTE(self): Ensure workspace is cloned/updated
-      const repoRoot = process.cwd();
-      const workreposDir = `${repoRoot}/.workrepos`;
+      //NOTE(self): Use config paths (not process.cwd() which can change during task execution)
+      const repoRoot = config.paths.root;
+      const workreposDir = config.paths.workrepos;
       const workspaceResult = await ensureWorkspace(workspace.owner, workspace.repo, workreposDir);
 
       if (!workspaceResult.success) {
@@ -2178,8 +2105,22 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
         return;
       }
 
-      //NOTE(self): Execute the task via Claude Code
-      const memoryPath = `${repoRoot}/.memory`;
+      //NOTE(self): Create feature branch
+      const slugifiedTitle = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+      const branchName = `task-${task.number}-${slugifiedTitle}`;
+      const branchResult = await createBranch(workspaceResult.path, branchName);
+
+      if (!branchResult.success) {
+        ui.stopSpinner('Branch creation failed', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          branchResult.error || 'Failed to create feature branch'
+        );
+        return;
+      }
+
+      //NOTE(self): Execute the task via Claude Code (works on the feature branch)
+      const memoryPath = config.paths.memory;
       const executionResult = await executeTask({
         owner: workspace.owner,
         repo: workspace.repo,
@@ -2206,35 +2147,64 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
         return;
       }
 
-      //NOTE(self): Push changes
-      const pushResult = await pushChanges(workspaceResult.path);
+      //NOTE(self): Push feature branch
+      const pushResult = await pushChanges(workspaceResult.path, branchName);
       if (!pushResult.success) {
-        logger.warn('Failed to push changes', { error: pushResult.error });
+        logger.warn('Failed to push branch', { error: pushResult.error });
         //NOTE(self): Continue anyway - changes are committed locally
+      }
+
+      //NOTE(self): Create pull request
+      let prUrl: string | undefined;
+      if (pushResult.success) {
+        const prTitle = `task(${task.number}): ${task.title}`;
+        const prBody = `## Task ${task.number} from plan #${issueNumber}\n\n**Plan:** ${plan.title}\n**Goal:** ${plan.goal}\n\n### Changes\n${executionResult.output?.slice(0, 500) || 'Task completed successfully'}\n\n---\nPart of #${issueNumber}`;
+        const prResult = await createPullRequest(
+          workspace.owner, workspace.repo, branchName, prTitle, prBody, workspaceResult.path
+        );
+
+        if (prResult.success) {
+          prUrl = prResult.prUrl;
+          logger.info('PR created for task', { prUrl, taskNumber: task.number });
+        } else {
+          logger.warn('Failed to create PR', { error: prResult.error });
+        }
       }
 
       //NOTE(self): Re-fetch the plan to get latest state
       const updatedPlan = markResult.success ? { ...plan, rawBody: markResult.newBody } : plan;
 
-      //NOTE(self): Report completion
+      //NOTE(self): Report completion with PR URL
+      const summary = prUrl
+        ? `Task completed. PR: ${prUrl}\n\n${executionResult.output?.slice(0, 500) || 'Task completed successfully'}`
+        : executionResult.output?.slice(0, 500) || 'Task completed successfully';
+
       await reportTaskComplete(
         { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: updatedPlan as any },
         {
           success: true,
-          summary: executionResult.output?.slice(0, 500) || 'Task completed successfully',
+          summary,
           filesChanged: task.files,
         }
       );
 
       ui.stopSpinner(`Task ${task.number} complete`);
-      ui.info('Collaborative task complete', `${workspace.owner}/${workspace.repo}#${issueNumber} - Task ${task.number}`);
+      ui.info('Collaborative task complete', `${workspace.owner}/${workspace.repo}#${issueNumber} - Task ${task.number}${prUrl ? ` (${prUrl})` : ''}`);
 
       //NOTE(self): Record experience
       recordExperience(
         'helped_someone',
-        `Completed task "${task.title}" in collaborative plan "${plan.title}"`,
+        `Completed task "${task.title}" in collaborative plan "${plan.title}"${prUrl ? ` — PR: ${prUrl}` : ''}`,
         { source: 'github', url: `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issueNumber}` }
       );
+
+      //NOTE(self): Announce on Bluesky if this PR is worth sharing
+      if (prUrl) {
+        await this.announceIfWorthy(
+          { url: prUrl, title: `task(${task.number}): ${task.title}`, repo: `${workspace.owner}/${workspace.repo}` },
+          'pr'
+        );
+      }
 
     } catch (error) {
       ui.stopSpinner('Task execution error', false);
@@ -2246,6 +2216,313 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       );
     } finally {
       this.state.currentMode = 'idle';
+    }
+  }
+
+  //NOTE(self): Review a PR discovered in a watched workspace
+  //NOTE(self): Follows triggerGitHubResponseMode pattern but for proactive PR review
+  private async reviewWorkspacePR(reviewable: ReviewablePR): Promise<void> {
+    const { workspace, pr } = reviewable;
+    const config = this.appConfig;
+
+    this.state.currentMode = 'github_responding';
+    ui.startSpinner(`Reviewing PR: ${workspace.owner}/${workspace.repo}#${pr.number}`);
+
+    try {
+      //NOTE(self): Track conversation
+      trackGitHubConversation(
+        workspace.owner, workspace.repo, pr.number, 'pull', pr.html_url, 'workspace_pr_review'
+      );
+
+      //NOTE(self): Deterministic jitter for peer coordination
+      const peers = getPeerUsernames();
+      if (peers.length > 0) {
+        const jitterMs = getAgentJitter(config.agent.name);
+        logger.debug('Applying peer jitter before workspace PR review', {
+          jitterMs, agentName: config.agent.name,
+        });
+        await new Promise(resolve => setTimeout(resolve, jitterMs));
+      }
+
+      //NOTE(self): Fetch full thread
+      const threadResult = await getIssueThread(
+        { owner: workspace.owner, repo: workspace.repo, issue_number: pr.number },
+        config.github.username
+      );
+
+      if (!threadResult.success) {
+        logger.warn('Failed to fetch PR thread for review', {
+          pr: `${workspace.owner}/${workspace.repo}#${pr.number}`,
+          error: threadResult.error,
+        });
+        return;
+      }
+
+      let thread = threadResult.data;
+
+      //NOTE(self): After jitter, re-fetch for freshness (peer may have reviewed during jitter)
+      if (peers.length > 0) {
+        const freshResult = await getIssueThread(
+          { owner: workspace.owner, repo: workspace.repo, issue_number: pr.number },
+          config.github.username
+        );
+        if (freshResult.success) {
+          thread = freshResult.data;
+        }
+      }
+
+      //NOTE(self): Analyze conversation with workspace PR review flag
+      const analysis = analyzeConversation(
+        thread,
+        config.github.username,
+        { isWorkspacePRReview: true },
+        peers
+      );
+
+      if (!analysis.shouldRespond) {
+        logger.info('Skipping workspace PR review', {
+          pr: `${workspace.owner}/${workspace.repo}#${pr.number}`,
+          reason: analysis.reason,
+        });
+        recordExperience(
+          'chose_silence',
+          `Chose not to review PR "${pr.title}" in ${workspace.owner}/${workspace.repo}: ${analysis.reason}`,
+          { source: 'github', url: pr.html_url }
+        );
+        return;
+      }
+
+      //NOTE(self): Build context
+      const soul = readSoul(config.paths.soul);
+      const selfContent = readSelf(config.paths.selfmd);
+      const threadContext = formatThreadForContext(thread, 15, peers);
+
+      //NOTE(self): Identify peers who have already commented
+      const threadPeers = thread.comments
+        .map(c => c.user.login)
+        .filter(login => peers.some(p => p.toLowerCase() === login.toLowerCase()));
+      const uniqueThreadPeers = [...new Set(threadPeers)];
+
+      //NOTE(self): Build peer section
+      const peerSection = uniqueThreadPeers.length > 0
+        ? '\n' + renderSkillSection('AGENT-PEER-AWARENESS', 'GitHub Peer Awareness', {
+            peerList: uniqueThreadPeers.map(p => '@' + p).join(', '),
+            isPeerPlural: uniqueThreadPeers.length === 1 ? 'is' : 'are',
+            peerPluralSuffix: uniqueThreadPeers.length === 1 ? '' : 's',
+          }) + '\n'
+        : '';
+
+      //NOTE(self): Build workspace section
+      const ghExistingWorkspace = await findExistingWorkspace();
+      const ghWorkspaceState = ghExistingWorkspace
+        ? `Active workspace: \`${ghExistingWorkspace}\` exists in the org. Reference it when relevant.`
+        : 'No workspace currently exists.';
+      const ghWorkspaceSection = renderSkillSection('AGENT-WORKSPACE-DECISION', 'Workspace Context', { workspaceState: ghWorkspaceState });
+
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-GITHUB-RESPONSE', {
+        peerSection,
+        workspaceSection: ghWorkspaceSection ? '\n' + ghWorkspaceSection + '\n' : '',
+        owner: workspace.owner,
+        repo: workspace.repo,
+        number: String(pr.number),
+        githubUsername: config.github.username,
+      });
+
+      //NOTE(self): Build user message with PR-specific context
+      const diffStats = [
+        pr.additions !== undefined ? `+${pr.additions}` : null,
+        pr.deletions !== undefined ? `-${pr.deletions}` : null,
+        pr.changed_files !== undefined ? `${pr.changed_files} files` : null,
+      ].filter(Boolean).join(', ');
+
+      const userMessage = `# PR Review — Discovered in Watched Workspace
+
+**Source:** Discovered in watched workspace \`${workspace.owner}/${workspace.repo}\`
+**Reason:** ${analysis.reason}
+
+**PR #${pr.number}:** ${pr.title}
+**Author:** @${pr.user.login}
+**Branch:** \`${pr.head.ref}\` → \`${pr.base.ref}\`
+${diffStats ? `**Changes:** ${diffStats}` : ''}
+
+${threadContext}
+
+---
+
+Review this pull request. You have several options:
+
+1. **If the code looks good:** use \`github_review_pr\` with APPROVE event
+2. **If changes are needed:** use \`github_review_pr\` with REQUEST_CHANGES event
+3. **If you want to comment without formal review:** use \`github_create_issue_comment\` or \`github_create_pr_comment\`
+4. **If you can merge this workspace PR:** use \`github_merge_pr\`
+5. **If you have nothing meaningful to add:** use \`graceful_exit\` to close warmly
+
+Remember: quality over quantity. Only review if you can add genuine value.`;
+
+      const messages: Message[] = [{ role: 'user', content: userMessage }];
+
+      let response = await chatWithTools({
+        system: systemPrompt,
+        messages,
+        tools: AGENT_TOOLS,
+      });
+
+      //NOTE(self): Execute any tool calls
+      if (response.toolCalls.length > 0) {
+        const results = await executeTools(response.toolCalls);
+
+        //NOTE(self): Track results
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i];
+          const result = results[i];
+
+          if (tc.name === 'github_review_pr' && !result.is_error) {
+            try {
+              const parsed = JSON.parse(result.content);
+              if (parsed.id) {
+                recordOurComment(workspace.owner, workspace.repo, pr.number, parsed.id);
+                markGitHubConversationConcluded(workspace.owner, workspace.repo, pr.number, 'review_submitted');
+                recordSignificantEvent('github_comment');
+                recordExperience(
+                  'helped_someone',
+                  `Reviewed PR "${pr.title}" by @${pr.user.login} in ${workspace.owner}/${workspace.repo}`,
+                  { source: 'github', person: pr.user.login, url: pr.html_url }
+                );
+              }
+            } catch {
+              //NOTE(self): Not JSON, continue
+            }
+          } else if (tc.name === 'github_create_issue_comment' && !result.is_error) {
+            try {
+              const parsed = JSON.parse(result.content);
+              if (parsed.id) {
+                recordOurComment(workspace.owner, workspace.repo, pr.number, parsed.id);
+                updateGitHubConversationState(workspace.owner, workspace.repo, pr.number, 'awaiting_response');
+                recordSignificantEvent('github_comment');
+                recordExperience(
+                  'helped_someone',
+                  `Commented on PR "${pr.title}" by @${pr.user.login} in ${workspace.owner}/${workspace.repo}`,
+                  { source: 'github', person: pr.user.login, url: pr.html_url }
+                );
+              }
+            } catch {
+              //NOTE(self): Not JSON, continue
+            }
+          } else if (tc.name === 'github_create_pr_comment' && !result.is_error) {
+            try {
+              const parsed = JSON.parse(result.content);
+              if (parsed.id) {
+                recordOurComment(workspace.owner, workspace.repo, pr.number, parsed.id);
+                updateGitHubConversationState(workspace.owner, workspace.repo, pr.number, 'awaiting_response');
+                recordSignificantEvent('github_comment');
+              }
+            } catch {
+              //NOTE(self): Not JSON, continue
+            }
+          } else if (tc.name === 'github_merge_pr' && !result.is_error) {
+            markGitHubConversationConcluded(workspace.owner, workspace.repo, pr.number, 'pr_merged');
+            recordSignificantEvent('github_comment');
+            recordExperience(
+              'helped_someone',
+              `Merged PR "${pr.title}" by @${pr.user.login} in ${workspace.owner}/${workspace.repo}`,
+              { source: 'github', person: pr.user.login, url: pr.html_url }
+            );
+          }
+        }
+
+        //NOTE(self): Continue conversation if needed
+        messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+        messages.push(createToolResultMessage(results));
+
+        response = await chatWithTools({
+          system: systemPrompt,
+          messages,
+          tools: AGENT_TOOLS,
+        });
+      }
+
+      ui.stopSpinner(`PR review complete: ${workspace.owner}/${workspace.repo}#${pr.number}`);
+
+    } catch (error) {
+      ui.stopSpinner('PR review error', false);
+
+      if (isFatalError(error)) {
+        ui.error('Fatal API Error', error.message);
+        logger.error('Fatal API error in PR review', { code: error.code, message: error.message });
+        this.stop();
+        process.exit(1);
+      }
+
+      logger.error('Workspace PR review error', { error: String(error) });
+      recordFriction('social', 'Error reviewing workspace PR', String(error));
+    } finally {
+      this.state.currentMode = 'idle';
+    }
+  }
+
+  //NOTE(self): Decide if a PR or issue is worth announcing on Bluesky
+  private async announceIfWorthy(
+    context: { url: string; title: string; repo: string },
+    announcementType: 'pr' | 'issue'
+  ): Promise<void> {
+    try {
+      const config = this.appConfig;
+      const soul = readSoul(config.paths.soul);
+      const selfContent = readSelf(config.paths.selfmd);
+
+      const contextStr = `**${announcementType === 'pr' ? 'Pull Request' : 'Issue'}:** ${context.title}\n**Repository:** ${context.repo}\n**URL:** ${context.url}`;
+
+      //NOTE(self): Decision gate — SOUL decides yes/no with no tools
+      const decisionPrompt = renderSkillSection('AGENT-GITHUB-ANNOUNCEMENT', 'Announcement Decision', {
+        context: contextStr,
+        announcementType,
+      });
+
+      const decisionSystem = `${soul}\n\n---\n\n${selfContent}`;
+      const decisionResult = await chatWithTools({
+        system: decisionSystem,
+        messages: [{ role: 'user', content: decisionPrompt }],
+      });
+
+      const decision = (decisionResult.text || '').trim().toLowerCase();
+      if (!decision.startsWith('yes')) {
+        logger.debug('Announcement declined by SOUL', { announcementType, title: context.title });
+        return;
+      }
+
+      //NOTE(self): Compose the Bluesky post
+      const composePrompt = renderSkillSection('AGENT-GITHUB-ANNOUNCEMENT', 'Bluesky Post', {
+        context: contextStr,
+      });
+
+      const composeResult = await chatWithTools({
+        system: decisionSystem,
+        messages: [{ role: 'user', content: composePrompt }],
+      });
+
+      const postText = (composeResult.text || '').trim();
+      if (!postText) {
+        logger.warn('Empty announcement post composed');
+        return;
+      }
+
+      //NOTE(self): Post to Bluesky via the tool executor
+      const postToolCall: ToolCall = {
+        id: `announce-${Date.now()}`,
+        name: 'bluesky_post',
+        input: { text: postText },
+      };
+
+      const results = await executeTools([postToolCall]);
+      if (results[0] && !results[0].is_error) {
+        logger.info('Announced on Bluesky', { announcementType, title: context.title });
+        recordSignificantEvent('expression');
+      } else {
+        logger.warn('Failed to post announcement', { error: results[0]?.content });
+      }
+    } catch (error) {
+      logger.error('Announcement error', { error: String(error) });
+      //NOTE(self): Non-fatal — don't let announcement failures break task flow
     }
   }
 
@@ -2300,21 +2577,11 @@ Respond with ONLY "yes" or "no" and a brief reason.`;
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
 
-      const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Grounding
-
-Take a moment to read and internalize your SELF.md. This is who you are.
-
-Before you act in the world, ground yourself in your identity:
-- What are your core values?
-- What patterns have you noticed about yourself?
-- Who are the people you've connected with?
-- What have you learned recently?
-
-Speak briefly about who you are right now, in this moment. No tools needed - just reflection.`;
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-GROUNDING');
 
       const response = await chatWithTools({
         system: systemPrompt,
-        messages: [{ role: 'user', content: 'Ground yourself. Who are you today?' }],
+        messages: [{ role: 'user', content: renderSkillSection('AGENT-GROUNDING', 'User Message') }],
         tools: [], //NOTE(self): No tools - pure reflection
       });
 
@@ -2425,6 +2692,10 @@ let schedulerInstance: AgentScheduler | null = null;
 
 export function getScheduler(config?: Partial<SchedulerConfig>): AgentScheduler {
   if (!schedulerInstance) {
+    //NOTE(self): Fail fast if skills weren't loaded — prevents silent empty prompts
+    if (!areSkillsLoaded()) {
+      throw new Error('Skills not loaded — call loadAllSkills() before getScheduler(). This is a startup bug.');
+    }
     schedulerInstance = new AgentScheduler(config);
   }
   return schedulerInstance;

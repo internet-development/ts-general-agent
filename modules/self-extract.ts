@@ -4,6 +4,7 @@
 //NOTE(self): The more I write in SELF.md, the richer my expression becomes.
 
 import { readSelf } from '@modules/memory.js';
+import { getConfig } from '@modules/config.js';
 
 //NOTE(self): My preferences for how I engage in conversations
 //NOTE(self): These are signals to wrap up gracefully, not hard stops
@@ -68,7 +69,7 @@ export interface SelfExtract {
 
 //NOTE(self): Extract structured data from my SELF.md
 export function extractFromSelf(selfContent?: string): SelfExtract {
-  const content = selfContent || readSelf(process.cwd() + '/SELF.md');
+  const content = selfContent || readSelf(getConfig().paths.selfmd);
 
   const extract: SelfExtract = {
     identity: '',

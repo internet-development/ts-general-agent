@@ -50,6 +50,8 @@ interface ConversationRecord {
   conclusionReason?: string;
   //NOTE(self): Source that triggered our engagement
   source: 'notification' | 'owner_mention' | 'expression_reply';
+  //NOTE(self): How many times we've re-engaged after concluding (cap at 1)
+  reengagementCount: number;
 }
 
 interface BlueskyConversationState {
@@ -144,6 +146,7 @@ export function trackConversation(
     ourLastReplyUri: null,
     state: 'new',
     source,
+    reengagementCount: 0,
   };
 
   state.conversations[rootUri] = record;
@@ -411,6 +414,28 @@ export function shouldRespondInConversation(
 
   const conversation = getConversation(rootUri);
   if (conversation?.state === 'concluded') {
+    //NOTE(self): Check for re-engagement — if someone replied after conclusion, come back (once)
+    const reengageCount = conversation.reengagementCount ?? 0;
+    if (reengageCount < 1) {
+      const conclusionTime = new Date(conversation.lastChecked).getTime();
+      const participants = Object.values(conversation.participants);
+      const hasNewReply = participants.some(p =>
+        p.did !== agentDid && new Date(p.lastReplyAt).getTime() > conclusionTime
+      );
+      if (hasNewReply) {
+        //NOTE(self): Re-engage — transition back to active
+        const state = loadState();
+        const conv = state.conversations[rootUri];
+        if (conv) {
+          conv.state = 'active';
+          conv.reengagementCount = reengageCount + 1;
+          conv.lastChecked = new Date().toISOString();
+          saveState();
+          logger.info('Re-engaging in concluded Bluesky conversation', { rootUri });
+        }
+        return { shouldRespond: true, reason: 'Someone re-engaged after conclusion' };
+      }
+    }
     return { shouldRespond: false, reason: conversation.conclusionReason || 'Conversation concluded' };
   }
 

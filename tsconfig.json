@@ -16,7 +16,7 @@
       "@root/*": ["./*"],
       "@adapters/*": ["./adapters/*"],
       "@modules/*": ["./modules/*"],
-      "@skills/*": ["./skills/*"]
+      "@local-tools/*": ["./local-tools/*"]
     }
   },
   "include": ["**/*.ts"],

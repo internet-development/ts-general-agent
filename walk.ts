@@ -11,6 +11,7 @@ dotenvConfig();
 import { getConfig, initializeSelf } from '@modules/config.js';
 import { initLogger, logger } from '@modules/logger.js';
 import { initSandbox } from '@modules/sandbox.js';
+import { loadAllSkills, validateSkills } from '@modules/skills.js';
 import { ui } from '@modules/ui.js';
 import { readSelf } from '@modules/memory.js';
 import { authenticate as authBluesky, getSession } from '@adapters/atproto/authenticate.js';
@@ -24,8 +25,8 @@ import {
 } from '@modules/expression.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
 import { addInsight, getInsights, getRelationshipSummary } from '@modules/engagement.js';
-import { getFrictionReadyForImprovement } from '@skills/self-detect-friction.js';
-import { getAspirationForGrowth, getAspirationStats, getAllAspirations } from '@skills/self-identify-aspirations.js';
+import { getFrictionReadyForImprovement } from '@local-tools/self-detect-friction.js';
+import { getAspirationForGrowth, getAspirationStats, getAllAspirations } from '@local-tools/self-identify-aspirations.js';
 import { getEngagementPatterns } from '@modules/expression.js';
 import { createRequire } from 'module';
 
@@ -58,7 +59,20 @@ async function walk(): Promise<void> {
   //NOTE(self): Initialize SELF.md with agent name on first run
   initializeSelf(config);
 
+  //NOTE(self): Initialize logger early so skill loading errors persist to disk
   initLogger(config.paths.memory, 'info');
+
+  //NOTE(self): Load skill templates before anything else needs them
+  loadAllSkills();
+
+  //NOTE(self): Validate all skill directories loaded successfully
+  const skillValidation = validateSkills();
+  if (!skillValidation.valid) {
+    logger.error('Skills validation failed', { missing: skillValidation.missing, loaded: skillValidation.loaded });
+    console.error(`\n❌ Skills validation failed. Missing: ${skillValidation.missing.join(', ')}`);
+    console.error(`   Loaded: ${skillValidation.loaded.join(', ')}`);
+    process.exit(1);
+  }
 
   //NOTE(self): Extract identity from SELF.md
   const selfContent = readSelf(config.paths.selfmd);
