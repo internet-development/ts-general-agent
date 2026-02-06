@@ -8,6 +8,7 @@ import { logger } from '@modules/logger.js';
 import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import type { ParsedTask, ParsedPlan } from '@local-tools/self-plan-parse.js';
 import { renderSkill } from '@modules/skills.js';
+import { cloneRepository } from '@adapters/github/clone-repository.js';
 
 export interface TaskExecutionParams {
   owner: string;
@@ -113,6 +114,7 @@ export async function executeTask(params: TaskExecutionParams): Promise<TaskExec
 }
 
 //NOTE(self): Fresh clone the workspace repository (rm + clone every time for clean state)
+//NOTE(self): Uses cloneRepository adapter for authenticated HTTPS clones (supports private repos + push)
 export async function ensureWorkspace(
   owner: string,
   repo: string,
@@ -126,37 +128,22 @@ export async function ensureWorkspace(
     fs.rmSync(workspacePath, { recursive: true, force: true });
   }
 
-  //NOTE(self): Clone the repository
+  //NOTE(self): Ensure parent directory exists
+  const parentDir = path.dirname(workspacePath);
+  if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true });
+  }
+
+  //NOTE(self): Clone via authenticated adapter (embeds token in HTTPS URL for push support)
   logger.info('Cloning workspace repository', { owner, repo, workspacePath });
 
-  const cloneUrl = `https://github.com/${owner}/${repo}.git`;
+  const result = await cloneRepository({ owner, repo, targetDir: workspacePath });
 
-  return new Promise((resolve) => {
-    //NOTE(self): Ensure parent directory exists
-    const parentDir = path.dirname(workspacePath);
-    if (!fs.existsSync(parentDir)) {
-      fs.mkdirSync(parentDir, { recursive: true });
-    }
+  if (!result.success) {
+    return { success: false, path: '', error: result.error };
+  }
 
-    const git = spawn('git', ['clone', cloneUrl, workspacePath], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stderr = '';
-    git.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-
-    git.on('close', (code) => {
-      if (code !== 0) {
-        resolve({ success: false, path: '', error: `Git clone failed: ${stderr}` });
-        return;
-      }
-      resolve({ success: true, path: workspacePath });
-    });
-
-    git.on('error', (err) => {
-      resolve({ success: false, path: '', error: `Git clone error: ${err.message}` });
-    });
-  });
+  return { success: true, path: workspacePath };
 }
 
 //NOTE(self): Create a feature branch in the workspace

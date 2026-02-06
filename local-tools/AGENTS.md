@@ -141,19 +141,20 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | Local Tool | Purpose |
 |-------|---------|
 | `plan-create` | Create structured plan issues with tasks, status, and verification steps |
-| `plan-parse` | Parse plan markdown from GitHub issues into structured data |
+| `plan-parse` | Parse plan markdown from GitHub issues into structured data. Also exports `fetchFreshPlan` (atomic read from GitHub API) and `freshUpdateTaskInPlan` (atomic read-modify-write to avoid clobbering concurrent writes) |
 
 ### Task Execution (`self-task-*`)
 | Local Tool | Purpose |
 |-------|---------|
 | `task-claim` | Claim tasks via GitHub assignee API (first-writer-wins protocol) |
-| `task-execute` | Execute claimed tasks via Claude Code |
-| `task-report` | Report task progress, completion, blocked status, or failure |
+| `task-execute` | Execute claimed tasks via Claude Code. Also exports `createBranch` (feature branch creation) and `createPullRequest` (PR via gh CLI) |
+| `task-verify` | Four-gate quality check: verify git changes exist, run tests if present, push to remote, verify push success |
+| `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes, enabling the scheduler to announce on Bluesky |
 
 ### Workspace Management (`self-workspace-*`)
 | Local Tool | Purpose |
 |-------|---------|
-| `workspace-watch` | Add/remove workspaces from watch list, extract workspace URLs from text |
+| `workspace-watch` | Add/remove workspaces from watch list, extract workspace URLs from text and Bluesky records (facets, embeds, text) |
 
 ## Design Principles
 

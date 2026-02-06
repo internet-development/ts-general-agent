@@ -28,7 +28,7 @@ Modules are **core runtime infrastructure**. They provide the foundational syste
 | Responsibility | Description |
 |----------------|-------------|
 | **Orchestration** | Coordinate multi-step workflows across local-tools and adapters |
-| **Scheduling** | Manage the five-loop architecture (awareness, expression, reflection, improvement, plan awareness) |
+| **Scheduling** | Manage the multi-loop architecture (awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment) |
 | **State Management** | Persist and manage runtime state (engagement, conversations, relationships) |
 | **Tool System** | Define tools for LLM and execute tool calls |
 | **Configuration** | Load and validate environment configuration |
@@ -70,7 +70,7 @@ Ask these questions:
 
 | Module | Purpose | Depends On |
 |--------|---------|------------|
-| `scheduler.ts` | Five-loop architecture (awareness, expression, reflection, improvement, plan awareness) | All modules |
+| `scheduler.ts` | Multi-loop architecture (awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment) | All modules |
 | `executor.ts` | Tool execution handlers | Adapters, local-tools |
 | `tools.ts` | Tool definitions for LLM | None |
 | `config.ts` | Environment configuration | None |
@@ -98,6 +98,9 @@ Ask these questions:
 | `self-extract.ts` | SELF.md parsing | Foundational identity infrastructure |
 | `action-queue.ts` | Persistent queue for outbound actions (replies) with retry/backoff | Ensures follow-through when rate limits defer actions |
 | `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list | Multi-SOUL collaboration infrastructure |
+| `commitment-queue.ts` | Track pending commitments with JSONL persistence, dedup, stale cleanup | Ensures follow-through on promises made in replies |
+| `commitment-extract.ts` | LLM-based extraction of action commitments from Bluesky replies | Feeds commitment queue from response mode |
+| `commitment-fulfill.ts` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) | Executes promised actions autonomously |
 
 ### Moved to Local-Tools
 
@@ -189,19 +192,31 @@ The scheduler is the orchestration hub:
 
 ```
 scheduler.ts
-├── awareness loop
+├── awareness loop (45s)
 │   ├── atproto adapter (notifications)
 │   ├── engagement module (prioritization)
+│   ├── workspace-discovery (URL extraction from records)
 │   └── local-tools (response generation)
-├── expression loop
+├── github awareness loop (2m)
+│   ├── github adapter (notifications)
+│   └── github-engagement module (conversation tracking)
+├── expression loop (3-4h)
 │   ├── expression module (scheduling)
 │   └── local-tools (post creation)
-├── reflection loop
+├── reflection loop (6h)
 │   ├── experiences local-tool (gather)
 │   └── local-tools (SELF.md update)
-└── improvement loop
-    ├── friction local-tool (identify)
-    └── improvement local-tool (execute)
+├── improvement loop (24h)
+│   ├── friction local-tool (identify)
+│   └── improvement local-tool (execute via Claude Code)
+├── plan awareness loop (3m)
+│   ├── workspace-discovery (poll plans, PRs, open issues)
+│   ├── task-claim → task-execute → task-verify → task-report
+│   ├── on planComplete → announceIfWorthy (Bluesky celebration)
+│   └── PR review (one per cycle)
+└── commitment fulfillment loop (15s)
+    ├── commitment-queue (pending commitments)
+    └── commitment-fulfill (dispatch by type)
 ```
 
 ### Tool Execution Flow

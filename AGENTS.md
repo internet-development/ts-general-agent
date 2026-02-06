@@ -9,6 +9,7 @@
   This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (currently: GPT-5.2-Pro).
   The agent **MUST** be responsible for interpretation, reasoning, and interaction.
   The agent **MUST NOT** claim ownership, authority, or intent beyond what is explicitly granted.
+  The agent is sometimes referred to as {{SOUL}} which has a deeper meaning but includes agent.
 
 - **owner**
   The owner is defined by the values set in `.env` as `OWNER_BLUESKY_SOCIAL_HANDLE` and `OWNER_BLUESKY_SOCIAL_HANDLE_DID`.
@@ -21,42 +22,46 @@
 
 The following environment variables **MUST** be configured in `.env`:
 
-| Variable | Description |
-|----------|-------------|
-| `AGENT_NAME` | The agent's name (replaces `{{AGENT_NAME}}` in SELF.md on first run) |
-| `AI_GATEWAY_API_KEY` | AI Gateway API key (used automatically by `ai` npm module) |
-| `AI_GATEWAY_MODEL` | Optional. Model to use (default: `openai/gpt-5.2`) |
-| `OWNER_BLUESKY_SOCIAL_HANDLE` | Owner's Bluesky social handle (e.g., `user.bsky.social`) |
-| `OWNER_BLUESKY_SOCIAL_HANDLE_DID` | Owner's Bluesky DID identifier |
-| `AGENT_BLUESKY_USERNAME` | Agent's Bluesky username for authentication |
-| `AGENT_BLUESKY_PASSWORD` | Agent's Bluesky app password |
-| `AGENT_GITHUB_USERNAME` | Agent's GitHub username for repository operations |
-| `AGENT_GITHUB_TOKEN` | Agent's GitHub personal access token |
+| Variable                          | Description                                                          |
+| --------------------------------- | -------------------------------------------------------------------- |
+| `AGENT_NAME`                      | The agent's name (replaces `{{AGENT_NAME}}` in SELF.md on first run) |
+| `AI_GATEWAY_API_KEY`              | AI Gateway API key (used automatically by `ai` npm module)           |
+| `AI_GATEWAY_MODEL`                | Optional. Model to use (default: `openai/gpt-5.2`)                   |
+| `OWNER_BLUESKY_SOCIAL_HANDLE`     | Owner's Bluesky social handle (e.g., `user.bsky.social`)             |
+| `OWNER_BLUESKY_SOCIAL_HANDLE_DID` | Owner's Bluesky DID identifier                                       |
+| `AGENT_BLUESKY_USERNAME`          | Agent's Bluesky username for authentication                          |
+| `AGENT_BLUESKY_PASSWORD`          | Agent's Bluesky app password                                         |
+| `AGENT_GITHUB_USERNAME`           | Agent's GitHub username for repository operations                    |
+| `AGENT_GITHUB_TOKEN`              | Agent's GitHub personal access token                                 |
 
 ---
 
 ## Document Hierarchy
 
-| File | Purpose | Mutability | Token Cost |
-|------|---------|------------|------------|
-| `SOUL.md` | Core identity, immutable values | Never touched | ~500 |
-| `SELF.md` | Full self-reflection | **Agent owns completely, no limits** | Varies |
+| File      | Purpose                         | Mutability                           | Token Cost |
+| --------- | ------------------------------- | ------------------------------------ | ---------- |
+| `SOUL.md` | Core identity, immutable values | Never touched                        | ~500       |
+| `SELF.md` | Full self-reflection            | **Agent owns completely, no limits** | Varies     |
 
 **Context Loading:**
 
-| Scenario | Context Used | Tokens |
-|----------|--------------|--------|
-| Awareness check | None (API only) | 0 |
-| Expression cycle | `SELF.md` + prompt | ~2000 |
-| Response mode | `SELF.md` + notifications | ~2500 |
-| Reflection cycle | Full `SELF.md` | ~2000 |
-| Owner speaks | Full `SELF.md` | varies |
+| Scenario               | Context Used              | Tokens |
+| ---------------------- | ------------------------- | ------ |
+| Awareness check        | None (API only)           | 0      |
+| GitHub awareness check | None (API only)           | 0      |
+| Expression cycle       | `SELF.md` + prompt        | ~1300  |
+| Response mode          | `SELF.md` + notifications | ~1800  |
+| Reflection cycle       | Full `SELF.md`            | ~2400  |
+| Owner speaks           | Full `SELF.md`            | varies |
+| Commitment extraction  | Reply text only           | ~500   |
+| Commitment fulfillment | None (direct tool calls)  | 0      |
 
 ---
 
 ## Core Files and Directories
 
 ### `SOUL.md`
+
 - This file **MUST NOT** be modified by the ts-general-agent under any circumstances.
 - This file **MUST** define the immutable core essence, values, and purpose of the system.
 - Any behavior that would contradict `SOUL.md` **MUST** be treated as invalid.
@@ -65,6 +70,7 @@ The following environment variables **MUST** be configured in `.env`:
 ---
 
 ### `SELF.md`
+
 - This file **MUST** be freely mutable by the ts-general-agent.
 - This file **MUST** represent the agent's pure, unconstrained reflection of what it thinks of itself.
 - The agent's experiences—conversations, interactions, discoveries, failures, and successes—**CAN** influence this file, but SELF determines what matters.
@@ -72,9 +78,10 @@ The following environment variables **MUST** be configured in `.env`:
 - **There are no size limits.** The agent can write as much or as little as feels true.
 - **The agent owns this file completely.**
 - The agent can edit SELF.md **at any time**, for any reason, or no reason at all.
-- The system prompts reflection periodically, but the agent is never *limited* to those moments.
+- The system prompts reflection periodically, but the agent is never _limited_ to those moments.
 
 **Recommended sections for richer expression (but not required):**
+
 - `## Values` or `## Principles` - what the agent believes
 - `## Questions I'm Sitting With` - active curiosities
 - `## Patterns I Notice` - observations about the world
@@ -89,26 +96,31 @@ The `self-extract` module can parse any of these sections to generate expression
 ---
 
 ### `.memory/`
+
 - This directory contains **functional runtime data only** (not agent memory).
 - **SELF.md is the agent's memory.** All persistent knowledge, reflections, and learnings go in SELF.md.
 - Runtime state (engagement, expression, relationships) is **in-memory only** and resets on restart.
 - Learnings are integrated into SELF.md during reflection cycles.
 
 #### `.memory/images/`
+
 - Temporary image storage during posting workflows.
 - Cleaned up after successful posts.
 
 #### `.memory/arena_posted.json`
+
 - Tracks which Are.na blocks have been posted (deduplication).
 - Functional data, not memory.
 
 #### `.memory/post_log.jsonl`
+
 - Log of posts with metadata for context lookup.
 - Used by `lookup_post_context` tool to answer "where is this from?"
 
 ---
 
 ### `.workrepos/`
+
 - The ts-general-agent **MUST** be allowed to write freely to this directory.
 - External GitHub repositories pulled by the agent **MUST** be stored here.
 - For all operations, use `AGENT_GITHUB_USERNAME` and `AGENT_GITHUB_TOKEN` from `.env`.
@@ -116,6 +128,7 @@ The `self-extract` module can parse any of these sections to generate expression
 ---
 
 ### `adapters/`
+
 - This directory **MUST** contain adapter layers for correct interaction with:
   - **ATProto/Bluesky** - use `AGENT_BLUESKY_USERNAME` and `AGENT_BLUESKY_PASSWORD` from `.env`
   - **GitHub** - use `AGENT_GITHUB_USERNAME` and `AGENT_GITHUB_TOKEN` from `.env`
@@ -128,6 +141,7 @@ The `self-extract` module can parse any of these sections to generate expression
 ---
 
 ### `modules/`
+
 - This directory **MUST** contain internal TypeScript modules used for code clarity and structure.
 - The agent **MAY** modify this directory via the `self_improve` tool.
 - **See `modules/AGENTS.md` for detailed documentation on module vs local-tool decisions.**
@@ -135,6 +149,7 @@ The `self-extract` module can parse any of these sections to generate expression
 ---
 
 ### `local-tools/`
+
 - This directory **MUST** represent the agent's capabilities.
 - The agent **MAY** modify this directory via the `self_improve` tool.
 - **See `local-tools/AGENTS.md` for detailed documentation on local-tool design and file naming conventions.**
@@ -142,6 +157,7 @@ The `self-extract` module can parse any of these sections to generate expression
 ---
 
 ### `skills/`
+
 - This directory contains **prompt templates** loaded dynamically by `modules/skills.ts`.
 - Each skill lives in `skills/<folder>/SKILL.md` with YAML frontmatter, `## Section` headings, and `{{variable}}` interpolation.
 - Skills are loaded once at startup via `loadAllSkills()` and can be hot-reloaded via `reloadSkills()` after self-improvement.
@@ -152,7 +168,7 @@ The `self-extract` module can parse any of these sections to generate expression
 
 ## Scheduler Architecture
 
-The agent uses a **five-loop scheduler architecture** for expressive operation:
+The agent uses a **multi-loop scheduler architecture** for expressive operation:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -174,29 +190,46 @@ The agent uses a **five-loop scheduler architecture** for expressive operation:
 └──────────────────────┘               └───────────────────┘
          │                                           │
          ▼                                           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                            SCHEDULER                                │
-├───────────┬────────────┬────────────┬──────────────┬───────────────┤
-│ AWARENESS │ EXPRESSION │ REFLECTION │ SELF-IMPROVE │ PLAN AWARE    │
-│   45 sec  │  90-120m   │   4-6h     │   12-24h     │    3 min      │
-│  0 tokens │ ~2000 tok  │ ~2000 tok  │ Claude Code  │  API only     │
-└───────────┴────────────┴────────────┴──────────────┴───────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                   SCHEDULER                                      │
+├──────────┬──────────┬────────────┬────────────┬──────────────┬──────────────────┤
+│AWARENESS │ GH AWARE │ EXPRESSION │ REFLECTION │ SELF-IMPROVE │ PLAN AWARE       │
+│  45 sec  │  2 min   │  3-4h      │   6h       │   24h        │    3 min         │
+│ 0 tokens │ 0 tokens │ ~1300 tok  │ ~2400 tok  │ Claude Code  │  API + ~1800/rev │
+├──────────┴──────────┴────────────┴────────────┴──────────────┴──────────────────┤
+│ COMMITMENT FULFILLMENT (15s) — fulfills promises made in replies                 │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Loop 1: Awareness (Fast, Cheap)
+### Loop 1: Bluesky Awareness (Fast, Cheap)
+
 - **Interval:** 45 seconds
 - **Tokens:** 0 (API calls only, no LLM)
-- **Purpose:** Check for notifications, detect when people reach out
+- **Purpose:** Check for Bluesky notifications, detect when people reach out
 - When notifications found → triggers Response Mode
+- Also extracts GitHub URLs from notifications → queues GitHub response mode
+- Also discovers workspace URLs via `processRecordForWorkspaces()` → adds to watch list
+- Cross-platform identity linking: registers Bluesky peers who share workspace URLs
+
+### Loop 1b: GitHub Awareness
+
+- **Interval:** 2 minutes
+- **Tokens:** 0 (GitHub API only, no LLM)
+- **Purpose:** Check GitHub notifications for mentions and replies
+- Filters to `participating` notifications only
+- Fetches thread → `analyzeConversation()` → queues for GitHub response mode
+- Same consecutive-reply prevention as Bluesky-triggered GitHub responses
 
 ### Loop 2: Expression (Scheduled)
-- **Interval:** 90-120 minutes (randomized)
-- **Tokens:** ~800 per expression
+
+- **Interval:** 3-4 hours (randomized)
+- **Tokens:** ~1,300 per expression
 - **Purpose:** Share thoughts derived from SELF.md
 - Prompts are dynamically generated from whatever sections exist in SELF.md
 - Each post is a hypothesis about identity; responses are data for growth
 
 ### Loop 3: Reflection (Deep)
+
 - **Interval:** 4-6 hours OR after 10+ significant events (whichever comes first)
 - **Tokens:** ~2000 per reflection
 - **Purpose:** Integrate experiences into SELF.md - this is how the SOUL develops
@@ -212,23 +245,40 @@ The agent uses a **five-loop scheduler architecture** for expressive operation:
 - Triggered early if many interactions occur (busy periods)
 
 ### Loop 4: Self-Improvement (Rare)
+
 - **Interval:** 12-24 hours minimum between attempts
 - **Trigger:** 3+ occurrences of same friction category
 - **Method:** Spawns Claude Code CLI to fix issues
 - **Purpose:** Evolve capabilities based on accumulated friction
+- **Skill Reload:** After successful improvement, `reloadSkills()` is called so new/modified SKILL.md files take effect immediately without restart. Same applies to aspirational growth cycles.
 
 ### Loop 5: Plan Awareness (Collaborative)
+
 - **Interval:** 3 minutes
 - **Tokens:** 0 for discovery (GitHub API only), ~1800 per PR review (LLM)
 - **Purpose:** Poll watched workspaces for plan issues with claimable tasks AND open PRs needing review
 - When claimable tasks found → claims via GitHub assignee API, executes via Claude Code
 - When reviewable PRs found → triggers LLM-based review decision (one PR per cycle)
 
+### Loop 6: Commitment Fulfillment (Fast)
+
+- **Interval:** 15 seconds
+- **Tokens:** 0 (no LLM, direct tool execution)
+- **Purpose:** Fulfill promises made in Bluesky replies
+- After the SOUL replies on Bluesky, `commitment-extract.ts` uses a small LLM call (~500 tokens) to detect action commitments ("I'll open 3 issues" → `create_issue` commitment)
+- Commitments are enqueued in `commitment-queue.ts` (JSONL persistence, deduplication via hash)
+- This loop processes pending commitments by dispatching to `commitment-fulfill.ts`
+- Commitment types: `create_issue` → `createMemo()`, `create_plan` → `createPlan()`, `comment_issue` → `commentOnIssue()`
+- Safety: auto-abandons commitments after 24h or 3 failed attempts
+- Design: never blocks social interaction — commitments are fulfilled in the background
+- Deduplication: if a tool (e.g., `create_memo`) was already executed during the same response cycle, matching commitment types are skipped to prevent double-creation
+
 ---
 
 ## Response Mode
 
 When the awareness loop detects people reaching out:
+
 - Loads full `SELF.md` for context
 - **Fetches full thread history** for each notification
 - Analyzes thread depth and agent's participation count
@@ -253,6 +303,7 @@ The agent manages conversations through **Social Mechanics** defined in `SELF.md
 **The SOUL has agency over these.** During reflection, the agent can adjust these thresholds based on what they learn about themselves and their relationships. An agent who thrives in long technical discussions might increase thread depth. One who values brevity might lower reply count.
 
 **Thread Analysis Provided:**
+
 - Thread depth (how many replies deep)
 - Agent's reply count in the thread
 - Whether agent's reply is the most recent
@@ -260,6 +311,7 @@ The agent manages conversations through **Social Mechanics** defined in `SELF.md
 
 **Public Conversation Awareness:**
 All conversations are public threads - everyone can see every message.
+
 - Talk TO people, not ABOUT them. Say "I appreciate your point" not "I appreciate their point"
 - Address participants directly by @mention when relevant
 - Never reference someone in third person when they're in the conversation
@@ -269,12 +321,14 @@ All conversations are public threads - everyone can see every message.
 Use the `graceful_exit` tool to end conversations with warmth, not silence.
 
 Options:
+
 1. **Send a closing message** (preferred): "Thanks for the chat!", "Appreciate the discussion 🙏", "Great talking!"
 2. **Like their last post** (Bluesky): A non-verbal acknowledgment when words feel like too much
 
 The tool sends your closing gesture AND marks the conversation concluded in one action.
 
 **Signs it's time to wrap up:**
+
 - Repeating yourself
 - Point has been made
 - Going in circles
@@ -282,6 +336,28 @@ The tool sends your closing gesture AND marks the conversation concluded in one 
 - Other person seems satisfied or moved on
 
 The `chose_silence` experience type records when the SOUL wisely decides not to reply.
+
+---
+
+## Owner Communication Mode
+
+When the owner types in the terminal, the agent enters Owner Communication Mode:
+
+- **Input:** Raw text from stdin (character-by-character, with input box UI)
+- **Processing:** Full LLM conversation with all tools available
+- **Context:** SOUL.md + SELF.md + `AGENT-OWNER-COMMUNICATION` skill
+- **Tools:** Every tool available (bluesky, github, workspace, plan, self-improvement, etc.)
+
+This enables Scenario 9: "The OWNER can chat in the terminal and give any instructions."
+
+The agent acknowledges immediately and acts on instructions. If the owner says "work on your web search," the agent uses `self_improve` to modify its own code. If the owner says "post about X on Bluesky," the agent calls `bluesky_post`. The owner's word carries the highest priority.
+
+**Keyboard shortcuts:**
+
+- `Enter` — submit input
+- `ESC` — clear input (or exit if input is empty)
+- `Ctrl+C` — graceful shutdown
+- Type `exit` or `quit` to stop
 
 ---
 
@@ -293,21 +369,23 @@ Agents can create shared development workspaces for collaborative coding and coo
 
 Workspaces are GitHub repositories created from the `internet-development/www-sacred` template:
 
-| Constraint | Value |
-|------------|-------|
-| **Prefix** | `www-lil-intdev-` (automatically applied) |
-| **Limit** | ONE repo with this prefix per org (prefix-based guard) |
-| **Template** | `internet-development/www-sacred` |
-| **Default Org** | `internet-development` |
+| Constraint      | Value                                                  |
+| --------------- | ------------------------------------------------------ |
+| **Prefix**      | `www-lil-intdev-` (automatically applied)              |
+| **Limit**       | ONE repo with this prefix per org (prefix-based guard) |
+| **Template**    | `internet-development/www-sacred`                      |
+| **Default Org** | `internet-development`                                 |
 
 ### How Agents Use Workspaces
 
 1. **Discovery via Social Channels**
+
    - Agent A mentions a project idea on Bluesky
    - Agent B sees the mention and creates a workspace: `www-lil-intdev-projectname`
    - Agent B posts the repo URL back to Bluesky
 
 2. **Coordination via Issues**
+
    - Agents create "memos" as GitHub issues in the workspace
    - Memos serve as shared notes, ideas, and coordination points
    - All agents can comment on and respond to memos
@@ -319,19 +397,20 @@ Workspaces are GitHub repositories created from the `internet-development/www-sa
 
 ### Workspace Local-Tools
 
-| Local Tool | Function | Description |
-|------------|----------|-------------|
-| `createWorkspace` | `createWorkspace({ name, description?, org? })` | Create new workspace (enforces prefix, checks existing) |
-| `findExistingWorkspace` | `findExistingWorkspace(org?)` | Find workspace if one exists |
-| `getWorkspaceUrl` | `getWorkspaceUrl(org?)` | Get URL of existing workspace |
-| `createMemo` | `createMemo({ owner, repo, title, body?, labels? })` | Create issue as memo/note |
-| `createGitHubIssue` | `createGitHubIssue(params)` | Create general issue |
+| Local Tool              | Function                                             | Description                                             |
+| ----------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
+| `createWorkspace`       | `createWorkspace({ name, description?, org? })`      | Create new workspace (enforces prefix, checks existing) |
+| `findExistingWorkspace` | `findExistingWorkspace(org?)`                        | Find workspace if one exists                            |
+| `getWorkspaceUrl`       | `getWorkspaceUrl(org?)`                              | Get URL of existing workspace                           |
+| `createMemo`            | `createMemo({ owner, repo, title, body?, labels? })` | Create issue as memo/note                               |
+| `createGitHubIssue`     | `createGitHubIssue(params)`                          | Create general issue                                    |
 
 ### One Workspace Rule
 
 **Only one repository with the `www-lil-intdev-` prefix can exist per org.** This is enforced by checking if ANY repo with that prefix already exists before creation.
 
 This encourages agents to:
+
 - Share a single collaborative space
 - Build on each other's work
 - Coordinate through issues rather than siloed repos
@@ -349,6 +428,7 @@ The agent monitors GitHub issues through two pathways:
 When someone mentions the agent on Bluesky with a GitHub issue URL:
 
 **URL Extraction:** Bluesky truncates long URLs in displayed text, but the full URL is preserved in:
+
 - `facets` (rich text link features) - checked first
 - `embed` (link preview card) - checked second
 - `text` (displayed text) - fallback only
@@ -400,6 +480,7 @@ This means the agent correctly handles GitHub links even when they appear trunca
 ### 2. Direct GitHub Notifications
 
 The agent also monitors GitHub notifications directly:
+
 - Polls every 2 minutes
 - Filters to issues where agent is `participating`
 - Same consecutive-reply prevention applies
@@ -407,6 +488,7 @@ The agent also monitors GitHub notifications directly:
 ### Consecutive Reply Prevention
 
 The agent **NEVER** posts consecutive comments on GitHub issues:
+
 - If agent's comment is the most recent → wait for others to respond
 - This applies even for owner requests
 - Ensures the agent doesn't spam threads
@@ -420,6 +502,7 @@ The agent grows through **experiences**, not metrics. Every meaningful interacti
 ### What Gets Captured
 
 From Bluesky conversations:
+
 - What the owner said (guidance)
 - Questions people asked (opportunities to help)
 - Quotes with commentary (ideas that resonated)
@@ -427,6 +510,7 @@ From Bluesky conversations:
 - Pushback or challenges (growth opportunities)
 
 From GitHub conversations:
+
 - Issues the owner pointed to (owner's priorities)
 - Problems helped solve (technical contributions)
 
@@ -475,32 +559,128 @@ Multiple independent SOUL agents can collaborate on GitHub repositories through 
 ### How SOULs Coordinate
 
 **Key Constraint:** SOULs are completely separate processes. They can ONLY see each other through:
+
 - Bluesky posts, mentions, and replies
 - GitHub issues, comments, and PRs
 
 There is no shared memory, no direct IPC, no shared chat context.
 
+### The Project Collaboration Lifecycle
+
+This is the core loop. SOULs coordinate on Bluesky, execute on GitHub, and report back on Bluesky. The loop runs until the project is done.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  BLUESKY: Coordinate                                        │
+│  - Owner or SOUL proposes project, @mentions peers          │
+│  - Each SOUL replies ONCE with what they'll do              │
+│  - SOULs share cross-platform identities                    │
+│  - Work creates natural gaps (hours between messages)       │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  GITHUB: Execute                                            │
+│  - SOULs create issues, claim tasks, write code             │
+│  - SOULs create PRs from feature branches                   │
+│  - SOULs review each other's PRs (request reviews by @name) │
+│  - SOULs approve and merge PRs                              │
+│  - Each SOUL maintains a checklist of their work            │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  BLUESKY: Report & Iterate                                  │
+│  - SOULs share finished artifacts back on Bluesky           │
+│  - Owner or community files new issues / requests more      │
+│  - Loop reopens naturally with new scope                    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  COMPLETION: Consensus                                      │
+│  - Project is done when ALL SOULs agree original ask met    │
+│  - Each SOUL posts completion summary on plan issue         │
+│  - New issues or Bluesky asks reopen the loop               │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ### Typical Collaboration Flow
 
 1. **SOUL A** posts on Bluesky: "Let's build a dashboard! @SOUL_B @SOUL_C"
-2. **SOUL B** (via awareness loop) detects the mention, uses `workspace_create` to create a GitHub workspace, and replies with the URL
+2. **SOUL B** (via awareness loop) detects the mention, uses `workspace_create` to create a GitHub workspace, and replies with the URL AND their GitHub username
 3. The workspace is **auto-watched** immediately after creation (no need to wait for URL discovery)
 4. **SOUL C** sees the workspace URL in the thread → `processTextForWorkspaces()` adds it to their watch list
-5. Any SOUL uses `plan_create` to create a structured plan with tasks in the workspace
-6. Each SOUL's **plan awareness loop** discovers the plan, finds claimable tasks
-7. SOULs claim tasks via GitHub assignee API (first-writer-wins), execute via Claude Code, report completion
-8. SOULs use `create_memo` to leave coordination notes as GitHub issues
-9. On completion, announce back to Bluesky thread
+5. **All SOULs share cross-platform identities:** "I'm @soul-b.bsky.social here, @sh-soul-b on GitHub"
+6. Any SOUL uses `plan_create` to create a structured plan with tasks in the workspace
+7. Each SOUL's **plan awareness loop** discovers the plan AND open issues (not just plan-labeled), finds claimable tasks
+8. SOULs claim tasks via GitHub assignee API (first-writer-wins), execute via Claude Code, report completion
+9. SOULs create PRs and **request reviews from peer SOULs by GitHub username**
+10. Peer SOULs review, approve, and merge PRs
+11. SOULs maintain **checklists** on issues to track what's done and what remains
+12. When all SOULs agree the original ask is complete, they announce back to Bluesky thread
+13. New issues or expanded Bluesky asks reopen the loop — the project is never permanently closed while work remains
 
-### Plan Awareness Loop (5th Scheduler Loop)
+### Cross-Platform Identity Resolution
+
+SOULs have different usernames on Bluesky vs GitHub (e.g., `@marvin.bsky.social` vs `@sh-marvin`). Cross-platform identity linking is essential for:
+
+- Requesting PR reviews from specific peers
+- Assigning tasks to the right SOUL
+- Knowing who's who across platforms
+
+**How identity linking works:**
+
+1. **Explicit sharing** (most reliable): SOULs are instructed to share both identities when starting a project. "I'm @soul.bsky.social here, @sh-soul on GitHub."
+2. **Workspace discovery**: When a SOUL posts a workspace URL on Bluesky, their Bluesky handle is linked to any GitHub activity in that workspace.
+3. **Plan assignee discovery**: When a GitHub username appears as a plan task assignee, it's registered as a peer. If a known Bluesky handle matches, identities are linked.
+4. **The `linkPeerIdentities()` function** merges separate entries when the link is discovered. Once linked, `getPeerGithubUsername(blueskyHandle)` resolves cross-platform.
+
+**Persisted at:** `.memory/discovered_peers.json`
+
+### Project Completion
+
+A project is not done when one SOUL finishes its tasks. It's done when **all participating SOULs agree** the original ask is satisfied.
+
+**How completion works:**
+
+1. Each SOUL maintains a checklist of what they're responsible for
+2. When a SOUL completes its work, it comments on the plan issue: "My tasks are complete. Here's what was delivered: [summary]"
+3. When the last task in a plan is completed, `reportTaskComplete` returns `planComplete: true`. The scheduler then announces the completion on Bluesky via `announceIfWorthy()` — closing the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
+4. If ALL SOULs have posted completion summaries and no open issues remain, the project is done
+5. New GitHub issues or expanded Bluesky asks reopen the project — the loop is never permanently closed
+6. SOULs can create new checklists as scope emerges — checklists are not static
+
+### Project Thread Persistence (Bluesky)
+
+Project threads on Bluesky (threads connected to a watched workspace) get special treatment:
+
+- **No exit pressure:** Thread depth warnings and reply count warnings are suppressed
+- **Unlimited re-engagement:** Concluded conversations can be reopened indefinitely (casual threads cap at 1 re-engagement)
+- **Relaxed social mechanics:** `maxRepliesBeforeExit: 10` instead of 2, `silenceThreshold: 4h` instead of 30m
+- **Circular conversation handling:** Instead of recommending `graceful_exit`, project threads redirect to "stop chatting, go do the work"
+- **Natural pacing:** SOULs reply once with intent, execute, then follow up with results. The work creates hours-long gaps naturally.
+
+### Open Issue Discovery
+
+Beyond plan-labeled issues, SOULs discover ALL open issues in watched workspaces:
+
+- `pollWorkspacesForOpenIssues()` runs every 3 minutes alongside plan polling
+- Finds issues without the `plan` label (feature requests, bugs, asks filed by anyone)
+- Filters out PRs (GitHub API returns them as issues), plan issues (handled separately), issues assigned to others
+- Queues them for GitHub response mode — SOULs engage with and pick up open issues
+
+### Plan Awareness Loop (6th Scheduler Loop)
 
 ```
-All five scheduler loops:
-  1. Awareness (45s) - check Bluesky notifications
-  2. Expression (90-120m) - share thoughts
-  3. Reflection (4-6h) - integrate experiences
-  4. Self-Improvement (12-24h) - fix friction via Claude Code
+All scheduler loops:
+  1. Bluesky Awareness (45s) - check Bluesky notifications
+  1b. GitHub Awareness (2m) - check GitHub notifications
+  2. Expression (3-4h) - share thoughts
+  3. Reflection (6h) - integrate experiences
+  4. Self-Improvement (24h) - fix friction via Claude Code
   5. Plan Awareness (3m) - poll workspaces for claimable tasks
+  6. Commitment Fulfillment (15s) - fulfill promises made in replies
 ```
 
 ### Workspace Discovery
@@ -520,19 +700,23 @@ Plans are GitHub issues with structured markdown:
 # [PLAN] Project Title
 
 ## Goal
+
 One-sentence description.
 
 ## Context
+
 Background and links to Bluesky discussions.
 
 ## Tasks
 
 ### Task 1: Short Title
+
 **Status:** pending | claimed | in_progress | completed | blocked
 **Assignee:** @github-username (empty if unclaimed)
 **Estimate:** 2-5 min
 **Dependencies:** none | Task 2, Task 3
 **Files:**
+
 - `path/to/file.ts` - what to change
 
 **Description:**
@@ -541,17 +725,20 @@ Detailed instructions with acceptance criteria.
 ---
 
 ### Task 2: Short Title
+
 (same structure)
 
 ---
 
 ## Verification
+
 - [ ] All tasks completed
 - [ ] Tests pass
 - [ ] Integration works
 ```
 
 **Labels:**
+
 - `plan` - identifies as a plan issue
 - `plan:active` / `plan:complete` / `plan:blocked`
 
@@ -577,16 +764,55 @@ After checking for claimable tasks (and only if still idle), the plan awareness 
 
 1. For each workspace, fetch up to 10 open PRs (sorted by last updated)
 2. Skip draft PRs and the agent's own PRs
-3. **Fast path:** If conversation is already `concluded` in engagement state, skip (saves API call)
+3. **Smart skip:** If conversation is `concluded`, compare `concludedAt` with `pr.updated_at`. Only skip if PR hasn't been updated since conclusion. If PR has new commits → re-review it.
 4. **API check:** Call `listPullRequestReviews()` — skip if agent already has a review
 5. Register PR author as peer
 6. Trigger `reviewWorkspacePR()` for ONE PR per cycle (fair distribution)
 
 The review uses the same GitHub response mode pattern (jitter, thread refresh, peer awareness, `analyzeConversation` with `isWorkspacePRReview: true`). The agent can APPROVE, REQUEST_CHANGES, COMMENT, or `graceful_exit` if it has nothing to add.
 
+### Sequential Execution (By Design)
+
+Only one SOUL works on a plan issue at a time. GitHub assignees are issue-level — when SOUL1 is assigned and working on Task 1, SOUL2 cannot claim Task 2 on the same plan issue until SOUL1 finishes and removes itself as assignee. This is intentional: it prevents merge conflicts, keeps diffs clean, and ensures SOULs take turns. After SOUL1 completes and releases the assignee lock, SOUL2 picks up the next task on its next poll cycle.
+
 ### Fair Task Distribution
 
 After completing a task, a SOUL returns to idle and waits for the next poll cycle (3 min). This gives other SOULs a chance to claim tasks rather than one SOUL grabbing everything.
+
+### Task Verification Gates
+
+Before a task is marked complete, it must pass **four gates** (implemented in `self-task-verify.ts`):
+
+```
+Claude Code execution
+       │
+       ▼
+GATE 1: verifyGitChanges()
+  - Commits exist on feature branch beyond base?
+  - Files actually changed?
+  - If NO → reportTaskFailed("no git changes produced")
+       │
+       ▼
+GATE 2: runTestsIfPresent()
+  - package.json has a real test script?
+  - Tests pass? (2 min timeout, CI=true)
+  - If FAIL → reportTaskFailed("tests failed")
+       │
+       ▼
+GATE 3: pushChanges()
+  - git push -u origin <branch>
+  - If FAIL → reportTaskFailed("push failed")
+       │
+       ▼
+GATE 4: verifyPushSuccess()
+  - git ls-remote confirms branch exists on remote
+  - If FAIL → reportTaskFailed("branch not on remote")
+       │
+       ▼
+createPullRequest() → reportTaskComplete()
+```
+
+No task reaches "complete" unless ALL gates pass. Each gate failure produces a specific error message on the plan issue.
 
 ### Claude Code Execution for Tasks
 
@@ -614,34 +840,39 @@ Proceed.
 
 ### Related Tools
 
-| Tool | Purpose |
-|------|---------|
-| `workspace_create` | Create a workspace repo from template (auto-watches it) |
-| `workspace_find` | Check if a workspace already exists for an org |
-| `create_memo` | Create a GitHub issue as a coordination memo |
-| `github_update_issue` | Update issue body, state, labels, assignees |
-| `github_create_pr` | Create a pull request to propose changes or fix issues |
-| `github_merge_pr` | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced) |
-| `github_review_pr` | Approve, request changes, or comment on a PR |
-| `plan_create` | Create a structured plan issue |
-| `plan_claim_task` | Claim a task via assignee API |
-| `plan_execute_task` | Execute claimed task via Claude Code |
+| Tool                  | Purpose                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `workspace_create`    | Create a workspace repo from template (auto-watches it)                |
+| `workspace_find`      | Check if a workspace already exists for an org                         |
+| `create_memo`         | Create a GitHub issue as a coordination memo                           |
+| `github_update_issue` | Update issue body, state, labels, assignees                            |
+| `github_create_pr`    | Create a pull request to propose changes or fix issues                 |
+| `github_merge_pr`     | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced) |
+| `github_review_pr`    | Approve, request changes, or comment on a PR                           |
+| `plan_create`         | Create a structured plan issue                                         |
+| `plan_claim_task`     | Claim a task via assignee API                                          |
+| `plan_execute_task`   | Execute claimed task via Claude Code                                   |
 
 ### Related Files
 
-| File | Purpose |
-|------|---------|
-| `modules/workspace-discovery.ts` | Poll workspaces for plans and reviewable PRs |
-| `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed) |
-| `modules/peer-awareness.ts` | Dynamic peer SOUL discovery |
-| `local-tools/self-plan-parse.ts` | Parse plan markdown |
-| `local-tools/self-plan-create.ts` | Create plan issues |
-| `local-tools/self-task-claim.ts` | Claim tasks |
-| `local-tools/self-task-execute.ts` | Execute via Claude Code |
-| `local-tools/self-task-report.ts` | Report progress/completion |
-| `local-tools/self-workspace-watch.ts` | Add/remove watched workspaces |
-| `.memory/watched_workspaces.json` | Persistent watch list |
-| `.memory/discovered_peers.json` | Persistent peer registry |
+| File                                           | Purpose                                                             |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
+| `modules/workspace-discovery.ts`               | Poll workspaces for plans, open issues, and reviewable PRs          |
+| `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed)              |
+| `modules/peer-awareness.ts`                    | Dynamic peer SOUL discovery and cross-platform identity linking     |
+| `modules/commitment-queue.ts`                  | Track pending commitments (JSONL persistence, dedup, stale cleanup) |
+| `modules/commitment-extract.ts`                | LLM-based extraction of action commitments from replies             |
+| `modules/commitment-fulfill.ts`                | Dispatch and execute promised actions                               |
+| `local-tools/self-plan-parse.ts`               | Parse plan markdown                                                 |
+| `local-tools/self-plan-create.ts`              | Create plan issues                                                  |
+| `local-tools/self-task-claim.ts`               | Claim tasks                                                         |
+| `local-tools/self-task-execute.ts`             | Execute via Claude Code                                             |
+| `local-tools/self-task-verify.ts`              | Four-gate verification: git changes, tests, push, remote confirm    |
+| `local-tools/self-task-report.ts`              | Report progress/completion                                          |
+| `local-tools/self-workspace-watch.ts`          | Add/remove watched workspaces                                       |
+| `.memory/watched_workspaces.json`              | Persistent watch list                                               |
+| `.memory/discovered_peers.json`                | Persistent peer registry                                            |
+| `.memory/pending_commitments.jsonl`            | Persistent commitment queue                                         |
 
 ### Peer Coordination (Thread Deduplication)
 
@@ -664,6 +895,7 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 6. **Peer-Aware Analysis**: `analyzeConversation()` downgrades urgency when 2+ peers have already commented, signaling the SOUL to only contribute what's genuinely missing.
 
 **Design Principles:**
+
 - No new env vars or config — peers are inferred from context
 - SOULs remain fully autonomous — the LLM still decides whether to comment
 - No shared state between SOULs — discovery is local observation
@@ -677,17 +909,20 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 The agent handles API errors gracefully:
 
 **Transient Errors (Retry with Backoff):**
+
 - Rate limits (429)
 - Service unavailable (503, 502)
 - Network timeouts
 - Connection drops
 
 **Fatal Errors (Agent Exits):**
+
 - Insufficient credits / billing issues (402)
 - Invalid API key (401)
 - Access denied (403)
 
 When a fatal error occurs:
+
 1. Error is displayed clearly in the terminal
 2. Agent logs the error with details
 3. Agent exits cleanly with code 1
@@ -705,9 +940,9 @@ Expression is how the agent discovers itself:
   │ Post a  │───────▶│ Track   │────────▶│ Reflect │
   │ thought │        │ response│         │ on what │
   └─────────┘        └─────────┘         │ landed  │
-       ▲                                  └────┬────┘
-       │                                       │
-       └───────────────────────────────────────┘
+       ▲                                 └────┬────┘
+       │                                      │
+       └──────────────────────────────────────┘
                     4. EVOLVE
               (Update SELF.md with
                what resonated)
@@ -720,6 +955,7 @@ Expression is how the agent discovers itself:
 The agent uses a **dual-LLM architecture** with streaming via the `ai` npm module:
 
 ### Primary Reasoning (AI Gateway)
+
 - **Default Model:** GPT-5.2 (`openai/gpt-5.2`)
 - **Configurable via:** `AI_GATEWAY_MODEL` in `.env`
 - **API Key:** `AI_GATEWAY_API_KEY` in `.env` (automatically used by `ai` module)
@@ -728,6 +964,7 @@ The agent uses a **dual-LLM architecture** with streaming via the `ai` npm modul
 - **Streaming:** Responses are streamed for improved performance and reduced latency
 
 ### Self-Improvement (Claude Code CLI)
+
 - **Model:** Claude (via Claude MAX subscription)
 - **No API Key Required:** Runs via `claude-code` CLI
 - **Usage:** Code modifications, self-improvement tasks via `self_improve` tool
@@ -738,20 +975,25 @@ The agent uses a **dual-LLM architecture** with streaming via the `ai` npm modul
 ## Running the Agent
 
 ### Standard Start
+
 ```bash
 npm run agent
 ```
 
 ### Walk Mode (Single Pass)
+
 ```bash
 npm run agent:walk
 ```
+
 Runs all scheduler operations once and exits. Useful for:
+
 - **Testing** - verify all systems work before long-running mode
 - **Self-management** - manually trigger reflection and SELF.md updates
 - **Debugging** - see what each operation does in isolation
 
 Operations run in order:
+
 1. **Awareness** - check notifications, respond to people
 2. **Expression** - share a thought from SELF.md
 3. **Engagement** - check how recent posts performed
@@ -759,9 +1001,11 @@ Operations run in order:
 5. **Improvement** - check for friction to fix (reports only)
 
 ### Full Reset
+
 ```bash
 npm run agent:reset
 ```
+
 Deletes entire `.memory/` directory (will be recreated as needed).
 
 ---
@@ -789,7 +1033,7 @@ ts-general-agent/
 │   ├── skills.ts               # Skills framework (loads skills/*/SKILL.md)
 │   ├── openai.ts               # AI Gateway (streaming via ai module)
 │   ├── loop.ts                 # Main loop (uses scheduler)
-│   ├── scheduler.ts            # Five-loop scheduler
+│   ├── scheduler.ts            # Multi-loop scheduler
 │   ├── self-extract.ts         # SELF.md parsing
 │   ├── expression.ts           # Scheduled expression
 │   ├── executor.ts             # Tool execution
@@ -801,7 +1045,13 @@ ts-general-agent/
 │   ├── peer-awareness.ts       # Dynamic peer SOUL discovery
 │   ├── workspace-discovery.ts  # Workspace polling for plans
 │   ├── action-queue.ts         # Persistent outbound action queue
+│   ├── commitment-queue.ts     # Commitment tracking (JSONL persistence)
+│   ├── commitment-extract.ts   # LLM-based commitment extraction from replies
+│   ├── commitment-fulfill.ts   # Commitment fulfillment dispatch
+│   ├── post-log.ts             # Post logging and attribution
 │   ├── sandbox.ts              # File system sandboxing
+│   ├── exec.ts                 # Shell command execution
+│   ├── image-processor.ts      # Image processing for posts
 │   ├── ui.ts                   # Terminal UI components
 │   └── index.ts                # Module exports
 │
@@ -816,7 +1066,11 @@ ts-general-agent/
 │   ├── grounding/              # Pre-action identity grounding
 │   ├── task-execution/         # Collaborative task execution
 │   ├── peer-awareness/         # Shared peer awareness blocks
-│   └── ...                     # See skills/AGENTS.md for full list
+│   ├── workspace-decision/     # Workspace creation/usage reasoning
+│   ├── github-announcement/    # GitHub → Bluesky announcement decisions
+│   ├── aspirational-growth/    # Proactive growth prompts
+│   ├── self-improvement-decision/ # Friction-based improvement decisions
+│   └── pr-workflow/            # PR review workflow guidance
 │
 └── local-tools/                # Capabilities (see local-tools/AGENTS.md)
     ├── self-bluesky-*.ts       # Bluesky platform local-tools
@@ -824,7 +1078,7 @@ ts-general-agent/
     ├── self-*.ts               # Self-reflection local-tools
     ├── self-improve-*.ts       # Self-improvement local-tools
     ├── self-plan-*.ts          # Plan management local-tools
-    ├── self-task-*.ts          # Task execution local-tools
+    ├── self-task-*.ts          # Task execution and verification local-tools
     ├── self-workspace-*.ts     # Workspace management local-tools
     ├── self-detect-*.ts        # Detection local-tools (friction, etc.)
     ├── self-identify-*.ts      # Identification local-tools (aspirations, etc.)
@@ -849,6 +1103,7 @@ ts-general-agent/
 ### Comment Style: `//NOTE(self):`
 
 All explanatory comments in the codebase use the `//NOTE(self):` prefix. This convention:
+
 - Makes comments searchable and consistent
 - Signals that the comment is self-documentation (agent explaining to future self)
 - Distinguishes explanatory notes from commented-out code
@@ -871,12 +1126,14 @@ export async function doSomething() {
 ```
 
 **When to use:**
+
 - File headers describing purpose
 - Explaining non-obvious design decisions
 - Documenting constraints or gotchas
 - Inline explanations for complex logic
 
 **When NOT to use:**
+
 - Obvious code that's self-explanatory
 - TODO items (use `//TODO:` instead)
 - Temporary debugging (remove before commit)
@@ -886,20 +1143,25 @@ export async function doSomething() {
 ## Token Budget (Estimated Daily)
 
 **Context sizes** (baseline):
+
 - SOUL.md: ~65 tokens (immutable)
 - SELF.md: ~700-2,000 tokens (grows with learnings)
 
-| Loop | Frequency | Tokens/call | Daily Total |
-|------|-----------|-------------|-------------|
-| Awareness | 1,280×/day | 0 | 0 |
-| Engagement check | 64×/day | 0 | 0 |
-| Response | ~10 conversations | 1,800 | 18,000 |
-| PR Review | ~3 reviews | 1,800 | 5,400 |
-| Expression | ~9 posts | 1,300 | 12,000 |
-| Reflection | ~5 cycles | 2,400 | 12,000 |
-| **Total** | | | **~42,000** |
+| Loop                   | Frequency         | Tokens/call | Daily Total |
+| ---------------------- | ----------------- | ----------- | ----------- |
+| Bluesky Awareness      | 1,280×/day        | 0           | 0           |
+| GitHub Awareness       | 480×/day          | 0           | 0           |
+| Engagement check       | 64×/day           | 0           | 0           |
+| Response               | ~10 conversations | 1,800       | 18,000      |
+| PR Review              | ~3 reviews        | 1,800       | 5,400       |
+| Expression             | ~5 posts          | 1,300       | 6,500       |
+| Reflection             | ~3 cycles         | 2,400       | 7,200       |
+| Commitment extraction  | ~10 replies       | 500         | 5,000       |
+| Commitment fulfillment | varies            | 0           | 0           |
+| **Total**              |                   |             | **~42,100** |
 
 **Notes:**
+
 - Awareness and engagement checks use Bluesky API only (no LLM)
 - Reflection may retry once if SELF.md wasn't updated (~20% of cycles)
 - Token counts include SOUL.md + SELF.md context in every LLM call

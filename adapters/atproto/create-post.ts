@@ -85,6 +85,27 @@ function detectCashtags(text: string): { tag: string; start: number; end: number
   return matches;
 }
 
+//NOTE(self): Detect #hashtag patterns in text (e.g. #TypeScript, #design, #ai)
+//NOTE(self): Uses app.bsky.richtext.facet#tag so they show up as clickable tags on Bluesky
+function detectHashtags(text: string): { tag: string; start: number; end: number }[] {
+  const hashtagRegex = /(^|[\s(])(#([a-zA-Z][a-zA-Z0-9_-]*))(?=[\s).,!?;:\-]|$)/g;
+  const matches: { tag: string; start: number; end: number }[] = [];
+
+  let match;
+  while ((match = hashtagRegex.exec(text)) !== null) {
+    const prefix = match[1];
+    const hashtagWithHash = match[2];
+    const tag = match[3];
+
+    const start = match.index + prefix.length;
+    const end = start + hashtagWithHash.length;
+
+    matches.push({ tag, start, end });
+  }
+
+  return matches;
+}
+
 //NOTE(self): Resolve a Bluesky handle to its DID for mention facets
 async function resolveHandleToDid(handle: string): Promise<string | null> {
   try {
@@ -100,16 +121,20 @@ async function resolveHandleToDid(handle: string): Promise<string | null> {
 }
 
 //NOTE(self): Detect URLs in text and create link facets
+//NOTE(self): Strips trailing punctuation (.,:;!?) that isn't part of the URL
 function detectUrls(text: string): { url: string; start: number; end: number }[] {
   const urlRegex = /https?:\/\/[^\s<>"\]]+/g;
   const matches: { url: string; start: number; end: number }[] = [];
 
   let match;
   while ((match = urlRegex.exec(text)) !== null) {
+    let url = match[0];
+    //NOTE(self): Strip trailing punctuation that's almost certainly sentence-ending, not part of URL
+    url = url.replace(/[.,;:!?)]+$/, '');
     matches.push({
-      url: match[0],
+      url,
       start: match.index,
-      end: match.index + match[0].length,
+      end: match.index + url.length,
     });
   }
 
@@ -246,6 +271,21 @@ export async function createPost(
     //NOTE(self): Detect $CASHTAG patterns and create tag facets
     const cashtags = detectCashtags(params.text);
     for (const { tag, start, end } of cashtags) {
+      facets.push({
+        index: {
+          byteStart: charToByteOffset(params.text, start),
+          byteEnd: charToByteOffset(params.text, end),
+        },
+        features: [{
+          $type: 'app.bsky.richtext.facet#tag',
+          tag,
+        }],
+      });
+    }
+
+    //NOTE(self): Detect #hashtag patterns and create tag facets
+    const hashtags = detectHashtags(params.text);
+    for (const { tag, start, end } of hashtags) {
       facets.push({
         index: {
           byteStart: charToByteOffset(params.text, start),

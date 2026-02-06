@@ -4,13 +4,12 @@
 import { claimTask } from '@adapters/github/add-issue-assignee.js';
 import { releaseTask } from '@adapters/github/remove-issue-assignee.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
-import { updateIssue } from '@adapters/github/update-issue.js';
 import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
 import {
   parsePlan,
-  updateTaskInPlanBody,
   getClaimableTasks,
+  freshUpdateTaskInPlan,
   type ParsedPlan,
   type ParsedTask,
 } from '@local-tools/self-plan-parse.js';
@@ -79,7 +78,7 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
   if (!claimResult.data.claimed) {
     //NOTE(self): Someone else got there first
     const currentOwner = claimResult.data.currentAssignees?.[0];
-    logger.info('Task claim failed - already claimed', { taskNumber, claimedBy: currentOwner });
+    logger.info('Task claim deferred (issue-level lock, by design)', { taskNumber, claimedBy: currentOwner, reason: 'Current owner will finish and release — SOULs take turns' });
     return {
       success: true,
       claimed: false,
@@ -89,16 +88,10 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
   }
 
   //NOTE(self): We got the claim! Update the plan body to reflect this
-  const newBody = updateTaskInPlanBody(plan.rawBody, taskNumber, {
+  //NOTE(self): Use freshUpdateTaskInPlan to avoid clobbering concurrent writes
+  const updateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'claimed',
     assignee: myUsername,
-  });
-
-  const updateResult = await updateIssue({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body: newBody,
   });
 
   if (!updateResult.success) {
@@ -107,12 +100,16 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
   }
 
   //NOTE(self): Post a comment announcing the claim
-  await createIssueComment({
+  const claimCommentResult = await createIssueComment({
     owner,
     repo,
     issue_number: issueNumber,
     body: `🤖 **Claiming Task ${taskNumber}: ${task.title}**\n\nI'll start working on this now.`,
   });
+
+  if (!claimCommentResult.success) {
+    logger.warn('Failed to post claim comment', { error: claimCommentResult.error });
+  }
 
   logger.info('Successfully claimed task', { taskNumber, myUsername });
   return { success: true, claimed: true };
@@ -132,26 +129,23 @@ export async function releaseTaskClaim(params: ClaimTaskParams): Promise<{ succe
     return { success: false, error: releaseResult.error };
   }
 
-  //NOTE(self): Update the plan body
-  const newBody = updateTaskInPlanBody(plan.rawBody, taskNumber, {
+  //NOTE(self): Update the plan body (fresh read to avoid clobbering)
+  await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'pending',
     assignee: null,
   });
 
-  await updateIssue({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body: newBody,
-  });
-
   //NOTE(self): Post a comment
-  await createIssueComment({
+  const releaseCommentResult = await createIssueComment({
     owner,
     repo,
     issue_number: issueNumber,
     body: `🔓 **Releasing Task ${taskNumber}**\n\nThis task is available for another SOUL to claim.`,
   });
+
+  if (!releaseCommentResult.success) {
+    logger.warn('Failed to post release comment', { error: releaseCommentResult.error });
+  }
 
   return { success: true };
 }
@@ -166,31 +160,25 @@ export function getNextClaimableTask(plan: ParsedPlan): ParsedTask | null {
 }
 
 //NOTE(self): Mark a task as in_progress (after claiming)
+//NOTE(self): Uses freshUpdateTaskInPlan to avoid clobbering concurrent writes
 export async function markTaskInProgress(
   owner: string,
   repo: string,
   issueNumber: number,
   taskNumber: number,
-  planBody: string
+  _planBody?: string //NOTE(self): Kept for API compat, no longer used (fresh read instead)
 ): Promise<{ success: boolean; newBody: string; error?: string }> {
   const config = getConfig();
   const myUsername = config.github.username;
 
-  const newBody = updateTaskInPlanBody(planBody, taskNumber, {
+  const result = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'in_progress',
     assignee: myUsername,
   });
 
-  const result = await updateIssue({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body: newBody,
-  });
-
   if (!result.success) {
-    return { success: false, newBody: planBody, error: result.error };
+    return { success: false, newBody: '', error: result.error };
   }
 
-  return { success: true, newBody };
+  return { success: true, newBody: '' };
 }

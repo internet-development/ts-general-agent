@@ -52,6 +52,7 @@ export interface GitHubIssue {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  pull_request?: { url: string };  // Present if this "issue" is actually a PR
 }
 
 export interface GitHubPullRequest {

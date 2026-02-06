@@ -60,6 +60,8 @@ function loadState(): PeerRegistryState {
 }
 
 function saveState(): void {
+  if (!registryState) return;
+
   try {
     const dir = dirname(DISCOVERED_PEERS_PATH);
     if (!existsSync(dir)) {
@@ -194,5 +196,94 @@ export function isPeerByBlueskyHandle(blueskyHandle: string): boolean {
   const state = loadState();
   return Object.values(state.peers).some(
     p => p.blueskyHandle?.toLowerCase() === blueskyHandle.toLowerCase()
+  );
+}
+
+//NOTE(self): Link a Bluesky handle to a GitHub username
+//NOTE(self): If we had them as separate entries, merge them
+//NOTE(self): This is how SOULs learn "oh, @marvin.bsky.social IS sh-marvin on GitHub"
+export function linkPeerIdentities(githubUsername: string, blueskyHandle: string): void {
+  const state = loadState();
+  const ghKey = githubUsername.toLowerCase();
+  const now = new Date().toISOString();
+
+  //NOTE(self): Check if we have a Bluesky-only entry that should be merged
+  const blueskyOnlyKey = blueskyHandle.toLowerCase();
+  const blueskyOnlyEntry = state.peers[blueskyOnlyKey];
+
+  if (blueskyOnlyEntry && blueskyOnlyKey !== ghKey) {
+    //NOTE(self): Merge the Bluesky-only entry into the GitHub entry
+    if (state.peers[ghKey]) {
+      //NOTE(self): GitHub entry exists — just add the Bluesky handle
+      state.peers[ghKey].blueskyHandle = blueskyHandle;
+      state.peers[ghKey].lastSeenAt = now;
+      //NOTE(self): Merge contexts from the Bluesky-only entry
+      for (const ctx of blueskyOnlyEntry.contexts) {
+        if (!state.peers[ghKey].contexts.includes(ctx)) {
+          state.peers[ghKey].contexts.push(ctx);
+        }
+      }
+    } else {
+      //NOTE(self): No GitHub entry — promote the Bluesky entry
+      state.peers[ghKey] = {
+        ...blueskyOnlyEntry,
+        githubUsername,
+        blueskyHandle,
+        lastSeenAt: now,
+      };
+    }
+    //NOTE(self): Remove the old Bluesky-only entry
+    delete state.peers[blueskyOnlyKey];
+    logger.info('Linked peer identities (merged)', { githubUsername, blueskyHandle });
+  } else if (state.peers[ghKey]) {
+    //NOTE(self): GitHub entry exists, just add the Bluesky handle
+    state.peers[ghKey].blueskyHandle = blueskyHandle;
+    state.peers[ghKey].lastSeenAt = now;
+    logger.info('Linked peer identities', { githubUsername, blueskyHandle });
+  } else {
+    //NOTE(self): Neither exists — create new entry with both
+    state.peers[ghKey] = {
+      githubUsername,
+      blueskyHandle,
+      discoveredAt: now,
+      discoveredVia: 'workspace',
+      confidence: 'high',
+      lastSeenAt: now,
+      contexts: [],
+    };
+    logger.info('Created peer with linked identities', { githubUsername, blueskyHandle });
+  }
+
+  saveState();
+}
+
+//NOTE(self): Resolve a Bluesky handle to a GitHub username
+//NOTE(self): Returns null if we don't know the mapping yet
+export function getPeerGithubUsername(blueskyHandle: string): string | null {
+  const state = loadState();
+  const peer = Object.values(state.peers).find(
+    p => p.blueskyHandle?.toLowerCase() === blueskyHandle.toLowerCase()
+  );
+  //NOTE(self): Only return if the GitHub username is different from the Bluesky handle
+  //NOTE(self): (If they're the same, it means we only know the Bluesky handle)
+  if (peer && peer.githubUsername.toLowerCase() !== peer.blueskyHandle?.toLowerCase()) {
+    return peer.githubUsername;
+  }
+  return null;
+}
+
+//NOTE(self): Resolve a GitHub username to a Bluesky handle
+//NOTE(self): Returns null if we don't know the mapping yet
+export function getPeerBlueskyHandle(githubUsername: string): string | null {
+  const state = loadState();
+  const peer = state.peers[githubUsername.toLowerCase()];
+  return peer?.blueskyHandle || null;
+}
+
+//NOTE(self): Get all peers with fully linked identities (both GitHub + Bluesky known)
+export function getLinkedPeers(): DiscoveredPeer[] {
+  const state = loadState();
+  return Object.values(state.peers).filter(
+    p => p.blueskyHandle && p.githubUsername.toLowerCase() !== p.blueskyHandle.toLowerCase()
   );
 }

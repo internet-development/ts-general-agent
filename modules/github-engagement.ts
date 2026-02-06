@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { isWatchingWorkspace } from '@modules/workspace-discovery.js';
 
 //NOTE(self): Path to GitHub engagement state
 const GITHUB_ENGAGEMENT_PATH = '.memory/github_engagement.json';
@@ -83,6 +84,8 @@ function loadState(): GitHubEngagementState {
 }
 
 function saveState(): void {
+  if (!engagementState) return;
+
   try {
     const dir = dirname(GITHUB_ENGAGEMENT_PATH);
     if (!existsSync(dir)) {
@@ -254,9 +257,12 @@ export function getConversationsNeedingAttention(): ConversationNeedingAttention
     }
 
     //NOTE(self): Check concluded conversations for re-engagement
+    //NOTE(self): Workspace issues get unlimited re-engagement; casual threads capped at 1
     if (conversation.state === 'concluded') {
       const reengageCount = conversation.reengagementCount ?? 0;
-      if (reengageCount < 1 && conversation.concludedAt) {
+      const isWorkspace = isWatchingWorkspace(conversation.owner, conversation.repo);
+      const reengageLimit = isWorkspace ? Infinity : 1;
+      if (reengageCount < reengageLimit && conversation.concludedAt) {
         const concludedTime = new Date(conversation.concludedAt).getTime();
         const lastCheckedTime = new Date(conversation.lastChecked).getTime();
         //NOTE(self): If lastChecked is newer than concludedAt, someone may have updated it

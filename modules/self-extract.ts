@@ -30,6 +30,16 @@ const DEFAULT_SOCIAL_MECHANICS: SocialMechanics = {
   skipLowValueAcknowledgments: true,
 };
 
+//NOTE(self): Relaxed mechanics for project coordination threads
+//NOTE(self): When working on a project, conversations need more room to breathe
+export const PROJECT_SOCIAL_MECHANICS: SocialMechanics = {
+  maxRepliesBeforeExit: 10,
+  maxThreadDepth: 50,
+  silenceThresholdMs: 4 * 60 * 60 * 1000, // 4 hours
+  noResponseTimeoutMs: 8 * 60 * 60 * 1000, // 8 hours
+  skipLowValueAcknowledgments: true,
+};
+
 //NOTE(self): What I can extract from my SELF.md
 export interface SelfExtract {
   //NOTE(self): My name and opening identity statement

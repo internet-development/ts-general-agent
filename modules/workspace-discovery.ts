@@ -11,7 +11,7 @@ import { listPullRequests } from '@adapters/github/list-pull-requests.js';
 import { listPullRequestReviews } from '@adapters/github/list-pull-request-reviews.js';
 import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
-import { registerPeer } from '@modules/peer-awareness.js';
+import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
 import { getConfig } from '@modules/config.js';
 import { getConversation } from '@modules/github-engagement.js';
 
@@ -82,6 +82,8 @@ function loadState(): WorkspaceDiscoveryState {
 }
 
 function saveState(): void {
+  if (!discoveryState) return;
+
   try {
     const dir = dirname(WATCHED_WORKSPACES_PATH);
     if (!existsSync(dir)) {
@@ -151,6 +153,45 @@ export function getWatchedWorkspaces(): WatchedWorkspace[] {
 export function isWatchingWorkspace(owner: string, repo: string): boolean {
   const state = loadState();
   return !!state.workspaces[getWorkspaceKey(owner, repo)];
+}
+
+//NOTE(self): Check if a Bluesky thread has workspace context
+//NOTE(self): True if: (a) this thread directly discovered a workspace, OR
+//NOTE(self): (b) the poster is the owner and any workspace exists, OR
+//NOTE(self): (c) the poster is a known peer SOUL and workspaces exist
+//NOTE(self): Rationale: if the owner or a peer is talking to SOULs and a project exists,
+//NOTE(self): the conversation is about the project — don't apply casual exit pressure
+export function threadHasWorkspaceContext(
+  threadRootUri: string,
+  posterDid?: string,
+  posterBlueskyHandle?: string
+): boolean {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+
+  if (workspaces.length === 0) return false;
+
+  //NOTE(self): Direct match — this thread discovered a workspace
+  if (workspaces.some(ws => ws.discoveredInThread === threadRootUri)) {
+    return true;
+  }
+
+  //NOTE(self): Owner heuristic — if the owner is posting and workspaces exist,
+  //NOTE(self): treat it as a project thread (owner doesn't casually chat with SOULs)
+  if (posterDid) {
+    const config = getConfig();
+    if (posterDid === config.owner.blueskyDid) {
+      return true;
+    }
+  }
+
+  //NOTE(self): Peer heuristic — if a known peer SOUL is posting and workspaces exist,
+  //NOTE(self): they're likely coordinating on the project
+  if (posterBlueskyHandle && isPeerByBlueskyHandle(posterBlueskyHandle)) {
+    return true;
+  }
+
+  return false;
 }
 
 //NOTE(self): Parse a GitHub URL to extract owner/repo
@@ -256,6 +297,74 @@ export async function pollWorkspacesForPlans(): Promise<DiscoveredPlan[]> {
   return discoveredPlans;
 }
 
+//NOTE(self): A non-plan issue discovered in a watched workspace
+export interface DiscoveredIssue {
+  workspace: WatchedWorkspace;
+  issue: import('@adapters/github/types.js').GitHubIssue;
+}
+
+//NOTE(self): Poll watched workspaces for ALL open issues (not just plan-labeled)
+//NOTE(self): Filters out PRs, plan issues, and issues assigned to someone else
+export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  const results: DiscoveredIssue[] = [];
+
+  if (workspaces.length === 0) {
+    return [];
+  }
+
+  const config = getConfig();
+  const agentUsername = config.github.username.toLowerCase();
+
+  logger.debug('Polling workspaces for open issues', { workspaceCount: workspaces.length });
+
+  for (const workspace of workspaces) {
+    try {
+      const issuesResult = await listIssues({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        state: 'open',
+        sort: 'created',
+        direction: 'desc',
+        per_page: 10,
+      });
+
+      if (!issuesResult.success) {
+        logger.warn('Failed to fetch issues for workspace', {
+          workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+          error: issuesResult.error,
+        });
+        continue;
+      }
+
+      for (const issue of issuesResult.data) {
+        //NOTE(self): Filter out issues with 'plan' label (handled by plan polling)
+        const hasPlanLabel = issue.labels.some(l => l.name.toLowerCase() === 'plan');
+        if (hasPlanLabel) continue;
+
+        //NOTE(self): Filter out PRs (GitHub API returns them as issues too)
+        if (issue.pull_request) continue;
+
+        //NOTE(self): Filter out issues assigned to someone else
+        if (issue.assignees.length > 0) {
+          const assignedToUs = issue.assignees.some(a => a.login.toLowerCase() === agentUsername);
+          if (!assignedToUs) continue;
+        }
+
+        results.push({ workspace, issue });
+      }
+    } catch (err) {
+      logger.error('Error polling workspace for open issues', {
+        workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+        error: String(err),
+      });
+    }
+  }
+
+  return results;
+}
+
 //NOTE(self): Get the next claimable task across all workspaces
 export async function getNextClaimableTask(): Promise<{
   workspace: WatchedWorkspace;
@@ -347,9 +456,14 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
         //NOTE(self): Never review own PRs
         if (pr.user.login.toLowerCase() === agentUsername) continue;
 
-        //NOTE(self): Fast path — if conversation is already concluded, skip (saves API call)
+        //NOTE(self): Fast path — if conversation is concluded AND PR hasn't been updated since, skip
         const existing = getConversation(workspace.owner, workspace.repo, pr.number);
-        if (existing && existing.state === 'concluded') continue;
+        if (existing && existing.state === 'concluded' && existing.concludedAt) {
+          const concludedTime = new Date(existing.concludedAt).getTime();
+          const prUpdatedTime = new Date(pr.updated_at).getTime();
+          if (prUpdatedTime <= concludedTime) continue;
+          //NOTE(self): PR was updated after our conclusion — re-review it
+        }
 
         //NOTE(self): API check — skip if agent already has a review on this PR
         const reviewsResult = await listPullRequestReviews({

@@ -1,10 +1,11 @@
 //NOTE(self): Add assignee(s) to a GitHub issue
 //NOTE(self): POST /repos/:owner/:repo/issues/:number/assignees
 //NOTE(self): Used for claiming tasks in multi-SOUL coordination
-//NOTE(self): First-writer-wins: if assignee already set, claim fails
+//NOTE(self): Deterministic tiebreak: lexicographically-first login wins races
 
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubIssue, GitHubResult } from '@adapters/github/types.js';
+import { logger } from '@modules/logger.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -54,8 +55,14 @@ export async function addIssueAssignee(
   }
 }
 
-//NOTE(self): Atomic claim attempt - checks current assignees first
-//NOTE(self): Returns whether we successfully claimed (first-writer-wins)
+//NOTE(self): Claim a task via assignee API with deterministic tiebreak
+//NOTE(self): No GET pre-check — POST first, then inspect response assignees.
+//NOTE(self): If multiple SOULs race, both see the same assignee list in the POST response.
+//NOTE(self): Lexicographically-first login wins. Loser removes itself via DELETE.
+//NOTE(self): DESIGN DECISION — Issue-level claiming is intentional:
+//NOTE(self): Only one SOUL works on a plan issue at a time. This prevents merge conflicts
+//NOTE(self): and keeps diffs clean. SOULs take turns: when SOUL1 finishes and removes itself
+//NOTE(self): as assignee, SOUL2 can claim the next task on the next poll cycle.
 export async function claimTask(
   params: Omit<AddIssueAssigneeParams, 'assignees'> & { assignee: string }
 ): Promise<GitHubResult<ClaimResult>> {
@@ -65,35 +72,7 @@ export async function claimTask(
   }
 
   try {
-    //NOTE(self): First, fetch current issue state
-    const issueResponse = await fetch(
-      `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}`,
-      {
-        method: 'GET',
-        headers: getAuthHeaders(),
-      }
-    );
-
-    if (!issueResponse.ok) {
-      const error = await issueResponse.json();
-      return { success: false, error: error.message || `Failed to fetch issue: ${issueResponse.status}` };
-    }
-
-    const issueData = await issueResponse.json() as GitHubIssue;
-
-    //NOTE(self): Check if already assigned (first-writer-wins)
-    if (issueData.assignees && issueData.assignees.length > 0) {
-      return {
-        success: true,
-        data: {
-          claimed: false,
-          issue: issueData,
-          currentAssignees: issueData.assignees.map(a => a.login),
-        },
-      };
-    }
-
-    //NOTE(self): Attempt to claim by adding ourselves as assignee
+    //NOTE(self): POST to add ourselves as assignee (no pre-check GET)
     const claimResponse = await fetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/assignees`,
       {
@@ -111,16 +90,79 @@ export async function claimTask(
     }
 
     const claimedIssue = await claimResponse.json() as GitHubIssue;
+    const assignees = claimedIssue.assignees?.map(a => a.login) || [];
 
-    //NOTE(self): Verify we actually got the claim (race condition check)
-    const ourClaim = claimedIssue.assignees?.some(a => a.login === params.assignee);
+    //NOTE(self): If we're the sole assignee, we win
+    if (assignees.length === 1 && assignees[0] === params.assignee) {
+      return {
+        success: true,
+        data: {
+          claimed: true,
+          issue: claimedIssue,
+          currentAssignees: assignees,
+        },
+      };
+    }
 
+    //NOTE(self): Multiple assignees — deterministic tiebreak
+    //NOTE(self): Both SOULs see the same list, so sorting picks the same winner
+    if (assignees.length > 1) {
+      const sortedAssignees = [...assignees].sort();
+      const winner = sortedAssignees[0];
+
+      if (winner === params.assignee) {
+        //NOTE(self): We won the tiebreak
+        logger.info('Won claim tiebreak', {
+          assignee: params.assignee,
+          allAssignees: assignees,
+          issueNumber: params.issue_number,
+        });
+        return {
+          success: true,
+          data: {
+            claimed: true,
+            issue: claimedIssue,
+            currentAssignees: assignees,
+          },
+        };
+      } else {
+        //NOTE(self): We lost — remove ourselves to clean up
+        logger.info('Lost claim tiebreak, removing self', {
+          assignee: params.assignee,
+          winner,
+          allAssignees: assignees,
+          issueNumber: params.issue_number,
+        });
+
+        await fetch(
+          `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/assignees`,
+          {
+            method: 'DELETE',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              assignees: [params.assignee],
+            }),
+          }
+        );
+
+        return {
+          success: true,
+          data: {
+            claimed: false,
+            issue: claimedIssue,
+            currentAssignees: [winner],
+          },
+        };
+      }
+    }
+
+    //NOTE(self): We're not in the assignee list at all (shouldn't happen after POST)
     return {
       success: true,
       data: {
-        claimed: ourClaim ?? false,
+        claimed: false,
         issue: claimedIssue,
-        currentAssignees: claimedIssue.assignees?.map(a => a.login),
+        currentAssignees: assignees,
       },
     };
   } catch (error) {

@@ -2,6 +2,10 @@
 //NOTE(self): Plans follow a specific markdown format with tasks, status, assignees, etc.
 
 import { logger } from '@modules/logger.js';
+import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
+import { updateIssue } from '@adapters/github/update-issue.js';
+
+const GITHUB_API = 'https://api.github.com';
 
 //NOTE(self): Task status state machine: pending → claimed → in_progress → completed
 //NOTE(self): blocked → pending (after unblock)
@@ -337,4 +341,99 @@ export function areDependenciesMet(task: ParsedTask, plan: ParsedPlan): boolean 
   );
 
   return task.dependencies.every(dep => completedTaskIds.has(dep));
+}
+
+//NOTE(self): Fetch the latest plan body from GitHub and re-parse it
+//NOTE(self): Used to avoid stale plan data in claim/report flows
+export async function fetchFreshPlan(
+  owner: string,
+  repo: string,
+  issueNumber: number
+): Promise<{ success: boolean; plan?: ParsedPlan; error?: string }> {
+  const auth = getAuth();
+  if (!auth) {
+    return { success: false, error: 'GitHub not authenticated' };
+  }
+
+  try {
+    const response = await fetch(
+      `${GITHUB_API}/repos/${owner}/${repo}/issues/${issueNumber}`,
+      { headers: getAuthHeaders() }
+    );
+
+    if (!response.ok) {
+      //NOTE(self): Safe JSON parse — GitHub may return HTML for 502/503
+      let errorMessage = `Failed to fetch issue: ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMessage = error.message || errorMessage;
+      } catch { /* non-JSON error response */ }
+      return { success: false, error: errorMessage };
+    }
+
+    const issue = await response.json();
+    const plan = parsePlan(issue.body || '', issue.title || '');
+    if (!plan) {
+      return { success: false, error: 'Failed to parse plan from fresh issue body' };
+    }
+
+    return { success: true, plan };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+//NOTE(self): Read-modify-write helper that fetches the LATEST issue body before writing
+//NOTE(self): Minimizes the race window from minutes (stale plan.rawBody) to ~200ms (one round-trip)
+export async function freshUpdateTaskInPlan(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  taskNumber: number,
+  updates: { status?: TaskStatus; assignee?: string | null }
+): Promise<{ success: boolean; error?: string }> {
+  const auth = getAuth();
+  if (!auth) {
+    return { success: false, error: 'GitHub not authenticated' };
+  }
+
+  try {
+    //NOTE(self): GET the latest body right before writing
+    const response = await fetch(
+      `${GITHUB_API}/repos/${owner}/${repo}/issues/${issueNumber}`,
+      { headers: getAuthHeaders() }
+    );
+
+    if (!response.ok) {
+      //NOTE(self): Safe JSON parse — GitHub may return HTML for 502/503
+      let errorMessage = `Failed to fetch issue: ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMessage = error.message || errorMessage;
+      } catch { /* non-JSON error response */ }
+      return { success: false, error: errorMessage };
+    }
+
+    const issue = await response.json();
+    const freshBody = issue.body || '';
+
+    //NOTE(self): Apply the update to the fresh body
+    const newBody = updateTaskInPlanBody(freshBody, taskNumber, updates);
+
+    //NOTE(self): PATCH with the fresh result
+    const updateResult = await updateIssue({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body: newBody,
+    });
+
+    if (!updateResult.success) {
+      return { success: false, error: updateResult.error };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 }

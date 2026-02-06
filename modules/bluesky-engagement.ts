@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
-import { getSocialMechanics, type SocialMechanics } from '@modules/self-extract.js';
+import { getSocialMechanics, PROJECT_SOCIAL_MECHANICS, type SocialMechanics } from '@modules/self-extract.js';
 
 //NOTE(self): Path to Bluesky conversation state
 const BLUESKY_CONVERSATIONS_PATH = '.memory/bluesky_conversations.json';
@@ -292,14 +292,16 @@ export function analyzeConversation(
   rootUri: string,
   agentDid: string,
   currentThreadDepth?: number,
-  mechanics?: SocialMechanics
+  mechanics?: SocialMechanics,
+  options?: { hasWorkspaceContext?: boolean }
 ): ConversationAnalysis {
   const state = loadState();
   const conversation = state.conversations[rootUri];
 
   //NOTE(self): Get my social mechanics preferences from SELF.md
   //NOTE(self): I can adjust these as I learn what works for me
-  const socialMechanics = mechanics || getSocialMechanics();
+  //NOTE(self): Use relaxed project mechanics for workspace-connected threads
+  const socialMechanics = mechanics || (options?.hasWorkspaceContext ? PROJECT_SOCIAL_MECHANICS : getSocialMechanics());
 
   //NOTE(self): Default analysis for unknown conversations
   if (!conversation) {
@@ -346,6 +348,18 @@ export function analyzeConversation(
   //NOTE(self): If someone re-engages meaningfully, I can come back
   let shouldConclude = false;
   let reason = '';
+
+  //NOTE(self): Detect thank-you chains / circular acknowledgment conversations
+  //NOTE(self): 2+ replies with <5 min gap = likely a thank-you chain, exit gracefully
+  if (socialMechanics.skipLowValueAcknowledgments && conversation.ourReplyCount >= 2) {
+    const timeSinceOurLastReply = conversation.ourLastReplyAt
+      ? now - new Date(conversation.ourLastReplyAt).getTime()
+      : Infinity;
+    if (timeSinceOurLastReply < 5 * 60 * 1000) {
+      shouldConclude = true;
+      reason = 'Rapid back-and-forth detected — likely a thank-you chain. Exit gracefully.';
+    }
+  }
 
   //NOTE(self): Already concluded
   if (conversation.state === 'concluded') {
@@ -404,9 +418,10 @@ export function analyzeConversation(
 export function shouldRespondInConversation(
   rootUri: string,
   agentDid: string,
-  mechanics?: SocialMechanics
+  mechanics?: SocialMechanics,
+  options?: { hasWorkspaceContext?: boolean }
 ): { shouldRespond: boolean; reason: string } {
-  const analysis = analyzeConversation(rootUri, agentDid, undefined, mechanics);
+  const analysis = analyzeConversation(rootUri, agentDid, undefined, mechanics, options);
 
   if (analysis.shouldConclude) {
     return { shouldRespond: false, reason: analysis.reason };
@@ -414,9 +429,11 @@ export function shouldRespondInConversation(
 
   const conversation = getConversation(rootUri);
   if (conversation?.state === 'concluded') {
-    //NOTE(self): Check for re-engagement — if someone replied after conclusion, come back (once)
+    //NOTE(self): Check for re-engagement — if someone replied after conclusion, come back
+    //NOTE(self): Workspace threads get unlimited re-engagement; casual threads capped at 1
     const reengageCount = conversation.reengagementCount ?? 0;
-    if (reengageCount < 1) {
+    const reengageLimit = options?.hasWorkspaceContext ? Infinity : 1;
+    if (reengageCount < reengageLimit) {
       const conclusionTime = new Date(conversation.lastChecked).getTime();
       const participants = Object.values(conversation.participants);
       const hasNewReply = participants.some(p =>

@@ -157,6 +157,14 @@ export {
 } from '@local-tools/self-task-execute.js';
 
 export {
+  verifyGitChanges,
+  runTestsIfPresent,
+  verifyPushSuccess,
+  type GitVerification,
+  type TestResult,
+} from '@local-tools/self-task-verify.js';
+
+export {
   reportTaskComplete,
   reportTaskProgress,
   reportTaskBlocked,

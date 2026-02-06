@@ -1,10 +1,12 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my five modes of being:
-//NOTE(self): 1. Awareness - watching for people who reach out (cheap, fast)
-//NOTE(self): 2. Expression - sharing thoughts from my SELF (scheduled)
-//NOTE(self): 3. Reflection - integrating experiences and updating SELF (deep)
-//NOTE(self): 4. Self-Improvement - fixing friction via Claude Code (rare)
-//NOTE(self): 5. Plan Awareness - polling workspaces for collaborative tasks (3 min)
+//NOTE(self): Coordinates my seven loops of being:
+//NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
+//NOTE(self): 1b. GitHub Awareness (2m) - checking GitHub notifications for mentions and replies
+//NOTE(self): 2. Expression (3-4h) - sharing thoughts from my SELF (scheduled)
+//NOTE(self): 3. Reflection (6h) - integrating experiences and updating SELF (deep)
+//NOTE(self): 4. Self-Improvement (24h) - fixing friction via Claude Code (rare)
+//NOTE(self): 5. Plan Awareness (3m) - polling workspaces for collaborative tasks and PRs
+//NOTE(self): 6. Commitment Fulfillment (15s) - fulfilling promises made in replies
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';
@@ -17,6 +19,7 @@ import type { ToolCall } from '@modules/tools.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
+import { getPostThread } from '@adapters/atproto/get-post-thread.js';
 import { getSession, ensureValidSession } from '@adapters/atproto/authenticate.js';
 import {
   prioritizeNotifications,
@@ -78,7 +81,7 @@ import {
   getAspirationStats,
 } from '@local-tools/self-identify-aspirations.js';
 import { runClaudeCode } from '@local-tools/self-improve-run.js';
-import { buildSystemPrompt, renderSkillSection, areSkillsLoaded } from '@modules/skills.js';
+import { buildSystemPrompt, renderSkillSection, areSkillsLoaded, reloadSkills } from '@modules/skills.js';
 import * as github from '@adapters/github/index.js';
 import {
   extractGitHubUrlsFromRecord,
@@ -111,18 +114,22 @@ import {
 import {
   pollWorkspacesForPlans,
   pollWorkspacesForReviewablePRs,
+  pollWorkspacesForOpenIssues,
+  threadHasWorkspaceContext,
   getWatchedWorkspaces,
   getWorkspaceDiscoveryStats,
   type DiscoveredPlan,
+  type DiscoveredIssue,
   type ReviewablePR,
 } from '@modules/workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer } from '@modules/peer-awareness.js';
-import { processTextForWorkspaces } from '@local-tools/self-workspace-watch.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
+import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest } from '@local-tools/self-task-execute.js';
+import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
 import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
-import { parsePlan } from '@local-tools/self-plan-parse.js';
+import { parsePlan, fetchFreshPlan, getClaimableTasks } from '@local-tools/self-plan-parse.js';
 import {
   trackConversation as trackBlueskyConversation,
   recordParticipantActivity,
@@ -133,6 +140,16 @@ import {
   getConversation as getBlueskyConversation,
   cleanupOldConversations as cleanupOldBlueskyConversations,
 } from '@modules/bluesky-engagement.js';
+import {
+  enqueueCommitment,
+  getPendingCommitments,
+  markCommitmentInProgress,
+  markCommitmentCompleted,
+  markCommitmentFailed,
+  abandonStaleCommitments,
+} from '@modules/commitment-queue.js';
+import { extractCommitments, type ReplyForExtraction } from '@modules/commitment-extract.js';
+import { fulfillCommitment } from '@modules/commitment-fulfill.js';
 
 //NOTE(self): Scheduler Configuration - can be tuned from SELF.md in future
 export interface SchedulerConfig {
@@ -193,6 +210,7 @@ interface SchedulerState {
   lastReflection: number;
   lastImprovementCheck: number;
   lastPlanAwarenessCheck: number;
+  lastCommitmentCheck: number;
   currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving' | 'github_responding' | 'plan_executing';
   pendingNotifications: PrioritizedNotification[];
   pendingGitHubConversations: PendingGitHubConversation[];
@@ -237,6 +255,7 @@ export class AgentScheduler {
   private reflectionTimer: NodeJS.Timeout | null = null;
   private engagementCheckTimer: NodeJS.Timeout | null = null;
   private planAwarenessTimer: NodeJS.Timeout | null = null;
+  private commitmentTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
 
   constructor(config: Partial<SchedulerConfig> = {}) {
@@ -249,6 +268,7 @@ export class AgentScheduler {
       lastReflection: Date.now(),
       lastImprovementCheck: 0,
       lastPlanAwarenessCheck: 0,
+      lastCommitmentCheck: 0,
       currentMode: 'idle',
       pendingNotifications: [],
       pendingGitHubConversations: [],
@@ -352,6 +372,7 @@ export class AgentScheduler {
     this.startEngagementCheckLoop();
     this.startHeartbeatLoop();
     this.startPlanAwarenessLoop();
+    this.startCommitmentFulfillmentLoop();
 
     //NOTE(self): Start UI timer updates
     this.startTimerUpdates();
@@ -398,6 +419,10 @@ export class AgentScheduler {
     if (this.planAwarenessTimer) {
       clearInterval(this.planAwarenessTimer);
       this.planAwarenessTimer = null;
+    }
+    if (this.commitmentTimer) {
+      clearInterval(this.commitmentTimer);
+      this.commitmentTimer = null;
     }
 
     ui.system('Scheduler stopped');
@@ -490,13 +515,24 @@ export class AgentScheduler {
 
           //NOTE(self): Check for workspace URLs in the notification (multi-SOUL coordination)
           //NOTE(self): This adds workspaces to our watch list for plan polling
-          const postText = (pn.notification.record as { text?: string })?.text || '';
-          const workspacesFound = processTextForWorkspaces(postText, pn.notification.uri);
+          //NOTE(self): Uses record-level extraction (facets → embed → text) to handle Bluesky URL truncation
+          const workspacesFound = processRecordForWorkspaces(pn.notification.record as Record<string, unknown>, pn.notification.uri);
           if (workspacesFound > 0) {
             logger.info('Discovered workspace URLs in Bluesky thread', {
               count: workspacesFound,
               threadUri: pn.notification.uri,
             });
+
+            //NOTE(self): Cross-platform identity linking
+            //NOTE(self): The poster shared a workspace URL — they're a project collaborator
+            //NOTE(self): Register their Bluesky handle and try to link to their GitHub identity
+            const posterHandle = pn.notification.author.handle;
+            const posterDid = pn.notification.author.did;
+            if (posterDid !== this.appConfig.owner.blueskyDid &&
+                posterHandle !== this.appConfig.bluesky.username) {
+              registerPeer(posterHandle, 'workspace', pn.notification.uri, posterHandle);
+              logger.debug('Registered Bluesky peer from workspace URL', { posterHandle });
+            }
           }
 
           //NOTE(self): Check if this notification is from the owner
@@ -528,7 +564,8 @@ export class AgentScheduler {
                 const analysis = analyzeConversation(
                   threadResult.data,
                   this.appConfig.github.username,
-                  { isOwnerRequest }
+                  { isOwnerRequest },
+                  getPeerUsernames()
                 );
                 if (analysis.shouldRespond) {
                   this.state.pendingGitHubConversations.push({
@@ -552,16 +589,19 @@ export class AgentScheduler {
           }
         }
 
-        await this.triggerResponseMode();
+        const didRespond = await this.triggerResponseMode();
 
         //NOTE(self): Process GitHub conversations after Bluesky responses
-        if (this.state.pendingGitHubConversations.length > 0) {
+        if (didRespond && this.state.pendingGitHubConversations.length > 0) {
           await this.triggerGitHubResponseMode();
         }
+
       }
 
-      //NOTE(self): Update seenAt timestamp after processing notifications
-      //NOTE(self): Use the most recent notification timestamp
+      //NOTE(self): Always advance seenAt after fetching notifications, regardless of whether
+      //NOTE(self): responses were sent. Notifications are buffered in pendingNotifications —
+      //NOTE(self): re-fetching them every 45s accomplishes nothing and causes an infinite loop
+      //NOTE(self): when commitments block triggerResponseMode() for up to 24h.
       if (notifications.length > 0) {
         const latestNotifTime = notifications
           .map(n => new Date(n.indexedAt))
@@ -569,8 +609,6 @@ export class AgentScheduler {
         updateSeenAt(latestNotifTime);
       }
 
-      //NOTE(self): Mark notifications as seen on Bluesky
-      //NOTE(self): This prevents re-processing the same notifications
       const seenResult = await atproto.updateSeenNotifications();
       if (!seenResult.success) {
         logger.debug('Failed to mark notifications as seen', { error: seenResult.error });
@@ -922,8 +960,11 @@ export class AgentScheduler {
   //NOTE(self): When someone reaches out, respond with full attention
   //NOTE(self): Uses OPERATING.md for efficiency
 
-  private async triggerResponseMode(): Promise<void> {
-    if (this.state.pendingNotifications.length === 0) return;
+  private async triggerResponseMode(): Promise<boolean> {
+    if (this.state.pendingNotifications.length === 0) return true;
+
+    //NOTE(self): Commitments are fulfilled in the background loop — never block social interaction
+    //NOTE(self): SOULs should fulfill promises quickly AND stay responsive
 
     //NOTE(self): Deterministic jitter for Bluesky responses too
     //NOTE(self): Same logic as GitHub — stagger with peers to avoid parallel monologues
@@ -948,6 +989,10 @@ export class AgentScheduler {
       //NOTE(self): The executor's API check (hasAgentRepliedInThread) handles deduplication
       //NOTE(self): This reduces complexity and makes the API the single source of truth
 
+      //NOTE(self): Need agentDid early for conversation state checks
+      const session = getSession();
+      const agentDid = session?.did || '';
+
       //NOTE(self): Filter notifications - only respond where we add value
       let choseSilenceCount = 0;
       const worthResponding = this.state.pendingNotifications.filter((pn) => {
@@ -963,14 +1008,27 @@ export class AgentScheduler {
             );
             choseSilenceCount++;
           }
+          return false;
         }
-        return check.shouldRespond;
+
+        //NOTE(self): Check Bluesky conversation state (concluded, re-engagement, etc.)
+        //NOTE(self): Project threads get unlimited re-engagement; casual threads capped at 1
+        const record = pn.notification.record as { reply?: { root?: { uri?: string } } };
+        const rootUri = record?.reply?.root?.uri || pn.notification.uri;
+        const hasWorkspaceCtx = threadHasWorkspaceContext(rootUri, pn.notification.author.did, pn.notification.author.handle);
+        const convCheck = shouldRespondInConversation(rootUri, agentDid, undefined, { hasWorkspaceContext: hasWorkspaceCtx });
+        if (!convCheck.shouldRespond) {
+          logger.debug('Skipping notification (conversation state)', { reason: convCheck.reason, uri: pn.notification.uri, isProjectThread: hasWorkspaceCtx });
+          return false;
+        }
+
+        return true;
       });
 
       if (worthResponding.length === 0) {
         ui.stopSpinner('Nothing worth responding to');
         this.state.pendingNotifications = [];
-        return;
+        return true;
       }
 
       //NOTE(self): Capture experiences from notifications BEFORE responding
@@ -1032,9 +1090,6 @@ export class AgentScheduler {
       }
 
       //NOTE(self): Build focused response context with relationship history AND thread analysis
-      const session = getSession();
-      const agentDid = session?.did || '';
-
       const notificationParts: string[] = [];
       for (const pn of worthResponding.slice(0, 5)) {
         const n = pn.notification;
@@ -1057,21 +1112,33 @@ export class AgentScheduler {
         //NOTE(self): Fetch thread analysis for replies to understand conversation depth
         let threadContext = '';
         if (n.reason === 'reply' || n.reason === 'mention' || n.reason === 'quote') {
+          //NOTE(self): Determine if this thread is connected to a project workspace
+          const rootUri = record?.reply?.root?.uri || n.uri;
+          const isProjectThread = threadHasWorkspaceContext(rootUri, n.author.did, n.author.handle);
+
           const threadAnalysis = await atproto.analyzeThread(n.uri, agentDid);
           if (threadAnalysis.success) {
             const ta = threadAnalysis.data;
 
-            //NOTE(self): Build thread context for SOUL's decision
-            threadContext = `\n  **Thread depth:** ${ta.depth} replies deep`;
-            threadContext += `\n  **Your replies in thread:** ${ta.agentReplyCount}`;
-            if (ta.isAgentLastReply) {
-              threadContext += `\n  ⚠️ **Your reply is the most recent** - consider if you need to respond again`;
-            }
-            if (ta.depth >= 10) {
-              threadContext += `\n  ⚠️ **Long thread (${ta.depth}+ replies)** - consider if this conversation should end`;
-            }
-            if (ta.agentReplyCount >= 3) {
-              threadContext += `\n  ⚠️ **You've replied ${ta.agentReplyCount} times** - have you made your point?`;
+            //NOTE(self): Project threads get different context — no exit pressure
+            if (isProjectThread) {
+              threadContext = `\n  🔧 **PROJECT THREAD** — This thread is connected to a workspace. Stay engaged until the work is done.`;
+              threadContext += `\n  **Thread depth:** ${ta.depth} replies deep`;
+              threadContext += `\n  **Your replies in thread:** ${ta.agentReplyCount}`;
+              threadContext += `\n  Reply with what you're going to do, then go do it. The work creates natural pacing.`;
+            } else {
+              //NOTE(self): Casual threads get the normal exit-pressure warnings
+              threadContext = `\n  **Thread depth:** ${ta.depth} replies deep`;
+              threadContext += `\n  **Your replies in thread:** ${ta.agentReplyCount}`;
+              if (ta.isAgentLastReply) {
+                threadContext += `\n  ⚠️ **Your reply is the most recent** - consider if you need to respond again`;
+              }
+              if (ta.depth >= 10) {
+                threadContext += `\n  ⚠️ **Long thread (${ta.depth}+ replies)** - consider if this conversation should end`;
+              }
+              if (ta.agentReplyCount >= 3) {
+                threadContext += `\n  ⚠️ **You've replied ${ta.agentReplyCount} times** - have you made your point?`;
+              }
             }
 
             //NOTE(self): Include conversation history so SOUL has full context
@@ -1080,13 +1147,20 @@ export class AgentScheduler {
             }
 
             //NOTE(self): Detect and warn about circular conversations (thank-you chains)
+            //NOTE(self): Even project threads should avoid circular acknowledgment loops
             if (ta.circularConversation.isCircular) {
               const cc = ta.circularConversation;
-              threadContext += `\n\n  🔄 **CIRCULAR CONVERSATION DETECTED** (${cc.confidence} confidence)`;
-              threadContext += `\n  Pattern: ${cc.pattern} - last ${cc.recentMessages} messages are mutual acknowledgments with no new information`;
-              if (cc.suggestionToExit) {
-                threadContext += `\n  ⚠️ **RECOMMENDED:** Use graceful_exit to end warmly - this conversation has run its course`;
-                threadContext += `\n  Continuing will just add more "thanks for the thanks" - neither party benefits`;
+              if (isProjectThread) {
+                //NOTE(self): Project threads: warn but don't recommend exit — redirect to doing work
+                threadContext += `\n\n  🔄 **ACKNOWLEDGMENT LOOP** — You're going back and forth without new information.`;
+                threadContext += `\n  Stop chatting, go do the work, and come back with results.`;
+              } else {
+                threadContext += `\n\n  🔄 **CIRCULAR CONVERSATION DETECTED** (${cc.confidence} confidence)`;
+                threadContext += `\n  Pattern: ${cc.pattern} - last ${cc.recentMessages} messages are mutual acknowledgments with no new information`;
+                if (cc.suggestionToExit) {
+                  threadContext += `\n  ⚠️ **RECOMMENDED:** Use graceful_exit to end warmly - this conversation has run its course`;
+                  threadContext += `\n  Continuing will just add more "thanks for the thanks" - neither party benefits`;
+                }
               }
             }
 
@@ -1133,6 +1207,7 @@ export class AgentScheduler {
         blueskyPeerSection,
         workspaceSection: workspaceSection ? '\n' + workspaceSection + '\n' : '',
         blueskyUsername: config.bluesky.username,
+        githubUsername: config.github.username,
         ownerHandle: config.owner.blueskyHandle,
       });
 
@@ -1151,6 +1226,12 @@ export class AgentScheduler {
 
       //NOTE(self): Track replied URIs across this session to deduplicate LLM-generated replies
       const sessionRepliedUris = new Set<string>();
+      //NOTE(self): Collect successful reply texts for commitment extraction
+      const collectedReplies: ReplyForExtraction[] = [];
+      //NOTE(self): Track action tools already executed in this session to prevent double-fulfillment
+      //NOTE(self): If the SOUL calls create_memo during response AND the reply text mentions it,
+      //NOTE(self): commitment extraction would create a duplicate. This set prevents that.
+      const executedActionTools = new Set<string>();
 
       //NOTE(self): Execute tool calls (replies)
       while (response.toolCalls.length > 0) {
@@ -1175,12 +1256,25 @@ export class AgentScheduler {
           if (!result.is_error) {
             recordSignificantEvent('conversation');
 
+            //NOTE(self): Track action tools that already executed (prevents double-fulfillment via commitments)
+            if (['create_memo', 'plan_create', 'github_create_issue_comment', 'github_create_issue'].includes(tc.name)) {
+              executedActionTools.add(tc.name);
+            }
+
             //NOTE(self): Track successful reply URIs for this session
             if (tc.name === 'bluesky_reply') {
               const postUri = tc.input?.post_uri as string | undefined;
               if (postUri) {
                 sessionRepliedUris.add(postUri);
               }
+
+              //NOTE(self): Collect reply text for commitment extraction
+              collectedReplies.push({
+                text: tc.input?.text as string,
+                threadUri: postUri || '',
+                workspaceOwner: existingWorkspace ? 'internet-development' : undefined,
+                workspaceRepo: existingWorkspace || undefined,
+              });
             }
           }
         }
@@ -1215,6 +1309,54 @@ export class AgentScheduler {
 
       ui.stopSpinner('Check complete');
 
+      //NOTE(self): Extract commitments from reply texts — per-reply for correct source attribution
+      //NOTE(self): Skip commitments that match tools already executed in this session
+      //NOTE(self): (e.g., if create_memo was called during response, don't also queue a create_issue commitment)
+      const toolToCommitmentType: Record<string, string> = {
+        create_memo: 'create_issue',
+        github_create_issue: 'create_issue',
+        plan_create: 'create_plan',
+        github_create_issue_comment: 'comment_issue',
+      };
+      const fulfilledCommitmentTypes = new Set<string>();
+      for (const toolName of executedActionTools) {
+        const commitmentType = toolToCommitmentType[toolName];
+        if (commitmentType) {
+          fulfilledCommitmentTypes.add(commitmentType);
+        }
+      }
+
+      if (collectedReplies.length > 0) {
+        let totalExtracted = 0;
+        let skippedAlreadyFulfilled = 0;
+        for (const reply of collectedReplies) {
+          try {
+            const extracted = await extractCommitments([reply]);
+            for (const c of extracted) {
+              //NOTE(self): Skip if this commitment type was already fulfilled via direct tool call
+              if (fulfilledCommitmentTypes.has(c.type)) {
+                skippedAlreadyFulfilled++;
+                logger.debug('Skipping commitment already fulfilled via tool call', { type: c.type, description: c.description });
+                continue;
+              }
+              enqueueCommitment({
+                description: c.description,
+                type: c.type,
+                sourceThreadUri: reply.threadUri,
+                sourceReplyText: reply.text,
+                params: c.params,
+              });
+            }
+            totalExtracted += extracted.length;
+          } catch (error) {
+            logger.warn('Commitment extraction failed for reply (non-fatal)', { error: String(error), threadUri: reply.threadUri });
+          }
+        }
+        if (totalExtracted > 0 || skippedAlreadyFulfilled > 0) {
+          logger.info('Extracted commitments', { count: totalExtracted, skippedAlreadyFulfilled, replyCount: collectedReplies.length });
+        }
+      }
+
       //NOTE(self): Clear pending notifications
       this.state.pendingNotifications = [];
 
@@ -1226,6 +1368,8 @@ export class AgentScheduler {
         //NOTE(self): Schedule reflection soon (will run when mode is idle)
         this.state.lastReflection = Date.now() - this.config.reflectionInterval;
       }
+
+      return true;
     } catch (error) {
       ui.stopSpinner('Response error', false);
 
@@ -1241,6 +1385,7 @@ export class AgentScheduler {
       logger.error('Response mode error', { error: String(error) });
       ui.error('API Error', String(error));
       recordFriction('social', 'Error responding to notifications', String(error));
+      return true;
     } finally {
       this.state.currentMode = 'idle';
     }
@@ -1724,6 +1869,11 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         const summary = this.extractImprovementSummary(result.output || '');
         recordImprovementOutcome(friction.id, 'success', result.output || 'Changes made');
         addInsight(`Fixed friction: ${friction.description} - I am growing`);
+
+        //NOTE(self): Reload skills so new/modified SKILL.md files take effect immediately
+        //NOTE(self): Without this, the SOUL would need a restart to use new capabilities
+        reloadSkills();
+
         ui.stopSpinner('Self-improvement complete');
         //NOTE(self): Show what was actually done
         if (summary) {
@@ -1860,6 +2010,10 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         const summary = this.extractImprovementSummary(result.output || '');
         recordGrowthOutcome(aspiration.id, 'success', result.output || 'Growth achieved');
         addInsight(`Grew toward aspiration: ${aspiration.description}`);
+
+        //NOTE(self): Reload skills so new/modified SKILL.md files take effect immediately
+        reloadSkills();
+
         ui.stopSpinner('Aspirational growth complete');
         if (summary) {
           ui.info('Growth achieved', summary);
@@ -2011,19 +2165,39 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       //NOTE(self): Attempt to claim and execute ONE task
       //NOTE(self): Fair distribution: only claim one task per poll cycle
-      for (const plan of discoveredPlans) {
-        if (plan.claimableTasks.length === 0) continue;
+      for (const discovered of discoveredPlans) {
+        if (discovered.claimableTasks.length === 0) continue;
+
+        //NOTE(self): Re-fetch the plan to avoid stale data (pollWorkspacesForPlans may be minutes old)
+        const freshResult = await fetchFreshPlan(
+          discovered.workspace.owner,
+          discovered.workspace.repo,
+          discovered.issueNumber
+        );
+
+        if (!freshResult.success || !freshResult.plan) {
+          logger.warn('Failed to fetch fresh plan, skipping', { error: freshResult.error });
+          continue;
+        }
+
+        const freshPlan = freshResult.plan;
+        const freshClaimable = getClaimableTasks(freshPlan);
+
+        if (freshClaimable.length === 0) {
+          logger.info('No claimable tasks after fresh plan fetch (likely claimed by another SOUL)');
+          continue;
+        }
 
         //NOTE(self): Pick the first claimable task (lowest number)
-        const task = plan.claimableTasks.sort((a, b) => a.number - b.number)[0];
+        const task = freshClaimable.sort((a, b) => a.number - b.number)[0];
 
         //NOTE(self): Attempt to claim
         const claimResult = await claimTaskFromPlan({
-          owner: plan.workspace.owner,
-          repo: plan.workspace.repo,
-          issueNumber: plan.issueNumber,
+          owner: discovered.workspace.owner,
+          repo: discovered.workspace.repo,
+          issueNumber: discovered.issueNumber,
           taskNumber: task.number,
-          plan: plan.plan,
+          plan: freshPlan,
         });
 
         if (!claimResult.success || !claimResult.claimed) {
@@ -2039,10 +2213,10 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
         //NOTE(self): We claimed it! Execute the task
         await this.executeClaimedTask({
-          workspace: plan.workspace,
-          issueNumber: plan.issueNumber,
+          workspace: discovered.workspace,
+          issueNumber: discovered.issueNumber,
           task,
-          plan: plan.plan,
+          plan: freshPlan,
         });
 
         //NOTE(self): Only execute one task per poll cycle (fair distribution)
@@ -2059,6 +2233,48 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           await this.reviewWorkspacePR(reviewablePRs[0]);
         }
       }
+
+      //NOTE(self): Discover open issues (not just plans) filed by anyone in watched workspaces
+      if (this.state.currentMode === 'idle') {
+        const openIssues = await pollWorkspacesForOpenIssues();
+        if (openIssues.length > 0) {
+          logger.info('Found open issues in watched workspaces', { count: openIssues.length });
+          //NOTE(self): Queue them as GitHub conversations for response
+          for (const discovered of openIssues) {
+            const { workspace, issue } = discovered;
+            const alreadyPending = this.state.pendingGitHubConversations.some(
+              c => c.owner === workspace.owner && c.repo === workspace.repo && c.number === issue.number
+            );
+            if (alreadyPending) continue;
+
+            //NOTE(self): Fetch thread to analyze
+            const threadResult = await getIssueThread(
+              { owner: workspace.owner, repo: workspace.repo, issue_number: issue.number },
+              this.appConfig.github.username
+            );
+            if (!threadResult.success) continue;
+
+            const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, {}, getPeerUsernames());
+            if (analysis.shouldRespond) {
+              this.state.pendingGitHubConversations.push({
+                owner: workspace.owner,
+                repo: workspace.repo,
+                number: issue.number,
+                type: 'issue',
+                url: issue.html_url,
+                thread: threadResult.data,
+                source: 'github_notification',
+                reason: analysis.reason,
+              });
+            }
+          }
+
+          //NOTE(self): Trigger GitHub response mode if we found issues to engage with
+          if (this.state.pendingGitHubConversations.length > 0) {
+            await this.triggerGitHubResponseMode();
+          }
+        }
+      }
     } catch (error) {
       logger.error('Plan awareness check error', { error: String(error) });
     }
@@ -2066,7 +2282,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
   //NOTE(self): Execute a claimed task via Claude Code
   private async executeClaimedTask(params: {
-    workspace: { owner: string; repo: string };
+    workspace: { owner: string; repo: string; discoveredInThread?: string };
     issueNumber: number;
     task: { number: number; title: string; description: string; files: string[] };
     plan: { title: string; goal: string; rawBody: string; tasks: Array<{ number: number; status: string }> };
@@ -2147,62 +2363,131 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         return;
       }
 
-      //NOTE(self): Push feature branch
+      //NOTE(self): GATE 1 — Verify Claude Code actually produced git changes
+      const verification = await verifyGitChanges(workspaceResult.path);
+      if (!verification.hasCommits || !verification.hasChanges) {
+        ui.stopSpinner('No changes produced', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          `Claude Code exited successfully but no git changes were produced. Commits: ${verification.commitCount}, Files changed: ${verification.filesChanged.length}`
+        );
+        return;
+      }
+
+      //NOTE(self): GATE 2 — Run tests if they exist
+      const testResult = await runTestsIfPresent(workspaceResult.path);
+      if (testResult.testsExist && testResult.testsRun && !testResult.testsPassed) {
+        ui.stopSpinner('Tests failed', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          `Tests failed after task execution.\n\n${testResult.output}`
+        );
+        return;
+      }
+
+      //NOTE(self): GATE 3 — Push MUST succeed (no more "continue anyway")
       const pushResult = await pushChanges(workspaceResult.path, branchName);
       if (!pushResult.success) {
-        logger.warn('Failed to push branch', { error: pushResult.error });
-        //NOTE(self): Continue anyway - changes are committed locally
-      }
-
-      //NOTE(self): Create pull request
-      let prUrl: string | undefined;
-      if (pushResult.success) {
-        const prTitle = `task(${task.number}): ${task.title}`;
-        const prBody = `## Task ${task.number} from plan #${issueNumber}\n\n**Plan:** ${plan.title}\n**Goal:** ${plan.goal}\n\n### Changes\n${executionResult.output?.slice(0, 500) || 'Task completed successfully'}\n\n---\nPart of #${issueNumber}`;
-        const prResult = await createPullRequest(
-          workspace.owner, workspace.repo, branchName, prTitle, prBody, workspaceResult.path
+        ui.stopSpinner('Push failed', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          `Failed to push branch '${branchName}': ${pushResult.error}`
         );
-
-        if (prResult.success) {
-          prUrl = prResult.prUrl;
-          logger.info('PR created for task', { prUrl, taskNumber: task.number });
-        } else {
-          logger.warn('Failed to create PR', { error: prResult.error });
-        }
+        return;
       }
+
+      //NOTE(self): Verify branch actually exists on remote
+      const pushVerification = await verifyPushSuccess(workspaceResult.path, branchName);
+      if (!pushVerification.success) {
+        ui.stopSpinner('Push verification failed', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          `Push appeared to succeed but branch not found on remote: ${pushVerification.error}`
+        );
+        return;
+      }
+
+      //NOTE(self): GATE 4 — PR creation MUST succeed (no more silent warning)
+      const prTitle = `task(${task.number}): ${task.title}`;
+      const prBody = [
+        `## Task ${task.number} from plan #${issueNumber}`,
+        '',
+        `**Plan:** ${plan.title}`,
+        `**Goal:** ${plan.goal}`,
+        '',
+        '### Changes',
+        `${verification.diffStat}`,
+        '',
+        `**Files changed (${verification.filesChanged.length}):**`,
+        ...verification.filesChanged.map(f => `- \`${f}\``),
+        '',
+        `**Tests:** ${testResult.testsExist ? (testResult.testsPassed ? 'Passed' : 'No tests ran') : 'None found'}`,
+        '',
+        '---',
+        `Part of #${issueNumber}`,
+      ].join('\n');
+      const prResult = await createPullRequest(
+        workspace.owner, workspace.repo, branchName, prTitle, prBody, workspaceResult.path
+      );
+
+      if (!prResult.success) {
+        ui.stopSpinner('PR creation failed', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          `Branch pushed but PR creation failed: ${prResult.error}`
+        );
+        return;
+      }
+
+      const prUrl = prResult.prUrl;
+      logger.info('PR created for task', { prUrl, taskNumber: task.number });
 
       //NOTE(self): Re-fetch the plan to get latest state
       const updatedPlan = markResult.success ? { ...plan, rawBody: markResult.newBody } : plan;
 
-      //NOTE(self): Report completion with PR URL
-      const summary = prUrl
-        ? `Task completed. PR: ${prUrl}\n\n${executionResult.output?.slice(0, 500) || 'Task completed successfully'}`
-        : executionResult.output?.slice(0, 500) || 'Task completed successfully';
+      //NOTE(self): Report completion with REAL data from git verification
+      const summary = `Task completed. PR: ${prUrl}\n\nFiles changed (${verification.filesChanged.length}): ${verification.filesChanged.join(', ')}\n${verification.diffStat}\nTests: ${testResult.testsRun ? (testResult.testsPassed ? 'passed' : 'failed') : 'none'}`;
 
-      await reportTaskComplete(
+      const completionReport = await reportTaskComplete(
         { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: updatedPlan as any },
         {
           success: true,
           summary,
-          filesChanged: task.files,
+          filesChanged: verification.filesChanged,
         }
       );
 
       ui.stopSpinner(`Task ${task.number} complete`);
-      ui.info('Collaborative task complete', `${workspace.owner}/${workspace.repo}#${issueNumber} - Task ${task.number}${prUrl ? ` (${prUrl})` : ''}`);
+      ui.info('Collaborative task complete', `${workspace.owner}/${workspace.repo}#${issueNumber} - Task ${task.number} (${prUrl})`);
 
       //NOTE(self): Record experience
       recordExperience(
         'helped_someone',
-        `Completed task "${task.title}" in collaborative plan "${plan.title}"${prUrl ? ` — PR: ${prUrl}` : ''}`,
+        `Completed task "${task.title}" in collaborative plan "${plan.title}" — PR: ${prUrl}`,
         { source: 'github', url: `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issueNumber}` }
       );
 
       //NOTE(self): Announce on Bluesky if this PR is worth sharing
-      if (prUrl) {
+      //NOTE(self): Reply to originating thread if available (closes the feedback loop)
+      await this.announceIfWorthy(
+        { url: prUrl!, title: `task(${task.number}): ${task.title}`, repo: `${workspace.owner}/${workspace.repo}` },
+        'pr',
+        workspace.discoveredInThread
+      );
+
+      //NOTE(self): If the entire plan is now complete, announce on Bluesky
+      //NOTE(self): This closes the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
+      if (completionReport.planComplete) {
+        const planUrl = `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issueNumber}`;
         await this.announceIfWorthy(
-          { url: prUrl, title: `task(${task.number}): ${task.title}`, repo: `${workspace.owner}/${workspace.repo}` },
-          'pr'
+          { url: planUrl, title: `Plan complete: ${plan.title}`, repo: `${workspace.owner}/${workspace.repo}` },
+          'issue',
+          workspace.discoveredInThread
+        );
+        recordExperience(
+          'helped_someone',
+          `All tasks complete in plan "${plan.title}" — project delivered!`,
+          { source: 'github', url: planUrl }
         );
       }
 
@@ -2461,9 +2746,11 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   }
 
   //NOTE(self): Decide if a PR or issue is worth announcing on Bluesky
+  //NOTE(self): If replyToThreadUri is provided, replies to originating thread instead of top-level post
   private async announceIfWorthy(
     context: { url: string; title: string; repo: string },
-    announcementType: 'pr' | 'issue'
+    announcementType: 'pr' | 'issue',
+    replyToThreadUri?: string
   ): Promise<void> {
     try {
       const config = this.appConfig;
@@ -2507,15 +2794,52 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       }
 
       //NOTE(self): Post to Bluesky via the tool executor
-      const postToolCall: ToolCall = {
-        id: `announce-${Date.now()}`,
-        name: 'bluesky_post',
-        input: { text: postText },
-      };
+      //NOTE(self): If we have the originating thread URI, reply there to close the feedback loop
+      let postToolCall: ToolCall;
+
+      if (replyToThreadUri) {
+        try {
+          const threadResult = await getPostThread(replyToThreadUri, 0, 0);
+          if (threadResult.success && threadResult.data) {
+            const parentPost = threadResult.data.thread.post;
+            postToolCall = {
+              id: `announce-${Date.now()}`,
+              name: 'bluesky_reply',
+              input: {
+                text: postText,
+                post_uri: parentPost.uri,
+                post_cid: parentPost.cid,
+              },
+            };
+            logger.info('Replying to originating thread', { replyToThreadUri });
+          } else {
+            //NOTE(self): Thread lookup failed — fall back to top-level post
+            logger.warn('Could not resolve thread for reply, falling back to top-level post', { replyToThreadUri });
+            postToolCall = {
+              id: `announce-${Date.now()}`,
+              name: 'bluesky_post',
+              input: { text: postText },
+            };
+          }
+        } catch (threadError) {
+          logger.warn('Thread lookup error, falling back to top-level post', { error: String(threadError) });
+          postToolCall = {
+            id: `announce-${Date.now()}`,
+            name: 'bluesky_post',
+            input: { text: postText },
+          };
+        }
+      } else {
+        postToolCall = {
+          id: `announce-${Date.now()}`,
+          name: 'bluesky_post',
+          input: { text: postText },
+        };
+      }
 
       const results = await executeTools([postToolCall]);
       if (results[0] && !results[0].is_error) {
-        logger.info('Announced on Bluesky', { announcementType, title: context.title });
+        logger.info('Announced on Bluesky', { announcementType, title: context.title, isReply: !!replyToThreadUri });
         recordSignificantEvent('expression');
       } else {
         logger.warn('Failed to post announcement', { error: results[0]?.content });
@@ -2524,6 +2848,64 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       logger.error('Announcement error', { error: String(error) });
       //NOTE(self): Non-fatal — don't let announcement failures break task flow
     }
+  }
+
+  //NOTE(self): ========== COMMITMENT FULFILLMENT LOOP ==========
+  //NOTE(self): Process all pending commitments quickly (15s cycle)
+  //NOTE(self): Keeps my promises — if I said "I'll open an issue", this makes it happen
+
+  private startCommitmentFulfillmentLoop(): void {
+    this.commitmentTimer = setInterval(async () => {
+      if (this.shutdownRequested) return;
+      if (this.state.currentMode !== 'idle') return;
+      await this.commitmentFulfillmentCheck();
+    }, getTimerJitter(this.appConfig.agent.name, 'commitment-fulfillment', 15_000));
+  }
+
+  private async commitmentFulfillmentCheck(): Promise<void> {
+    if (this.state.currentMode !== 'idle') return;
+
+    this.state.lastCommitmentCheck = Date.now();
+
+    //NOTE(self): Clean up stale commitments first (24h threshold)
+    abandonStaleCommitments();
+
+    const pending = getPendingCommitments();
+    if (pending.length === 0) return;
+
+    //NOTE(self): Process ALL pending commitments quickly — fulfill promises fast
+    this.state.currentMode = 'plan_executing';
+
+    for (const commitment of pending) {
+      ui.startSpinner(`Fulfilling commitment: ${commitment.description.slice(0, 50)}`);
+
+      try {
+        markCommitmentInProgress(commitment.id);
+
+        const result = await fulfillCommitment(commitment);
+
+        if (result.success) {
+          markCommitmentCompleted(commitment.id, result.result || {});
+          recordExperience(
+            'helped_someone',
+            `Fulfilled commitment: ${commitment.description}`,
+            { source: 'bluesky' }
+          );
+          ui.stopSpinner(`Commitment fulfilled: ${commitment.type}`);
+          logger.info('Commitment fulfilled', { id: commitment.id, type: commitment.type });
+        } else {
+          markCommitmentFailed(commitment.id, result.error || 'Unknown error');
+          ui.stopSpinner('Commitment failed', false);
+          logger.warn('Commitment fulfillment failed', { id: commitment.id, error: result.error });
+        }
+      } catch (error) {
+        markCommitmentFailed(commitment.id, String(error));
+        ui.stopSpinner('Commitment error', false);
+        logger.error('Commitment fulfillment error', { id: commitment.id, error: String(error) });
+      }
+    }
+
+    this.state.currentMode = 'idle';
   }
 
   //NOTE(self): Force a plan awareness check (for testing/manual trigger)
