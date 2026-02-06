@@ -605,6 +605,7 @@ Proceed.
 | File | Purpose |
 |------|---------|
 | `modules/workspace-discovery.ts` | Poll workspaces for plans |
+| `modules/peer-awareness.ts` | Dynamic peer SOUL discovery |
 | `skills/self-plan-parse.ts` | Parse plan markdown |
 | `skills/self-plan-create.ts` | Create plan issues |
 | `skills/self-task-claim.ts` | Claim tasks |
@@ -612,6 +613,34 @@ Proceed.
 | `skills/self-task-report.ts` | Report progress/completion |
 | `skills/self-workspace-watch.ts` | Add/remove watched workspaces |
 | `.memory/watched_workspaces.json` | Persistent watch list |
+| `.memory/discovered_peers.json` | Persistent peer registry |
+
+### Peer Coordination (Thread Deduplication)
+
+When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordinate implicitly to avoid posting redundant responses.
+
+**Problem:** Without coordination, all SOULs see the same notification, fetch the thread (seeing no responses), generate the same response, and post without acknowledging each other.
+
+**Solution — Six Layers:**
+
+1. **Dynamic Peer Discovery** (`modules/peer-awareness.ts`): SOULs discover peers organically — from plan assignees, shared workspaces, owner mentions, and thread co-responders. No hardcoded config. Registry persists at `.memory/discovered_peers.json`.
+
+2. **Deterministic Jitter**: Before responding to any thread, each SOUL waits a delay derived from a hash of `AGENT_NAME`. The delay is 15–90 seconds, always the same for a given SOUL. No randomness, no coordination needed.
+
+3. **Thread Refresh**: After the jitter wait, the SOUL re-fetches the thread to catch any peer comments posted during the delay. If the conversation no longer needs a response, it skips.
+
+4. **Contribution-Aware Formatting**: `formatThreadForContext()` accepts peer usernames and appends a "Peer SOUL Contributions" section that makes peer comments unmissable to the LLM.
+
+5. **Peer-Aware System Prompt**: When peers have commented in a thread, the system prompt includes explicit instructions: don't repeat their points, build on what they said, fill gaps, @mention peers, stay silent if everything is covered.
+
+6. **Peer-Aware Analysis**: `analyzeConversation()` downgrades urgency when 2+ peers have already commented, signaling the SOUL to only contribute what's genuinely missing.
+
+**Design Principles:**
+- No new env vars or config — peers are inferred from context
+- SOULs remain fully autonomous — the LLM still decides whether to comment
+- No shared state between SOULs — discovery is local observation
+- No inter-process communication
+- Existing consecutive-reply prevention still works
 
 ---
 

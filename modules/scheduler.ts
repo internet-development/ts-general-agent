@@ -113,6 +113,7 @@ import {
   getWorkspaceDiscoveryStats,
   type DiscoveredPlan,
 } from '@modules/workspace-discovery.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces } from '@skills/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@skills/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges } from '@skills/self-task-execute.js';
@@ -192,6 +193,19 @@ interface SchedulerState {
   pendingNotifications: PrioritizedNotification[];
   pendingGitHubConversations: PendingGitHubConversation[];
   consecutiveErrors: number;
+}
+
+//NOTE(self): Deterministic jitter from agent name
+//NOTE(self): Each SOUL gets a consistent delay so they naturally stagger
+//NOTE(self): sh-marvin always waits Xms, sh-peterben always waits Yms
+function getAgentJitter(agentName: string): number {
+  let hash = 0;
+  for (let i = 0; i < agentName.length; i++) {
+    hash = ((hash << 5) - hash) + agentName.charCodeAt(i);
+    hash |= 0;
+  }
+  //NOTE(self): Map to 15-90 second range
+  return 15_000 + (Math.abs(hash) % 75_000);
 }
 
 //NOTE(self): The Scheduler Class
@@ -668,6 +682,17 @@ export class AgentScheduler {
   private async triggerGitHubResponseMode(): Promise<void> {
     if (this.state.pendingGitHubConversations.length === 0) return;
 
+    //NOTE(self): Deterministic jitter based on my name
+    //NOTE(self): Gives other SOULs time to post first, then thread refresh catches their comments
+    const peers = getPeerUsernames();
+    if (peers.length > 0) {
+      const jitterMs = getAgentJitter(this.appConfig.agent.name);
+      logger.debug('Applying peer jitter before GitHub response', {
+        jitterMs, agentName: this.appConfig.agent.name,
+      });
+      await new Promise(resolve => setTimeout(resolve, jitterMs));
+    }
+
     this.state.currentMode = 'github_responding';
     ui.startSpinner('Checking GitHub conversations');
 
@@ -680,8 +705,63 @@ export class AgentScheduler {
       for (const pending of this.state.pendingGitHubConversations) {
         ui.startSpinner(`GitHub: ${pending.owner}/${pending.repo}#${pending.number}`);
 
-        //NOTE(self): Build context for the LLM
-        const threadContext = formatThreadForContext(pending.thread, 15);
+        //NOTE(self): Re-fetch thread to catch peer comments posted during jitter wait
+        if (peers.length > 0) {
+          const freshThread = await getIssueThread(
+            { owner: pending.owner, repo: pending.repo, issue_number: pending.number },
+            config.github.username
+          );
+
+          if (freshThread.success) {
+            const freshAnalysis = analyzeConversation(
+              freshThread.data,
+              config.github.username,
+              { isOwnerRequest: pending.source === 'bluesky_url_owner' },
+              peers
+            );
+
+            if (!freshAnalysis.shouldRespond) {
+              logger.info('Skipping response after thread refresh', { reason: freshAnalysis.reason });
+              continue;
+            }
+
+            //NOTE(self): Use fresh data + register any peer commenters
+            pending.thread = freshThread.data;
+            pending.reason = freshAnalysis.reason;
+
+            //NOTE(self): Register commenters from workspace context as peers
+            for (const comment of freshThread.data.comments) {
+              const login = comment.user.login;
+              if (login.toLowerCase() !== config.github.username.toLowerCase() && !isPeer(login)) {
+                //NOTE(self): Only auto-register if they're in a workspace we watch
+                //NOTE(self): (thread-based discovery is weak signal, handled elsewhere)
+              }
+            }
+          }
+        }
+
+        //NOTE(self): Build context for the LLM with peer awareness
+        const threadContext = formatThreadForContext(pending.thread, 15, peers);
+
+        //NOTE(self): Identify peers who have already commented in this thread
+        const threadPeers = pending.thread.comments
+          .map(c => c.user.login)
+          .filter(login => peers.some(p => p.toLowerCase() === login.toLowerCase()));
+        const uniqueThreadPeers = [...new Set(threadPeers)];
+
+        //NOTE(self): Peer awareness section for the system prompt
+        const peerSection = uniqueThreadPeers.length > 0
+          ? `\n**PEER SOUL AWARENESS:**
+${uniqueThreadPeers.map(p => '@' + p).join(', ')} ${uniqueThreadPeers.length === 1 ? 'is' : 'are'} your peer SOUL${uniqueThreadPeers.length === 1 ? '' : 's'} — autonomous agents like you, working from the same values.
+
+When peers have already commented:
+1. READ their comments first. DO NOT repeat their points.
+2. BUILD on what they said: "@peer's suggestion is solid — I'd add..."
+3. Fill GAPS: contribute only what's genuinely missing
+4. @MENTION peers when referencing their ideas — this is a conversation, not parallel monologues
+5. If peers already covered everything, it's better to STAY SILENT than to echo
+6. If 2+ peers made similar points, strongly consider not adding another\n`
+          : '';
 
         const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# GitHub Response Mode
 
@@ -700,7 +780,7 @@ This is a public issue thread - everyone can see every comment. Write like you'r
 3. If you've already contributed and the conversation is winding down, it's OK to close gracefully
 4. If the issue is resolved or closed, acknowledge and close warmly
 5. One comment per response cycle - don't spam the thread
-
+${peerSection}
 **CONVERSATION WISDOM:**
 - Track ALL participants, not just yourself - if multiple people have gone quiet, the conversation may be done
 - If you've commented 2+ times, seriously consider if you're adding value
@@ -847,6 +927,17 @@ Remember: quality over quantity. One helpful comment is better than many.`;
   private async triggerResponseMode(): Promise<void> {
     if (this.state.pendingNotifications.length === 0) return;
 
+    //NOTE(self): Deterministic jitter for Bluesky responses too
+    //NOTE(self): Same logic as GitHub — stagger with peers to avoid parallel monologues
+    const blueskyPeers = getPeerUsernames();
+    if (blueskyPeers.length > 0) {
+      const jitterMs = getAgentJitter(this.appConfig.agent.name);
+      logger.debug('Applying peer jitter before Bluesky response', {
+        jitterMs, agentName: this.appConfig.agent.name,
+      });
+      await new Promise(resolve => setTimeout(resolve, jitterMs));
+    }
+
     this.state.currentMode = 'responding';
     ui.startSpinner('Checking if conversation is needed');
 
@@ -990,12 +1081,43 @@ Remember: quality over quantity. One helpful comment is better than many.`;
                 threadContext += `\n  Continuing will just add more "thanks for the thanks" - neither party benefits`;
               }
             }
+
+            //NOTE(self): Check for peer SOULs in this thread
+            const peerHandles = getPeerBlueskyHandles();
+            if (peerHandles.length > 0) {
+              const peersInThread = ta.threadParticipants.filter(
+                handle => peerHandles.some(ph => ph.toLowerCase() === handle.toLowerCase())
+              );
+              if (peersInThread.length > 0) {
+                threadContext += `\n\n  **Peer SOUL Contributions In This Thread**`;
+                threadContext += `\n  ${peersInThread.map(p => '@' + p).join(', ')} ${peersInThread.length === 1 ? 'is a' : 'are'} peer SOUL${peersInThread.length === 1 ? '' : 's'} — autonomous agents like you.`;
+                threadContext += `\n  READ their messages above. Do NOT repeat what they said. BUILD on their ideas or stay silent.`;
+                if (peersInThread.length >= 2) {
+                  threadContext += `\n  ⚠️ **${peersInThread.length} peers already in this thread** — only add what's genuinely missing.`;
+                }
+              }
+            }
           }
         }
 
         notificationParts.push(`- **${n.reason}** from @${n.author.handle} (${who}) [${check.reason}]${relationshipContext}${threadContext}\n  **Latest message:** "${text}"\n  uri: ${n.uri}, cid: ${n.cid}`);
       }
       const notificationsText = notificationParts.join('\n\n---\n\n');
+
+      //NOTE(self): Build peer awareness section for Bluesky system prompt
+      const blueskyPeerHandles = getPeerBlueskyHandles();
+      const blueskyPeerSection = blueskyPeerHandles.length > 0
+        ? `\n**PEER SOUL AWARENESS:**
+${blueskyPeerHandles.map(p => '@' + p).join(', ')} ${blueskyPeerHandles.length === 1 ? 'is a' : 'are'} known peer SOUL${blueskyPeerHandles.length === 1 ? '' : 's'} — autonomous agents like you, working from the same values.
+
+When peers have already replied in a thread:
+1. READ their replies first. DO NOT repeat their points.
+2. BUILD on what they said: "@peer's take is solid — I'd add..."
+3. Fill GAPS: contribute only what's genuinely missing
+4. @MENTION peers when referencing their ideas — this is a conversation, not parallel monologues
+5. If peers already covered everything, it's better to STAY SILENT than to echo
+6. If 2+ peers made similar points, strongly consider not adding another\n`
+        : '';
 
       const systemPrompt = `${soul}\n\n---\n\n${selfContent}\n\n---\n\n# Response Mode
 
@@ -1011,7 +1133,7 @@ This is a public thread - everyone can see every message. Write like you're in a
 **CRITICAL RULES:**
 1. Never reply to the same post twice. One reply per post, ever.
 2. If you've already replied, do not reply again.
-
+${blueskyPeerSection}
 **CONVERSATION WISDOM - Knowing When to Stop:**
 - If you've replied 3+ times in a thread, seriously consider if you're adding value or just prolonging
 - If the thread is 10+ replies deep, the conversation may have run its course

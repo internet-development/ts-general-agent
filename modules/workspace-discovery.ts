@@ -8,6 +8,8 @@ import { logger } from '@modules/logger.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { getRepository } from '@adapters/github/get-repository.js';
 import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@skills/self-plan-parse.js';
+import { registerPeer } from '@modules/peer-awareness.js';
+import { getConfig } from '@modules/config.js';
 
 //NOTE(self): Path to watched workspaces state
 const WATCHED_WORKSPACES_PATH = '.memory/watched_workspaces.json';
@@ -197,6 +199,17 @@ export async function pollWorkspacesForPlans(): Promise<DiscoveredPlan[]> {
       for (const issue of issuesResult.data) {
         const plan = parsePlan(issue.body || '', issue.title);
         if (!plan) continue;
+
+        //NOTE(self): Register plan assignees as peers
+        //NOTE(self): Anyone assigned to tasks in a plan we're watching is likely a peer SOUL
+        const config = getConfig();
+        const ourUsername = config.github.username.toLowerCase();
+        const planContext = `${workspace.owner}/${workspace.repo}#${issue.number}`;
+        for (const task of plan.tasks) {
+          if (task.assignee && task.assignee.toLowerCase() !== ourUsername) {
+            registerPeer(task.assignee, 'plan', planContext);
+          }
+        }
 
         //NOTE(self): Find claimable tasks
         const claimableTasks = getClaimableTasks(plan);

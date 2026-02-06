@@ -17,6 +17,7 @@ export * from '@modules/self-extract.js';
 export * from '@modules/expression.js';
 export * from '@modules/scheduler.js';
 export * from '@modules/workspace-discovery.js';
+export * from '@modules/peer-awareness.js';
 
 //NOTE(self): Re-export skills that were migrated from modules for backward compatibility
 export {

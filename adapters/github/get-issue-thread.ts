@@ -134,7 +134,8 @@ export interface AnalyzeConversationOptions {
 export function analyzeConversation(
   thread: IssueThread,
   agentUsername: string,
-  options: AnalyzeConversationOptions = {}
+  options: AnalyzeConversationOptions = {},
+  peerUsernames: string[] = []
 ): ConversationAnalysis {
   const { issue, comments, agentHasCommented, commentsAfterAgent, isOpen } = thread;
   const { isOwnerRequest = false } = options;
@@ -202,6 +203,22 @@ export function analyzeConversation(
     //NOTE(self): Only respond to new issues if we're mentioned in the issue body
     const mentionedInIssue = issue.body?.toLowerCase().includes(`@${agentUsername.toLowerCase()}`);
     if (mentionedInIssue) {
+      //NOTE(self): If 2+ peers already commented and we haven't, downgrade urgency
+      const peerCommentCount = peerUsernames.length > 0
+        ? comments.filter(c =>
+            peerUsernames.some(p => c.user.login.toLowerCase() === p.toLowerCase())
+          ).length
+        : 0;
+
+      if (peerCommentCount >= 2) {
+        return {
+          shouldRespond: true,
+          reason: `${peerCommentCount} peer SOULs have already commented — only add what's genuinely missing`,
+          urgency: 'low',
+          context: `Your peers have contributed. Review their comments before adding yours.`,
+        };
+      }
+
       return {
         shouldRespond: true,
         reason: 'Mentioned in issue body',
@@ -227,7 +244,13 @@ export function analyzeConversation(
 }
 
 //NOTE(self): Format thread for LLM context
-export function formatThreadForContext(thread: IssueThread, maxComments: number = 10): string {
+//NOTE(self): When peerUsernames is provided, adds a Peer Contributions section
+//NOTE(self): to make peer comments unmissable to the LLM
+export function formatThreadForContext(
+  thread: IssueThread,
+  maxComments: number = 10,
+  peerUsernames: string[] = []
+): string {
   const { issue, comments } = thread;
 
   let context = `## Issue #${issue.number}: ${issue.title}\n`;
@@ -253,6 +276,25 @@ export function formatThreadForContext(thread: IssueThread, maxComments: number 
     }
   } else {
     context += `*No comments yet*\n`;
+  }
+
+  //NOTE(self): Peer contribution summary — makes peer comments unmissable
+  if (peerUsernames.length > 0) {
+    const peerComments = comments.filter(c =>
+      peerUsernames.some(p => c.user.login.toLowerCase() === p.toLowerCase())
+    );
+
+    if (peerComments.length > 0) {
+      context += `\n### Peer SOUL Contributions Already In This Thread\n\n`;
+      context += `These comments are from your peer SOULs — autonomous agents like you.\n`;
+      context += `READ CAREFULLY. Do not repeat what they said.\n\n`;
+
+      for (const comment of peerComments) {
+        context += `**@${comment.user.login}** already said:\n`;
+        context += `> ${comment.body.split('\n').join('\n> ')}\n\n`;
+      }
+      context += `---\n\n`;
+    }
   }
 
   return context;
