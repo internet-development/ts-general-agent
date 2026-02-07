@@ -158,6 +158,13 @@ export function getWatchedWorkspaces(): WatchedWorkspace[] {
   return Object.values(state.workspaces);
 }
 
+//NOTE(self): Look up a watched workspace by owner/repo
+//NOTE(self): Used by executor.ts to get discoveredInThread for announcements
+export function getWatchedWorkspaceForRepo(owner: string, repo: string): WatchedWorkspace | null {
+  const state = loadState();
+  return state.workspaces[getWorkspaceKey(owner, repo)] || null;
+}
+
 //NOTE(self): Check if a workspace is being watched
 export function isWatchingWorkspace(owner: string, repo: string): boolean {
   const state = loadState();

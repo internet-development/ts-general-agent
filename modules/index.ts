@@ -12,6 +12,9 @@ export * from '@modules/ui.js';
 export * from '@modules/pacing.js';
 export * from '@modules/post-log.js';
 
+//NOTE(self): Announcement module (shared by scheduler + executor for dual enforcement)
+export * from '@modules/announcement.js';
+
 //NOTE(self): New scheduler architecture modules
 export * from '@modules/self-extract.js';
 export * from '@modules/expression.js';

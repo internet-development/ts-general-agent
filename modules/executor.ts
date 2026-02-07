@@ -49,7 +49,9 @@ import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
 import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 import { createMemo, createGitHubIssue } from '@local-tools/self-github-create-issue.js';
-import { watchWorkspace } from '@modules/workspace-discovery.js';
+import { watchWorkspace, getWatchedWorkspaceForRepo } from '@modules/workspace-discovery.js';
+import { announceIfWorthy } from '@modules/announcement.js';
+import { recordExperience } from '@local-tools/self-capture-experiences.js';
 import {
   logPost,
   lookupPostByUri,
@@ -2217,6 +2219,21 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           }
         );
 
+        //NOTE(self): Record experience (sync with scheduler.ts executeClaimedTask)
+        recordExperience(
+          'helped_someone',
+          `Completed task "${task.title}" in collaborative plan "${plan.title}" — PR: ${taskPrUrl}`,
+          { source: 'github', url: `https://github.com/${owner}/${repo}/issues/${issue_number}` }
+        );
+
+        //NOTE(self): Announce PR on Bluesky if worthy (sync with scheduler.ts executeClaimedTask)
+        const workspace = getWatchedWorkspaceForRepo(owner, repo);
+        await announceIfWorthy(
+          { url: taskPrUrl!, title: `task(${task_number}): ${task.title}`, repo: `${owner}/${repo}` },
+          'pr',
+          workspace?.discoveredInThread
+        );
+
         //NOTE(self): Handle plan completion — must stay in sync with scheduler.ts executeClaimedTask()
         //NOTE(self): Posts quality loop review checklist (Scenario 10 enforcement)
         if (completionReport.planComplete) {
@@ -2232,6 +2249,19 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           } catch (docReviewError) {
             logger.warn('Failed to post quality loop comment (non-fatal)', { error: String(docReviewError) });
           }
+
+          //NOTE(self): Announce plan completion on Bluesky (sync with scheduler.ts executeClaimedTask)
+          const planUrl = `https://github.com/${owner}/${repo}/issues/${issue_number}`;
+          await announceIfWorthy(
+            { url: planUrl, title: `Plan complete: ${plan.title}`, repo: `${owner}/${repo}` },
+            'issue',
+            workspace?.discoveredInThread
+          );
+          recordExperience(
+            'helped_someone',
+            `All tasks complete in plan "${plan.title}" — project delivered!`,
+            { source: 'github', url: planUrl }
+          );
         }
 
         return {

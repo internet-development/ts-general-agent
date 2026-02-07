@@ -212,7 +212,7 @@ scheduler.ts
 ├── plan awareness loop (3m)
 │   ├── workspace-discovery (poll plans, PRs, open issues)
 │   ├── task-claim → task-execute → task-verify → task-report
-│   ├── on planComplete → announceIfWorthy (Bluesky celebration)
+│   ├── on planComplete → announceIfWorthy (modules/announcement.ts — shared by scheduler + executor)
 │   └── PR review (one per cycle)
 └── commitment fulfillment loop (15s)
     ├── commitment-queue (pending commitments)

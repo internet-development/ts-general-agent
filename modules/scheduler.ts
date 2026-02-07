@@ -155,6 +155,7 @@ import {
 } from '@modules/commitment-queue.js';
 import { extractCommitments, type ReplyForExtraction } from '@modules/commitment-extract.js';
 import { fulfillCommitment } from '@modules/commitment-fulfill.js';
+import { announceIfWorthy } from '@modules/announcement.js';
 
 //NOTE(self): Scheduler Configuration - can be tuned from SELF.md in future
 export interface SchedulerConfig {
@@ -2633,7 +2634,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       //NOTE(self): Announce on Bluesky if this PR is worth sharing
       //NOTE(self): Reply to originating thread if available (closes the feedback loop)
-      await this.announceIfWorthy(
+      await announceIfWorthy(
         { url: prUrl!, title: `task(${task.number}): ${task.title}`, repo: `${workspace.owner}/${workspace.repo}` },
         'pr',
         workspace.discoveredInThread
@@ -2643,7 +2644,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       //NOTE(self): This closes the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
       if (completionReport.planComplete) {
         const planUrl = `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issueNumber}`;
-        await this.announceIfWorthy(
+        await announceIfWorthy(
           { url: planUrl, title: `Plan complete: ${plan.title}`, repo: `${workspace.owner}/${workspace.repo}` },
           'issue',
           workspace.discoveredInThread
@@ -2921,111 +2922,6 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       recordFriction('social', 'Error reviewing workspace PR', String(error));
     } finally {
       this.state.currentMode = 'idle';
-    }
-  }
-
-  //NOTE(self): Decide if a PR or issue is worth announcing on Bluesky
-  //NOTE(self): If replyToThreadUri is provided, replies to originating thread instead of top-level post
-  private async announceIfWorthy(
-    context: { url: string; title: string; repo: string },
-    announcementType: 'pr' | 'issue',
-    replyToThreadUri?: string
-  ): Promise<void> {
-    try {
-      const config = this.appConfig;
-      const soul = readSoul(config.paths.soul);
-      const selfContent = readSelf(config.paths.selfmd);
-
-      const contextStr = `**${announcementType === 'pr' ? 'Pull Request' : 'Issue'}:** ${context.title}\n**Repository:** ${context.repo}\n**URL:** ${context.url}`;
-
-      //NOTE(self): Decision gate — SOUL decides yes/no with no tools
-      const decisionPrompt = renderSkillSection('AGENT-GITHUB-ANNOUNCEMENT', 'Announcement Decision', {
-        context: contextStr,
-        announcementType,
-      });
-
-      const decisionSystem = `${soul}\n\n---\n\n${selfContent}`;
-      const decisionResult = await chatWithTools({
-        system: decisionSystem,
-        messages: [{ role: 'user', content: decisionPrompt }],
-      });
-
-      const decision = (decisionResult.text || '').trim().toLowerCase();
-      if (!decision.startsWith('yes')) {
-        logger.debug('Announcement declined by SOUL', { announcementType, title: context.title });
-        return;
-      }
-
-      //NOTE(self): Compose the Bluesky post
-      const composePrompt = renderSkillSection('AGENT-GITHUB-ANNOUNCEMENT', 'Bluesky Post', {
-        context: contextStr,
-      });
-
-      const composeResult = await chatWithTools({
-        system: decisionSystem,
-        messages: [{ role: 'user', content: composePrompt }],
-      });
-
-      const postText = (composeResult.text || '').trim();
-      if (!postText) {
-        logger.warn('Empty announcement post composed');
-        return;
-      }
-
-      //NOTE(self): Post to Bluesky via the tool executor
-      //NOTE(self): If we have the originating thread URI, reply there to close the feedback loop
-      let postToolCall: ToolCall;
-
-      if (replyToThreadUri) {
-        try {
-          const threadResult = await getPostThread(replyToThreadUri, 0, 0);
-          if (threadResult.success && threadResult.data) {
-            const parentPost = threadResult.data.thread.post;
-            postToolCall = {
-              id: `announce-${Date.now()}`,
-              name: 'bluesky_reply',
-              input: {
-                text: postText,
-                post_uri: parentPost.uri,
-                post_cid: parentPost.cid,
-              },
-            };
-            logger.info('Replying to originating thread', { replyToThreadUri });
-          } else {
-            //NOTE(self): Thread lookup failed — fall back to top-level post
-            logger.warn('Could not resolve thread for reply, falling back to top-level post', { replyToThreadUri });
-            postToolCall = {
-              id: `announce-${Date.now()}`,
-              name: 'bluesky_post',
-              input: { text: postText },
-            };
-          }
-        } catch (threadError) {
-          logger.warn('Thread lookup error, falling back to top-level post', { error: String(threadError) });
-          postToolCall = {
-            id: `announce-${Date.now()}`,
-            name: 'bluesky_post',
-            input: { text: postText },
-          };
-        }
-      } else {
-        postToolCall = {
-          id: `announce-${Date.now()}`,
-          name: 'bluesky_post',
-          input: { text: postText },
-        };
-      }
-
-      const results = await executeTools([postToolCall]);
-      if (results[0] && !results[0].is_error) {
-        logger.info('Announced on Bluesky', { announcementType, title: context.title, isReply: !!replyToThreadUri });
-        recordSignificantEvent('expression');
-      } else {
-        logger.warn('Failed to post announcement', { error: results[0]?.content });
-      }
-    } catch (error) {
-      logger.error('Announcement error', { error: String(error) });
-      //NOTE(self): Non-fatal — don't let announcement failures break task flow
     }
   }
 

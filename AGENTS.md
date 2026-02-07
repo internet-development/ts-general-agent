@@ -732,7 +732,7 @@ A project is not done when one SOUL finishes its tasks. It's done when **all par
 
 1. Each SOUL maintains a checklist of what they're responsible for
 2. When a SOUL completes its work, it comments on the plan issue: "My tasks are complete. Here's what was delivered: [summary]"
-3. When the last task in a plan is completed, `reportTaskComplete` returns `planComplete: true`. The scheduler then announces the completion on Bluesky via `announceIfWorthy()` — closing the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
+3. When the last task in a plan is completed, `reportTaskComplete` returns `planComplete: true`. Both the scheduler and executor paths announce the completion on Bluesky via `announceIfWorthy()` (from `modules/announcement.ts`) — closing the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
 4. If ALL SOULs have posted completion summaries and no open issues remain, the project is done
 5. New GitHub issues or expanded Bluesky asks reopen the project — the loop is never permanently closed
 6. SOULs can create new checklists as scope emerges — checklists are not static
@@ -913,7 +913,7 @@ No task reaches "complete" unless ALL gates pass. Each gate failure produces a s
 1. `scheduler.ts:executeClaimedTask()` — the scheduler's autonomous plan-polling path
 2. `executor.ts:plan_execute_task` — the LLM-invoked tool path
 
-Both paths must stay in sync. Any change to the gate sequence or post-completion behavior (quality loop comment, announcements) must be applied to both.
+Both paths must stay in sync. Any change to the gate sequence or post-completion behavior (quality loop comment, announcements, experience recording) must be applied to both. The shared `announceIfWorthy()` function in `modules/announcement.ts` is used by both paths to ensure identical Bluesky announcement behavior.
 
 ### Claude Code Execution for Tasks
 
