@@ -72,6 +72,7 @@ import {
   recordImprovementOutcome,
   buildImprovementPrompt,
   getFrictionStats,
+  cleanupResolvedFriction,
   type FrictionCategory,
 } from '@local-tools/self-detect-friction.js';
 import {
@@ -113,6 +114,7 @@ import {
   updateConversationState as updateGitHubConversationState,
   markConversationConcluded as markGitHubConversationConcluded,
   getConversationsNeedingAttention as getGitHubConversationsNeedingAttention,
+  cleanupOldConversations as cleanupOldGitHubConversations,
 } from '@modules/github-engagement.js';
 import {
   pollWorkspacesForPlans,
@@ -1793,9 +1795,12 @@ Revise and post again.`;
       const frictionStats = getFrictionStats();
       const reflectionState = getReflectionState();
 
-      //NOTE(self): Prune old experiences periodically
+      //NOTE(self): Periodic housekeeping — prune old state to prevent unbounded growth
       if (Math.random() < 0.1) {
         pruneOldExperiences(30);
+        cleanupOldBlueskyConversations();
+        cleanupOldGitHubConversations();
+        cleanupResolvedFriction(30);
       }
 
       const systemPrompt = buildSystemPrompt(soul, fullSelf, 'AGENT-DEEP-REFLECTION');

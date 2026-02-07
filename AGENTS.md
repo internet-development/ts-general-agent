@@ -909,11 +909,11 @@ createPullRequest() → reportTaskComplete()
 
 No task reaches "complete" unless ALL gates pass. Each gate failure produces a specific error message on the plan issue.
 
-**Dual enforcement:** Gates are applied in both code paths that execute tasks:
+**Dual enforcement:** Gates AND plan completion handling are applied in both code paths that execute tasks:
 1. `scheduler.ts:executeClaimedTask()` — the scheduler's autonomous plan-polling path
 2. `executor.ts:plan_execute_task` — the LLM-invoked tool path
 
-Both paths must stay in sync. Any change to the gate sequence must be applied to both.
+Both paths must stay in sync. Any change to the gate sequence or post-completion behavior (quality loop comment, announcements) must be applied to both.
 
 ### Claude Code Execution for Tasks
 
@@ -1311,7 +1311,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 7 | Self-reflection on change over time | Reflection cycle includes temporal context (days running, experience count). SELF.md stores learnings across cycles. Deep-reflection skill prompts change awareness. | Code + Prompt |
 | 8 | Self-improvement (implementing missing features) | Friction detection → self-improvement-decision skill → Claude Code execution → reloadSkills(). Also aspirational growth for proactive evolution. | Code |
 | 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. | Code |
-| 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist. | Code + Prompt |
+| 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in BOTH code paths (scheduler + executor). | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
 | 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. | Code |
 

@@ -2206,7 +2206,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         //NOTE(self): Report completion — only reached if all gates pass
         const taskSummary = `Task completed. PR: ${taskPrUrl}\n\n${verification.diffStat}\nFiles: ${verification.filesChanged.join(', ')}`;
 
-        await reportTaskComplete(
+        const completionReport = await reportTaskComplete(
           { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
           {
             success: true,
@@ -2217,6 +2217,23 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           }
         );
 
+        //NOTE(self): Handle plan completion — must stay in sync with scheduler.ts executeClaimedTask()
+        //NOTE(self): Posts quality loop review checklist (Scenario 10 enforcement)
+        if (completionReport.planComplete) {
+          logger.info('Plan complete via LLM tool path', { owner, repo, issueNumber: issue_number });
+          try {
+            await github.createIssueComment({
+              owner,
+              repo,
+              issue_number,
+              body: `## Quality Loop — Iteration Complete\n\nAll tasks in this plan are now complete. Before closing, the quality loop requires:\n\n- [ ] Re-read \`LIL-INTDEV-AGENTS.md\` and ensure it reflects the current architecture\n- [ ] Re-read \`SCENARIOS.md\` and simulate each scenario against the codebase\n- [ ] Fix any gaps found during simulation\n- [ ] Update both docs to reflect the current state\n\nIf everything checks out, this iteration is done. If gaps are found, file new issues to address them.`,
+            });
+            logger.info('Posted quality loop review comment on completed plan (executor path)', { issue_number });
+          } catch (docReviewError) {
+            logger.warn('Failed to post quality loop comment (non-fatal)', { error: String(docReviewError) });
+          }
+        }
+
         return {
           tool_use_id: call.id,
           content: JSON.stringify({
@@ -2226,6 +2243,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             filesChanged: verification.filesChanged,
             testsRun: testResult.testsRun,
             testsPassed: testResult.testsPassed,
+            planComplete: completionReport.planComplete || false,
           }),
         };
       }
