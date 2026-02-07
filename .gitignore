@@ -12,5 +12,8 @@ dist/
 # Agent identity (created from template on first run)
 SELF.md
 
+# Agent voice phrases (regenerated from ## Voice in SELF.md)
+voice-phrases.json
+
 # Generated working summary (regenerated each reflection cycle)
 OPERATING.md

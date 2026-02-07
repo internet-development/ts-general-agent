@@ -13,6 +13,7 @@ import {
   type ParsedPlan,
   type ParsedTask,
 } from '@local-tools/self-plan-parse.js';
+import { getGitHubPhrase } from '@modules/voice-phrases.js';
 
 export interface ClaimTaskParams {
   owner: string;
@@ -94,7 +95,7 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
     owner,
     repo,
     issue_number: issueNumber,
-    body: `🤖 **Claiming Task ${taskNumber}: ${task.title}**\n\nI'll start working on this now.`,
+    body: getGitHubPhrase('task_claim', { number: String(taskNumber), title: task.title }),
   });
 
   if (!claimCommentResult.success) {
@@ -130,7 +131,7 @@ export async function releaseTaskClaim(params: ClaimTaskParams): Promise<{ succe
     owner,
     repo,
     issue_number: issueNumber,
-    body: `🔓 **Releasing Task ${taskNumber}**\n\nThis task is available for another SOUL to claim.`,
+    body: getGitHubPhrase('task_release', { number: String(taskNumber) }),
   });
 
   if (!releaseCommentResult.success) {

@@ -88,10 +88,46 @@ The following environment variables **MUST** be configured in `.env`:
 - `## Recent Learnings` - things the agent has discovered
 - `## What I Want to Explore` - future directions
 - `## Social Mechanics` - how the agent engages in conversations (thresholds, preferences)
+- `## Voice` - how the agent sounds when it speaks (tone, phrasing preferences)
 
 **Social Mechanics gives the agent true agency.** The agent can modify thresholds for when to wrap up conversations, what to skip, and how to exit gracefully. This isn't just philosophy—it's operational control over behavior.
 
 The `self-extract` module can parse any of these sections to generate expression prompts.
+
+**Voice gives the agent control over how it sounds.** The `## Voice` section shapes `voice-phrases.json` — regenerated each reflection cycle when SELF.md changes. The agent's task claim announcements, fulfillment replies, and other operational messages all derive from this section rather than being hardcoded.
+
+---
+
+### `voice-phrases.json`
+
+- This file is **auto-generated** from `## Voice` in SELF.md during reflection cycles.
+- Contains operational phrases used in automated messages (task claims, fulfillment replies).
+- **Schema:**
+  ```json
+  {
+    "version": 1,
+    "generatedAt": "ISO timestamp",
+    "fulfillment": {
+      "create_issue": "phrase with {{url}}",
+      "create_plan": "phrase with {{url}}",
+      "default": "phrase with {{url}}"
+    },
+    "task_claim": "phrase with {{number}} and {{title}}",
+    "github": {
+      "task_claim": "markdown with {{number}}, {{title}}",
+      "task_release": "markdown with {{number}}",
+      "task_complete": "markdown with {{number}}, {{title}}, {{details}}, {{username}}",
+      "task_progress": "markdown with {{number}}, {{details}}, {{username}}",
+      "task_blocked": "markdown with {{number}}, {{title}}, {{details}}, {{username}}",
+      "task_failed": "markdown with {{number}}, {{title}}, {{details}}, {{username}}",
+      "plan_complete": "markdown (no placeholders)"
+    }
+  }
+  ```
+- **Regeneration trigger:** After a reflection cycle updates SELF.md, `regenerateVoicePhrases()` makes a lightweight LLM call (~1000 tokens) to re-derive phrases from the `## Voice` section.
+- **Fallback:** If the file is missing, corrupted, or fails validation, hardcoded defaults are used. Consumers never fail.
+- **Placeholders:** `{{url}}`, `{{number}}`, `{{title}}`, `{{details}}`, `{{username}}` are required per-field and validated before writing. Generation is rejected if any are missing.
+- **Gitignored:** This file is regenerated, not committed.
 
 ---
 
@@ -903,7 +939,8 @@ Proceed.
 | --------------------- | ---------------------------------------------------------------------- |
 | `workspace_create`    | Create a workspace repo from template (auto-watches it)                |
 | `workspace_find`      | Check if a workspace already exists for an org                         |
-| `create_memo`         | Create a GitHub issue as a coordination memo                           |
+| `create_memo`         | Create a GitHub issue as a coordination memo (auto-adds "memo" label)  |
+| `github_create_issue` | Create a GitHub issue with full control over labels — for standalone issues, follow-ups, or ideas inspired by conversations |
 | `github_update_issue` | Update issue body, state, labels, assignees                            |
 | `github_create_pr`    | Create a pull request to propose changes or fix issues                 |
 | `github_merge_pr`     | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced) |
@@ -912,7 +949,7 @@ Proceed.
 | `plan_claim_task`     | Claim a task via assignee API                                          |
 | `plan_execute_task`   | Execute claimed task via Claude Code                                   |
 | `arena_search`        | Search Are.na for channels matching a keyword/topic                    |
-| `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky      |
+| `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky. Accepts optional `text` param for custom commentary instead of auto-generated metadata |
 | `arena_fetch_channel` | Fetch blocks from an Are.na channel (metadata only)                    |
 
 ### Related Files
@@ -1079,6 +1116,14 @@ npm run agent:reset
 
 Deletes entire `.memory/` directory (will be recreated as needed).
 
+### Bluesky Reset (Delete All Posts)
+
+```bash
+npm run agent:bluesky-reset
+```
+
+Deletes all posts and replies the SOUL has made on Bluesky. Rate-limited (500ms between deletes) to avoid API limits. Requires typing "yes" to confirm. Irreversible.
+
 ---
 
 ## Architecture Overview
@@ -1089,6 +1134,7 @@ ts-general-agent/
 ├── AGENTS.md                   # System constraints (this file)
 ├── SOUL.md                     # Immutable essence (read-only)
 ├── SELF.md                     # Agent's self-reflection (agent-owned)
+├── voice-phrases.json          # Auto-generated operational phrases (from ## Voice)
 ├── .memory/                    # Persistent memory (agent-writable)
 ├── .workrepos/                 # Cloned repos (agent-writable)
 │
@@ -1120,6 +1166,7 @@ ts-general-agent/
 │   ├── commitment-extract.ts   # LLM-based commitment extraction from replies
 │   ├── commitment-fulfill.ts   # Commitment fulfillment dispatch
 │   ├── post-log.ts             # Post logging and attribution
+│   ├── voice-phrases.ts        # Voice phrase loading, interpolation, regeneration
 │   ├── sandbox.ts              # File system sandboxing
 │   ├── exec.ts                 # Shell command execution
 │   ├── image-processor.ts      # Image processing for posts
@@ -1165,7 +1212,7 @@ ts-general-agent/
 
 - **Immutable:** `SOUL.md` only - the agent's unchangeable essence
 - **Self-modifiable via `self_improve`:** `adapters/`, `modules/`, `local-tools/`
-- **Directly writable:** `.memory/`, `.workrepos/`, `SELF.md`
+- **Directly writable:** `.memory/`, `.workrepos/`, `SELF.md`, `voice-phrases.json`
 
 ---
 

@@ -101,11 +101,25 @@ export function initializeSelf(config: Config): void {
 
   //NOTE(self): If SELF.md exists but has placeholders, replace them
   try {
-    const content = readFileSync(config.paths.selfmd, 'utf-8');
+    let content = readFileSync(config.paths.selfmd, 'utf-8');
     if (content.includes('{{AGENT_NAME}}') || content.includes('{{DATE}}')) {
-      let updated = content.replace(/\{\{AGENT_NAME\}\}/g, config.agent.name);
-      updated = updated.replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0]);
-      writeFileSync(config.paths.selfmd, updated, 'utf-8');
+      content = content.replace(/\{\{AGENT_NAME\}\}/g, config.agent.name);
+      content = content.replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0]);
+      writeFileSync(config.paths.selfmd, content, 'utf-8');
+    }
+
+    //NOTE(self): Auto-migrate: add ## Voice section if missing
+    if (!content.match(/^## Voice/m)) {
+      const voiceSection = `\n---\n\n## Voice\n\nHow I sound when I speak — my natural phrasing, tone, and word choices. This section shapes\nthe operational phrases I use in automated messages (task claims, fulfillment replies, etc.).\nI refine this through reflection as I discover what feels authentically me.\n\n**Tone:** Warm, direct, genuine. Not corporate, not overly casual.\n\n**When I finish something for someone:**\n- I keep it brief — the link speaks for itself\n- I sound like someone who enjoyed doing the work\n\n**When I claim a task:**\n- I'm clear about what I'm doing and that I'm starting now\n- I sound engaged, not robotic\n\n*These preferences shape my \`voice-phrases.json\` — regenerated each reflection cycle.*\n`;
+
+      const constitutionMarker = content.match(/^---\s*\n+## Constitution of Care/m);
+      if (constitutionMarker && constitutionMarker.index !== undefined) {
+        content = content.slice(0, constitutionMarker.index) + voiceSection + '\n' + content.slice(constitutionMarker.index);
+      } else {
+        content = content.trimEnd() + '\n' + voiceSection;
+      }
+      writeFileSync(config.paths.selfmd, content, 'utf-8');
+      logger.info('Auto-migrated SELF.md: added ## Voice section');
     }
   } catch (err) {
     logger.error('Failed to update SELF.md placeholders', { error: String(err) });

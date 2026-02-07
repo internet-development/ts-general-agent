@@ -61,7 +61,7 @@ export function isWritablePath(targetPath: string): boolean {
   // - .workrepos/
   // - SELF.md
   const writablePrefixes = ['.memory', '.workrepos'];
-  const writableFiles = ['SELF.md'];
+  const writableFiles = ['SELF.md', 'voice-phrases.json'];
 
   const firstSegment = relative.split(path.sep)[0];
 

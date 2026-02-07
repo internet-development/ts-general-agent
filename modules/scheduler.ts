@@ -83,6 +83,7 @@ import {
 } from '@local-tools/self-identify-aspirations.js';
 import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import { buildSystemPrompt, renderSkillSection, areSkillsLoaded, reloadSkills } from '@modules/skills.js';
+import { getFulfillmentPhrase, getTaskClaimPhrase, regenerateVoicePhrases } from '@modules/voice-phrases.js';
 import * as github from '@adapters/github/index.js';
 import {
   extractGitHubUrlsFromRecord,
@@ -1869,6 +1870,16 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       if (selfUpdated) {
         ui.info('Self evolved', 'SELF.md updated with new learnings');
+
+        //NOTE(self): Regenerate voice phrases when SELF.md changes
+        try {
+          ui.startSpinner('Regenerating voice phrases');
+          const regenerated = await regenerateVoicePhrases();
+          ui.stopSpinner(regenerated ? 'Voice phrases updated' : 'Voice phrases unchanged');
+        } catch (voiceError) {
+          ui.stopSpinner('Voice phrase generation skipped', false);
+          logger.debug('Voice phrase regeneration failed (non-fatal)', { error: String(voiceError) });
+        }
       }
     } catch (error) {
       ui.stopSpinner('Reflection error', false);
@@ -2312,7 +2323,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             const threadResult = await getPostThread(discovered.workspace.discoveredInThread, 0, 0);
             if (threadResult.success && threadResult.data) {
               const parentPost = threadResult.data.thread.post;
-              const claimText = `Claiming Task ${task.number}: ${task.title} from the plan. I'll start working on this now.`;
+              const claimText = getTaskClaimPhrase(task.number, task.title);
               const claimToolCall: ToolCall = {
                 id: `claim-announce-${Date.now()}`,
                 name: 'bluesky_reply',
@@ -3078,14 +3089,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
   //NOTE(self): Build natural follow-up text for the Bluesky reply
   private buildFulfillmentReplyText(type: string, description: string, url: string): string {
-    switch (type) {
-      case 'create_issue':
-        return `Done — here it is: ${url}`;
-      case 'create_plan':
-        return `Plan is ready: ${url}`;
-      default:
-        return `Done: ${url}`;
-    }
+    return getFulfillmentPhrase(type, url);
   }
 
   private startCommitmentFulfillmentLoop(): void {

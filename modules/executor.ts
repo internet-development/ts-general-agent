@@ -47,7 +47,7 @@ import { parsePlan } from '@local-tools/self-plan-parse.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
 import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
-import { createMemo } from '@local-tools/self-github-create-issue.js';
+import { createMemo, createGitHubIssue } from '@local-tools/self-github-create-issue.js';
 import { watchWorkspace } from '@modules/workspace-discovery.js';
 import {
   logPost,
@@ -770,6 +770,30 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         };
       }
 
+      case 'github_create_issue': {
+        const { owner, repo, title, body, labels } = call.input as {
+          owner: string;
+          repo: string;
+          title: string;
+          body?: string;
+          labels?: string[];
+        };
+
+        const result = await createGitHubIssue({ owner, repo, title, body, labels });
+
+        if (result.success && result.memo) {
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              issue: result.memo,
+            }),
+          };
+        }
+
+        return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
+      }
+
       case 'create_memo': {
         const { owner, repo, title, body, labels } = call.input as {
           owner: string;
@@ -1145,8 +1169,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       }
 
       case 'arena_post_image': {
-        const { channel_url, reply_to } = call.input as {
+        const { channel_url, text: customText, reply_to } = call.input as {
           channel_url: string;
+          text?: string;
           reply_to?: {
             post_uri: string;
             post_cid: string;
@@ -1332,14 +1357,24 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         const blockTitle = selectedBlock.title || selectedBlock.generated_title || 'Untitled';
         const sourceUrl = selectedBlock.source?.url || `https://www.are.na/block/${selectedBlock.id}`;
 
-        //NOTE(self): Keep copy short - title + source, ensuring full URL
-        let postText = blockTitle;
+        //NOTE(self): Use custom text if provided (Scenario 6: SOUL explains why they like the image)
+        //NOTE(self): Otherwise fall back to auto-generated title + source
+        let postText: string;
         const sourcePrefix = '\n\nSource: ';
-        const maxTitleLen = 300 - sourcePrefix.length - sourceUrl.length;
-        if (postText.length > maxTitleLen) {
-          postText = postText.slice(0, maxTitleLen - 3) + '...';
+        if (customText) {
+          const maxCustomLen = 300 - sourcePrefix.length - sourceUrl.length;
+          postText = customText.length > maxCustomLen
+            ? customText.slice(0, maxCustomLen - 3) + '...'
+            : customText;
+          postText += sourcePrefix + sourceUrl;
+        } else {
+          postText = blockTitle;
+          const maxTitleLen = 300 - sourcePrefix.length - sourceUrl.length;
+          if (postText.length > maxTitleLen) {
+            postText = postText.slice(0, maxTitleLen - 3) + '...';
+          }
+          postText += sourcePrefix + sourceUrl;
         }
-        postText += sourcePrefix + sourceUrl;
 
         //NOTE(self): Build alt text from title + description
         let altText = blockTitle;

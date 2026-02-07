@@ -13,6 +13,7 @@ import {
   type TaskStatus,
 } from '@local-tools/self-plan-parse.js';
 import { updatePlanStatus } from '@local-tools/self-plan-create.js';
+import { getGitHubPhrase } from '@modules/voice-phrases.js';
 
 export interface ReportTaskParams {
   owner: string;
@@ -67,12 +68,10 @@ export async function reportTaskComplete(
     ? `\n\n**Tests:** ${report.testsRun ? (report.testsPassed ? '✅ Passed' : '❌ Failed') : 'Not run'}`
     : '';
 
-  const comment = `✅ **Task ${taskNumber} Complete: ${task.title}**
-
-${report.summary}${filesSection}${testsSection}
-
----
-*Completed by @${myUsername}*`;
+  const details = `${report.summary}${filesSection}${testsSection}`;
+  const comment = getGitHubPhrase('task_complete', {
+    number: String(taskNumber), title: task.title, details, username: myUsername,
+  });
 
   const commentResult = await createIssueComment({
     owner,
@@ -124,12 +123,9 @@ export async function reportTaskProgress(
   const config = getConfig();
   const myUsername = config.github.username;
 
-  const comment = `🔄 **Task ${taskNumber} Progress**
-
-${progressMessage}
-
----
-*Progress update by @${myUsername}*`;
+  const comment = getGitHubPhrase('task_progress', {
+    number: String(taskNumber), details: progressMessage, username: myUsername,
+  });
 
   const result = await createIssueComment({
     owner,
@@ -175,15 +171,9 @@ export async function reportTaskBlocked(
 
   //NOTE(self): Post blocking comment
   const task = plan.tasks.find(t => t.number === taskNumber);
-  const comment = `🚫 **Task ${taskNumber} Blocked: ${task?.title || 'Unknown'}**
-
-**Reason:**
-${blockReason}
-
-This task cannot proceed until the blocking issue is resolved. Another SOUL may need to help.
-
----
-*Blocked by @${myUsername}*`;
+  const comment = getGitHubPhrase('task_blocked', {
+    number: String(taskNumber), title: task?.title || 'Unknown', details: blockReason, username: myUsername,
+  });
 
   const blockedCommentResult = await createIssueComment({
     owner,
@@ -224,16 +214,7 @@ async function handlePlanComplete(
     owner,
     repo,
     issue_number: issueNumber,
-    body: `🎉 **Plan Complete!**
-
-All tasks have been completed. The plan is now ready for final verification.
-
-Please review:
-- [ ] All changes are correct
-- [ ] Tests pass
-- [ ] Integration works as expected
-
-Once verified, this issue can be closed.`,
+    body: getGitHubPhrase('plan_complete', {}),
   });
 
   if (!completionResult.success) {
@@ -268,17 +249,9 @@ export async function reportTaskFailed(
 
   //NOTE(self): Post failure comment
   const task = plan.tasks.find(t => t.number === taskNumber);
-  const comment = `❌ **Task ${taskNumber} Failed: ${task?.title || 'Unknown'}**
-
-**Error:**
-\`\`\`
-${errorMessage}
-\`\`\`
-
-This task encountered an error and could not be completed. Manual intervention may be required.
-
----
-*Failed attempt by @${myUsername}*`;
+  const comment = getGitHubPhrase('task_failed', {
+    number: String(taskNumber), title: task?.title || 'Unknown', details: errorMessage, username: myUsername,
+  });
 
   const failedCommentResult = await createIssueComment({
     owner,

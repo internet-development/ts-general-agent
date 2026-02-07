@@ -73,6 +73,9 @@ export interface SelfExtract {
   //NOTE(self): How I engage in conversations - my social preferences
   socialMechanics: SocialMechanics;
 
+  //NOTE(self): How I sound when I speak - my voice preferences
+  voice: string;
+
   //NOTE(self): Raw sections for fallback
   rawSections: Record<string, string>;
 }
@@ -93,6 +96,7 @@ export function extractFromSelf(selfContent?: string): SelfExtract {
     currentFocus: [],
     relationships: [],
     socialMechanics: { ...DEFAULT_SOCIAL_MECHANICS },
+    voice: '',
     rawSections: {},
   };
 
@@ -218,6 +222,18 @@ export function extractFromSelf(selfContent?: string): SelfExtract {
   if (relationshipsSection) {
     extract.relationships = extractBullets(relationshipsSection);
     extract.rawSections['relationships'] = relationshipsSection;
+  }
+
+  //NOTE(self): Extract voice - how I sound when I speak
+  const voiceSection = extractSection([
+    'Voice',
+    'How I Sound',
+    'Tone',
+    'My Voice',
+  ]);
+  if (voiceSection) {
+    extract.voice = voiceSection;
+    extract.rawSections['voice'] = voiceSection;
   }
 
   //NOTE(self): Extract social mechanics - how I engage in conversations

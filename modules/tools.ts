@@ -610,6 +610,37 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'github_create_issue',
+    description: 'Create a GitHub issue in any repository. Use this when you want to create a standalone issue — for tracking ideas, filing bugs, or following up on topics from conversations. Unlike create_memo, this gives full control over labels and does not auto-add any.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Repository owner (username or org)',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository name',
+        },
+        title: {
+          type: 'string',
+          description: 'Issue title',
+        },
+        body: {
+          type: 'string',
+          description: 'Issue body (markdown supported)',
+        },
+        labels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Labels to apply to the issue',
+        },
+      },
+      required: ['owner', 'repo', 'title'],
+    },
+  },
+  {
     name: 'create_memo',
     description: 'Create a GitHub issue as a memo/note for coordination. Auto-adds "memo" label. Use this to leave notes, track ideas, or coordinate with other SOULs in a workspace.',
     input_schema: {
@@ -799,6 +830,10 @@ export const AGENT_TOOLS: ToolDefinition[] = [
         channel_url: {
           type: 'string',
           description: 'Are.na channel URL (e.g., https://www.are.na/www-jim/rpg-ui-01) or owner/slug format',
+        },
+        text: {
+          type: 'string',
+          description: 'Optional: custom post text to use instead of auto-generated metadata. Use this when you want to add your own commentary about the image (e.g., why you like it). The Are.na source URL will be appended automatically. Must fit within 300 graphemes including the source URL.',
         },
         reply_to: {
           type: 'object',
