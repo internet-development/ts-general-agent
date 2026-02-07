@@ -79,3 +79,7 @@ And whenever @soul1 does something, the observer should be able to read it. The 
 # 12
 
 The {{OWNER}} may ask @soul1, @soul2, and @soul3 to go and participate on a Github Issue like https://github.com/internet-development/nextjs-sass-starter/issues/41 over Bluesky, and @soul1, @soul2, and @soul3 would have their conversation over Bluesky and actually add useful comments, they might even be inspired enough to create a separate issue if it is inspiring or something they wish to go deeper on, leading to a lot of great content to read.
+
+# 13
+
+No one observing @soul1, @soul2, and @soul3 think the SOULS are being spammy online.

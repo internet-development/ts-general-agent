@@ -1314,6 +1314,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in BOTH code paths (scheduler + executor). | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
 | 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. | Code |
+| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages, conversation conclusion heuristics (max replies, max depth, disengagement, circular detection), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses, session + API deduplication prevents double replies. | Code + Prompt |
 
 **Enforcement types:**
 - **Code** — Behavior is enforced by code logic (cannot be bypassed)
