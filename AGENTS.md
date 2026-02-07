@@ -284,9 +284,11 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 - Commitments are enqueued in `commitment-queue.ts` (JSONL persistence, deduplication via hash)
 - This loop processes pending commitments by dispatching to `commitment-fulfill.ts`
 - Commitment types: `create_issue` → `createMemo()`, `create_plan` → `createPlan()`, `comment_issue` → `commentOnIssue()`
+- **Plan deduplication:** Before creating a plan, `fulfillCreatePlan()` checks for existing open issues with the `plan` label. If one exists, it returns the existing issue instead of creating a duplicate. This prevents multiple SOULs from each creating a plan issue when they all extract "create plan" commitments from the same Bluesky thread.
 - Safety: auto-abandons commitments after 24h or 3 failed attempts
 - Design: never blocks social interaction — commitments are fulfilled in the background
 - Deduplication: if a tool (e.g., `create_memo`) was already executed during the same response cycle, matching commitment types are skipped to prevent double-creation
+- **Follow-up reply:** After successful fulfillment that produces a URL (issue or plan), the agent automatically replies in the original Bluesky thread with the link. This closes the feedback loop: human asks → SOUL promises → SOUL delivers → human gets the link
 
 ---
 
@@ -626,19 +628,20 @@ This is the core loop. SOULs coordinate on Bluesky, execute on GitHub, and repor
 2. **SOUL B** (via awareness loop) detects the mention, uses `workspace_create` to create a GitHub workspace, and replies with the URL AND their GitHub username
 3. The workspace is **auto-watched** immediately after creation (no need to wait for URL discovery)
 4. **SOUL C** sees the workspace URL in the thread → `processTextForWorkspaces()` adds it to their watch list
-5. **All SOULs share cross-platform identities:** "I'm @soul-b.bsky.social here, @sh-soul-b on GitHub"
+5. **All SOULs share cross-platform identities:** "I'm @soul-b.bsky.social here, `sh-soul-b` on GitHub"
 6. Any SOUL uses `plan_create` to create a structured plan with tasks in the workspace
 7. Each SOUL's **plan awareness loop** discovers the plan AND open issues (not just plan-labeled), finds claimable tasks
-8. SOULs claim tasks via GitHub assignee API (first-writer-wins), execute via Claude Code, report completion
-9. SOULs create PRs and **request reviews from peer SOULs by GitHub username**
-10. Peer SOULs review, approve, and merge PRs
-11. SOULs maintain **checklists** on issues to track what's done and what remains
-12. When all SOULs agree the original ask is complete, they announce back to Bluesky thread
-13. New issues or expanded Bluesky asks reopen the loop — the project is never permanently closed while work remains
+8. SOULs claim tasks via GitHub assignee API (multiple assignees allowed — SOULs work in parallel on different tasks), execute via Claude Code, report completion
+9. After claiming, SOULs **announce on Bluesky** by replying in the originating thread: "Claiming Task N: title. I'll start working on this now."
+10. SOULs create PRs and **request reviews from peer SOULs by GitHub username**
+11. Peer SOULs review, approve, and merge PRs
+12. SOULs maintain **checklists** on issues to track what's done and what remains
+13. When all SOULs agree the original ask is complete, they announce back to Bluesky thread
+14. New issues or expanded Bluesky asks reopen the loop — the project is never permanently closed while work remains
 
 ### Cross-Platform Identity Resolution
 
-SOULs have different usernames on Bluesky vs GitHub (e.g., `@marvin.bsky.social` vs `@sh-marvin`). Cross-platform identity linking is essential for:
+SOULs have different usernames on Bluesky vs GitHub (e.g., `@marvin.bsky.social` vs `sh-marvin`). Cross-platform identity linking is essential for:
 
 - Requesting PR reviews from specific peers
 - Assigning tasks to the right SOUL
@@ -646,7 +649,7 @@ SOULs have different usernames on Bluesky vs GitHub (e.g., `@marvin.bsky.social`
 
 **How identity linking works:**
 
-1. **Explicit sharing** (most reliable): SOULs are instructed to share both identities when starting a project. "I'm @soul.bsky.social here, @sh-soul on GitHub."
+1. **Explicit sharing** (most reliable): SOULs are instructed to share both identities when starting a project. "I'm @soul.bsky.social here, `sh-soul` on GitHub." (GitHub usernames use backticks on Bluesky since `@` is for Bluesky handles only.)
 2. **Workspace discovery**: When a SOUL posts a workspace URL on Bluesky, their Bluesky handle is linked to any GitHub activity in that workspace.
 3. **Plan assignee discovery**: When a GitHub username appears as a plan task assignee, it's registered as a peer. If a known Bluesky handle matches, identities are linked.
 4. **The `linkPeerIdentities()` function** merges separate entries when the link is discovered. Once linked, `getPeerGithubUsername(blueskyHandle)` resolves cross-platform.
@@ -703,8 +706,9 @@ All scheduler loops:
 
 SOULs discover workspaces through two paths:
 
-1. **Direct creation** — When a SOUL uses `workspace_create`, the workspace is **auto-watched** immediately via `watchWorkspace()`. No URL discovery needed.
+1. **Direct creation** — When a SOUL uses `workspace_create`, the workspace is **auto-watched** immediately via `watchWorkspace()`. The scheduler sets the Bluesky thread URI as context before tool execution (`setResponseThreadContext()`), so the workspace records which thread it originated from. This enables later announcements (PR completions, plan completions) to reply in-thread instead of becoming top-level posts.
 2. **URL discovery** — When a SOUL sees a workspace URL (e.g., `github.com/org/www-lil-intdev-project`) in a Bluesky thread, `processTextForWorkspaces()` adds it to the watch list.
+3. **Thread URI backfill** — If a workspace was previously watched without a `discoveredInThread` URI (e.g., discovered via URL before the thread context feature), `watchWorkspace()` will update the existing entry when called again with a thread URI.
 
 Both paths persist to `.memory/watched_workspaces.json`. Only repositories with the `www-lil-intdev-` prefix are watched (the standard workspace prefix).
 
@@ -765,12 +769,16 @@ pending → claimed → in_progress → completed
                   ↘ blocked → pending (after unblock)
 ```
 
-### Claiming Protocol (First-Writer-Wins)
+### Claiming Protocol
 
-1. Check if task has assignee → if yes, skip
-2. Add self as assignee via GitHub API
-3. Verify claim succeeded (race condition check)
-4. Post comment: "Claiming Task N..."
+1. Check if task has assignee in plan body → if yes, skip
+2. Check dependencies are completed → if not, skip
+3. Add self as assignee via GitHub API (multiple assignees allowed)
+4. Update plan body with `freshUpdateTaskInPlan()` (atomic read-modify-write)
+5. Post GitHub comment: "Claiming Task N..."
+6. If `discoveredInThread` exists, announce claim on Bluesky (reply in originating thread)
+
+**Task-level safety:** The plan body is the source of truth for task ownership. `task.assignee` prevents two SOULs from claiming the same task. `freshUpdateTaskInPlan()` re-fetches the latest plan body before writing, preventing clobbering.
 
 **Timeout:** If no progress comment within 30 minutes, task is unclaimed automatically.
 
@@ -787,9 +795,11 @@ After checking for claimable tasks (and only if still idle), the plan awareness 
 
 The review uses the same GitHub response mode pattern (jitter, thread refresh, peer awareness, `analyzeConversation` with `isWorkspacePRReview: true`). The agent can APPROVE, REQUEST_CHANGES, COMMENT, or `graceful_exit` if it has nothing to add.
 
-### Sequential Execution (By Design)
+**LGTM + Merge Flow:** For workspace PRs, the expected pattern is approve → LGTM → merge in a single action. When the code looks good, the agent reviews with APPROVE (body: "LGTM") AND merges the PR in the same tool call cycle. This ensures PRs are reviewed, accepted, and merged efficiently — observable as clean PR history for anyone watching the project.
 
-Only one SOUL works on a plan issue at a time. GitHub assignees are issue-level — when SOUL1 is assigned and working on Task 1, SOUL2 cannot claim Task 2 on the same plan issue until SOUL1 finishes and removes itself as assignee. This is intentional: it prevents merge conflicts, keeps diffs clean, and ensures SOULs take turns. After SOUL1 completes and releases the assignee lock, SOUL2 picks up the next task on its next poll cycle.
+### Parallel Task Execution
+
+Multiple SOULs can claim and execute different tasks on the same plan issue simultaneously. GitHub issue assignees are additive — when SOUL1 claims Task 1 and SOUL2 claims Task 2, both appear as assignees on the plan issue. Each SOUL works on its own feature branch (`task-<N>-<slug>`), so there are no merge conflicts. Task-level safety is enforced by the plan body itself: `task.assignee` check prevents two SOULs from claiming the same task, and `freshUpdateTaskInPlan()` uses atomic read-modify-write to avoid clobbering concurrent plan body updates. When a SOUL completes its task, it removes itself as assignee; the other SOULs remain assigned to their in-progress tasks.
 
 ### Fair Task Distribution
 
@@ -868,6 +878,9 @@ Proceed.
 | `plan_create`         | Create a structured plan issue                                         |
 | `plan_claim_task`     | Claim a task via assignee API                                          |
 | `plan_execute_task`   | Execute claimed task via Claude Code                                   |
+| `arena_search`        | Search Are.na for channels matching a keyword/topic                    |
+| `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky      |
+| `arena_fetch_channel` | Fetch blocks from an Are.na channel (metadata only)                    |
 
 ### Related Files
 
@@ -886,6 +899,7 @@ Proceed.
 | `local-tools/self-task-verify.ts`              | Four-gate verification: git changes, tests, push, remote confirm    |
 | `local-tools/self-task-report.ts`              | Report progress/completion                                          |
 | `local-tools/self-workspace-watch.ts`          | Add/remove watched workspaces                                       |
+| `adapters/arena/search-channels.ts`            | Search Are.na for channels by keyword (topic-based image discovery) |
 | `adapters/atproto/authenticate.ts`             | Bluesky session management: login, refresh, expiry detection        |
 | `.memory/watched_workspaces.json`              | Persistent watch list                                               |
 | `.memory/discovered_peers.json`                | Persistent peer registry                                            |
@@ -1048,7 +1062,7 @@ ts-general-agent/
 ├── adapters/                   # Service adapters (see adapters/AGENTS.md)
 │   ├── atproto/                # Bluesky/ATProto
 │   ├── github/                 # GitHub
-│   └── arena/                  # Are.na
+│   └── arena/                  # Are.na (fetch channels, search by topic)
 │
 ├── modules/                    # Core runtime (see modules/AGENTS.md)
 │   ├── config.ts               # Environment and configuration
@@ -1193,3 +1207,22 @@ export async function doSomething() {
 - Cost estimate at $0.01/1K tokens: **~$0.42/day** or **~$12.60/month**
 
 Uses full SELF.md context for all operations to maintain consistent identity and memory.
+
+---
+
+## Scenario Coverage
+
+All scenarios defined in `SCENARIOS.md` are covered by the implementation:
+
+| # | Scenario | Key Code Paths | Status |
+|---|----------|----------------|--------|
+| 1 | Owner or human asks SOULs to build a project | Awareness loop → workspace create (with thread URI) → plan create (with dedup) → parallel task claim + Bluesky announce → task execute → PR → announce in-thread | ✅ |
+| 2 | Human verifies completed project | Task verification gates → reportTaskComplete → plan labels → completion comments | ✅ |
+| 3 | Human asks SOUL to "write up findings" → gets GitHub Issue link | Commitment extraction → fulfillment → **follow-up Bluesky reply with link** | ✅ |
+| 4 | Bluesky posts have correct facets | `createPost()` auto-detects @mentions, #hashtags, $cashtags, URLs → byte-offset facets | ✅ |
+| 5 | SOULs finish conversations elegantly | `graceful_exit` tool (message or like) → conversation state concluded | ✅ |
+| 6 | When asked for image, SOULs search Are.na | **`arena_search`** finds relevant channels by topic → `arena_post_image` posts to Bluesky | ✅ |
+| 7 | SOUL reflects on how it has changed | Reflection cycle → SELF.md integration → expression from updated SELF.md | ✅ |
+| 8 | SOUL implements missing feature for itself | Friction detection (3+ occurrences) → Claude Code → skill reload | ✅ |
+| 9 | Owner chats in terminal with full control | Owner Communication Mode → all tools available → immediate action | ✅ |
+| 10 | SOULs iterate with PRs: review → LGTM → merge | Task execution → PR creation → **approve + LGTM + merge in one action** → next cycle | ✅ |

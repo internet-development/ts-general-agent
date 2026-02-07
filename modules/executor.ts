@@ -62,6 +62,18 @@ import {
   type PostLogEntry,
 } from '@modules/post-log.js';
 
+//NOTE(self): Thread context for workspace creation — set by scheduler before tool execution
+//NOTE(self): so that workspace_create can pass the thread URI to watchWorkspace()
+let _responseThreadUri: string | null = null;
+
+export function setResponseThreadContext(uri: string | null): void {
+  _responseThreadUri = uri;
+}
+
+export function getResponseThreadContext(): string | null {
+  return _responseThreadUri;
+}
+
 export async function executeTool(call: ToolCall): Promise<ToolResult> {
   const config = getConfig();
   const repoRoot = getRepoRoot();
@@ -706,9 +718,10 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
         if (result.success && result.workspace) {
           //NOTE(self): Auto-watch the workspace so the plan awareness loop picks it up immediately
+          //NOTE(self): Pass thread URI so announcements reply in-thread instead of top-level
           const [wsOwner, wsRepo] = result.workspace.fullName.split('/');
-          watchWorkspace(wsOwner, wsRepo, result.workspace.url);
-          logger.info('Workspace created and auto-watched', { fullName: result.workspace.fullName, url: result.workspace.url });
+          watchWorkspace(wsOwner, wsRepo, result.workspace.url, _responseThreadUri || undefined);
+          logger.info('Workspace created and auto-watched', { fullName: result.workspace.fullName, url: result.workspace.url, threadUri: _responseThreadUri });
 
           return {
             tool_use_id: call.id,
@@ -1053,6 +1066,37 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       }
 
       //NOTE(self): Are.na tools
+      case 'arena_search': {
+        const { query, page, per } = call.input as { query: string; page?: number; per?: number };
+
+        if (!query?.trim()) {
+          return { tool_use_id: call.id, content: 'Error: Search query is required', is_error: true };
+        }
+
+        const searchResult = await arena.searchChannels({ query: query.trim(), page, per });
+        if (!searchResult.success) {
+          return { tool_use_id: call.id, content: `Error searching Are.na: ${searchResult.error}`, is_error: true };
+        }
+
+        return {
+          tool_use_id: call.id,
+          content: JSON.stringify({
+            success: true,
+            query,
+            channels: searchResult.data.channels.map(ch => ({
+              title: ch.title,
+              slug: ch.slug,
+              blockCount: ch.length,
+              owner: ch.user?.slug || ch.user?.username || 'unknown',
+              //NOTE(self): Provide ready-to-use URL for arena_post_image
+              channel_url: `https://www.are.na/${ch.user?.slug || ch.user?.username}/${ch.slug}`,
+            })),
+            totalResults: searchResult.data.totalResults,
+          }),
+          is_error: false,
+        };
+      }
+
       case 'arena_fetch_channel': {
         const { channel_url } = call.input as { channel_url: string };
 

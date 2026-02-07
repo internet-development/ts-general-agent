@@ -829,6 +829,28 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'arena_search',
+    description: 'Search Are.na for channels matching a keyword or topic. Returns relevant channels with block counts. Use this when someone asks for images on a topic and you need to find a relevant Are.na channel to pull from. Then use arena_post_image with the discovered channel.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search term (e.g., "JRPG", "brutalist architecture", "mood board")',
+        },
+        page: {
+          type: 'number',
+          description: 'Page number for pagination (default: 1)',
+        },
+        per: {
+          type: 'number',
+          description: 'Results per page (default: 10, max: 40)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'lookup_post_context',
     description: 'Look up the context/metadata for a post I made. Returns source information (Are.na channel, block title, original URL), alt text, and when I posted it. Useful for answering questions like "why did you pick this?" or "where is this from?" when someone asks about an image I posted.',
     input_schema: {

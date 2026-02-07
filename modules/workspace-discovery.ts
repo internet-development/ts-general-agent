@@ -111,7 +111,16 @@ export function watchWorkspace(
   const key = getWorkspaceKey(owner, repo);
 
   if (state.workspaces[key]) {
-    logger.debug('Workspace already being watched', { key });
+    //NOTE(self): If threadUri provided and workspace is missing it, update it
+    //NOTE(self): This happens when workspace_create is called from a thread context
+    //NOTE(self): but the workspace was previously watched without thread info
+    if (threadUri && !state.workspaces[key].discoveredInThread) {
+      state.workspaces[key].discoveredInThread = threadUri;
+      saveState();
+      logger.info('Updated workspace with thread URI', { key, threadUri });
+    } else {
+      logger.debug('Workspace already being watched', { key });
+    }
     return;
   }
 

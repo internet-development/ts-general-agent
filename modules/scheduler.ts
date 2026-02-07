@@ -15,7 +15,7 @@ import { ui, type ScheduledTimers } from '@modules/ui.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
-import { executeTools } from '@modules/executor.js';
+import { executeTools, setResponseThreadContext } from '@modules/executor.js';
 import type { ToolCall } from '@modules/tools.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
@@ -1272,6 +1272,16 @@ export class AgentScheduler {
         tools: AGENT_TOOLS,
       });
 
+      //NOTE(self): Set thread context so workspace_create knows where we came from
+      //NOTE(self): Extract thread root URIs from notifications — replies use root.uri, mentions use own uri
+      const threadRootUris = worthResponding.map(pn => {
+        const record = pn.notification.record as { reply?: { root?: { uri?: string } } };
+        return record?.reply?.root?.uri || pn.notification.uri;
+      }).filter(Boolean) as string[];
+      if (threadRootUris.length > 0) {
+        setResponseThreadContext(threadRootUris[0]);
+      }
+
       //NOTE(self): Track replied URIs across this session to deduplicate LLM-generated replies
       const sessionRepliedUris = new Set<string>();
       //NOTE(self): Collect successful reply texts for commitment extraction
@@ -1354,6 +1364,9 @@ export class AgentScheduler {
           tools: AGENT_TOOLS,
         });
       }
+
+      //NOTE(self): Clear thread context now that tool execution is done
+      setResponseThreadContext(null);
 
       ui.stopSpinner('Check complete');
 
@@ -2259,6 +2272,35 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           continue;
         }
 
+        //NOTE(self): Announce the claim on Bluesky (reply in the originating thread)
+        //NOTE(self): Non-fatal — don't let announcement failures block task execution
+        if (discovered.workspace.discoveredInThread) {
+          try {
+            const threadResult = await getPostThread(discovered.workspace.discoveredInThread, 0, 0);
+            if (threadResult.success && threadResult.data) {
+              const parentPost = threadResult.data.thread.post;
+              const claimText = `Claiming Task ${task.number}: ${task.title} from the plan. I'll start working on this now.`;
+              const claimToolCall: ToolCall = {
+                id: `claim-announce-${Date.now()}`,
+                name: 'bluesky_reply',
+                input: {
+                  text: claimText,
+                  post_uri: parentPost.uri,
+                  post_cid: parentPost.cid,
+                },
+              };
+              const claimAnnounceResults = await executeTools([claimToolCall]);
+              if (claimAnnounceResults[0] && !claimAnnounceResults[0].is_error) {
+                logger.info('Announced task claim on Bluesky', { taskNumber: task.number, threadUri: discovered.workspace.discoveredInThread });
+              } else {
+                logger.debug('Claim announcement failed (non-fatal)', { error: claimAnnounceResults[0]?.content });
+              }
+            }
+          } catch (announceError) {
+            logger.debug('Claim announcement error (non-fatal)', { error: String(announceError) });
+          }
+        }
+
         //NOTE(self): We claimed it! Execute the task
         await this.executeClaimedTask({
           workspace: discovered.workspace,
@@ -2684,11 +2726,12 @@ ${threadContext}
 
 Review this pull request. You have several options:
 
-1. **If the code looks good:** use \`github_review_pr\` with APPROVE event
-2. **If changes are needed:** use \`github_review_pr\` with REQUEST_CHANGES event
+1. **If the code looks good:** use \`github_review_pr\` with APPROVE event (say "LGTM" or similar in the body), then ALSO use \`github_merge_pr\` to merge it — approve AND merge in one action
+2. **If changes are needed:** use \`github_review_pr\` with REQUEST_CHANGES event and explain what to fix
 3. **If you want to comment without formal review:** use \`github_create_issue_comment\` or \`github_create_pr_comment\`
-4. **If you can merge this workspace PR:** use \`github_merge_pr\`
-5. **If you have nothing meaningful to add:** use \`graceful_exit\` to close warmly
+4. **If you have nothing meaningful to add:** use \`graceful_exit\` to close warmly
+
+In workspace PRs, the expected flow is: review → approve with "LGTM" → merge. Do all three in one action when the code is ready.
 
 Remember: quality over quantity. Only review if you can add genuine value.`;
 
@@ -2902,6 +2945,114 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   //NOTE(self): Process all pending commitments quickly (15s cycle)
   //NOTE(self): Keeps my promises — if I said "I'll open an issue", this makes it happen
 
+  //NOTE(self): After fulfilling a commitment, reply on Bluesky with the link
+  //NOTE(self): Closes the feedback loop: human asks → SOUL promises → SOUL delivers → human gets link
+  private async replyWithFulfillmentLink(
+    commitment: import('@modules/commitment-queue.js').Commitment,
+    result: Record<string, unknown>
+  ): Promise<void> {
+    //NOTE(self): Only reply if we have a source thread URI to reply to
+    if (!commitment.sourceThreadUri || !commitment.sourceThreadUri.startsWith('at://')) {
+      logger.debug('No valid source thread URI for fulfillment reply', { id: commitment.id });
+      return;
+    }
+
+    //NOTE(self): Extract the URL from the fulfillment result
+    const url = this.extractFulfillmentUrl(commitment.type, result);
+    if (!url) {
+      logger.debug('No URL to share from fulfillment result', { id: commitment.id, type: commitment.type });
+      return;
+    }
+
+    try {
+      //NOTE(self): Fetch the source post to get its CID for proper threading
+      const threadResult = await getPostThread(commitment.sourceThreadUri, 1, 1);
+      if (!threadResult.success) {
+        logger.warn('Could not fetch source thread for fulfillment reply', {
+          id: commitment.id,
+          error: threadResult.error,
+        });
+        return;
+      }
+
+      const sourcePost = threadResult.data.thread.post;
+
+      //NOTE(self): Build a natural follow-up message with the link
+      const replyText = this.buildFulfillmentReplyText(commitment.type, commitment.description, url);
+
+      //NOTE(self): Determine root for threading
+      const rootUri = sourcePost.record.reply?.root?.uri || sourcePost.uri;
+      const rootCid = sourcePost.record.reply?.root?.cid || sourcePost.cid;
+
+      //NOTE(self): Post the follow-up reply
+      const postResult = await atproto.createPost({
+        text: replyText,
+        replyTo: {
+          uri: sourcePost.uri,
+          cid: sourcePost.cid,
+          rootUri,
+          rootCid,
+        },
+      });
+
+      if (postResult.success) {
+        logger.info('Fulfillment follow-up reply posted', {
+          id: commitment.id,
+          type: commitment.type,
+          url,
+          postUri: postResult.data.uri,
+        });
+      } else {
+        logger.warn('Failed to post fulfillment follow-up reply', {
+          id: commitment.id,
+          error: postResult.error,
+        });
+      }
+    } catch (error) {
+      //NOTE(self): Non-fatal — the commitment was still fulfilled, we just couldn't notify
+      logger.warn('Error posting fulfillment follow-up reply', {
+        id: commitment.id,
+        error: String(error),
+      });
+    }
+  }
+
+  //NOTE(self): Extract URL from fulfillment result based on commitment type
+  private extractFulfillmentUrl(type: string, result: Record<string, unknown>): string | null {
+    switch (type) {
+      case 'create_issue': {
+        //NOTE(self): Result shape: { issues: [{ number, title, url }], count }
+        const issues = result.issues as Array<{ url?: string }> | undefined;
+        if (issues && issues.length > 0 && issues[0].url) {
+          return issues[0].url;
+        }
+        return null;
+      }
+      case 'create_plan': {
+        //NOTE(self): Result shape: { issueNumber, issueUrl }
+        return (result.issueUrl as string) || null;
+      }
+      case 'comment_issue': {
+        //NOTE(self): Comments don't have a standalone URL worth sharing
+        return null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  //NOTE(self): Build natural follow-up text for the Bluesky reply
+  private buildFulfillmentReplyText(type: string, description: string, url: string): string {
+    switch (type) {
+      case 'create_issue':
+        return `Done — here it is: ${url}`;
+      case 'create_plan':
+        return `Plan is ready: ${url}`;
+      default:
+        return `Done: ${url}`;
+    }
+  }
+
   private startCommitmentFulfillmentLoop(): void {
     this.commitmentTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
@@ -2939,6 +3090,11 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
             `Fulfilled commitment: ${commitment.description}`,
             { source: 'bluesky' }
           );
+
+          //NOTE(self): Reply back on Bluesky with the created resource link
+          //NOTE(self): This closes the loop: human asks → SOUL promises → SOUL delivers → SOUL shares link
+          await this.replyWithFulfillmentLink(commitment, result.result || {});
+
           ui.stopSpinner(`Commitment fulfilled: ${commitment.type}`);
           logger.info('Commitment fulfilled', { id: commitment.id, type: commitment.type });
         } else {

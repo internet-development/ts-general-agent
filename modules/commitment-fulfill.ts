@@ -8,6 +8,7 @@ import { createMemo } from '@local-tools/self-github-create-issue.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { commentOnIssue } from '@local-tools/self-github-comment-issue.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
+import { listIssues } from '@adapters/github/list-issues.js';
 
 export interface FulfillmentResult {
   success: boolean;
@@ -73,6 +74,29 @@ async function fulfillCreatePlan(commitment: Commitment): Promise<FulfillmentRes
   const resolved = await resolveRepo(commitment.params);
   if (!resolved) {
     return { success: false, error: 'no_workspace_context' };
+  }
+
+  //NOTE(self): Dedup guard — check if a plan issue already exists in the repo
+  //NOTE(self): Multiple SOULs can extract "create plan" from the same thread; only one should create it
+  const existingPlans = await listIssues({
+    owner: resolved.owner,
+    repo: resolved.repo,
+    state: 'open',
+    labels: ['plan'],
+    per_page: 1,
+  });
+
+  if (existingPlans.success && existingPlans.data.length > 0) {
+    const existing = existingPlans.data[0];
+    logger.info('Plan already exists, skipping duplicate creation', {
+      owner: resolved.owner,
+      repo: resolved.repo,
+      existingIssue: existing.number,
+    });
+    return {
+      success: true,
+      result: { issueNumber: existing.number, issueUrl: existing.html_url, deduplicated: true },
+    };
   }
 
   const plan: PlanDefinition = {

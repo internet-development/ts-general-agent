@@ -75,19 +75,9 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
     return { success: false, claimed: false, error: claimResult.error };
   }
 
-  if (!claimResult.data.claimed) {
-    //NOTE(self): Someone else got there first
-    const currentOwner = claimResult.data.currentAssignees?.[0];
-    logger.info('Task claim deferred (issue-level lock, by design)', { taskNumber, claimedBy: currentOwner, reason: 'Current owner will finish and release — SOULs take turns' });
-    return {
-      success: true,
-      claimed: false,
-      claimedBy: currentOwner,
-      error: `Task already claimed by ${currentOwner}`,
-    };
-  }
-
   //NOTE(self): We got the claim! Update the plan body to reflect this
+  //NOTE(self): Task-level safety is already provided by task.assignee check above
+  //NOTE(self): and freshUpdateTaskInPlan below (atomic read-modify-write)
   //NOTE(self): Use freshUpdateTaskInPlan to avoid clobbering concurrent writes
   const updateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'claimed',
