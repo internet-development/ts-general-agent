@@ -192,6 +192,8 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
          ▼                                           ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                                   SCHEDULER                                      │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│ SESSION REFRESH (15m) — proactive Bluesky token refresh with re-auth fallback    │
 ├──────────┬──────────┬────────────┬────────────┬──────────────┬──────────────────┤
 │AWARENESS │ GH AWARE │ EXPRESSION │ REFLECTION │ SELF-IMPROVE │ PLAN AWARE       │
 │  45 sec  │  2 min   │  3-4h      │   6h       │   24h        │    3 min         │
@@ -200,6 +202,15 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 │ COMMITMENT FULFILLMENT (15s) — fulfills promises made in replies                 │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Loop 0: Session Refresh (Proactive)
+
+- **Interval:** 15 minutes
+- **Tokens:** 0 (API calls only, no LLM)
+- **Purpose:** Keep Bluesky `accessJwt` alive during long-running mode
+- The Bluesky `accessJwt` expires every ~2 hours; this loop proactively refreshes it
+- Two-tier recovery: tries `refreshJwt` first, falls back to full re-authentication with credentials
+- Prevents silent API failures where all Bluesky calls return errors after token expiry
 
 ### Loop 1: Bluesky Awareness (Fast, Cheap)
 
@@ -265,7 +276,11 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 - **Interval:** 15 seconds
 - **Tokens:** 0 (no LLM, direct tool execution)
 - **Purpose:** Fulfill promises made in Bluesky replies
-- After the SOUL replies on Bluesky, `commitment-extract.ts` uses a small LLM call (~500 tokens) to detect action commitments ("I'll open 3 issues" → `create_issue` commitment)
+- After the SOUL replies on Bluesky, `commitment-extract.ts` uses a small LLM call (~500 tokens) to detect action commitments
+- Natural language patterns are mapped to structured types:
+  - "I'll open 3 issues" / "I'll write up my findings" / "Let me document this" → `create_issue`
+  - "I'll put together a plan" → `create_plan`
+  - "I'll comment on that issue" → `comment_issue`
 - Commitments are enqueued in `commitment-queue.ts` (JSONL persistence, deduplication via hash)
 - This loop processes pending commitments by dispatching to `commitment-fulfill.ts`
 - Commitment types: `create_issue` → `createMemo()`, `create_plan` → `createPlan()`, `comment_issue` → `commentOnIssue()`
@@ -674,6 +689,7 @@ Beyond plan-labeled issues, SOULs discover ALL open issues in watched workspaces
 
 ```
 All scheduler loops:
+  0. Session Refresh (15m) - proactive Bluesky token refresh
   1. Bluesky Awareness (45s) - check Bluesky notifications
   1b. GitHub Awareness (2m) - check GitHub notifications
   2. Expression (3-4h) - share thoughts
@@ -870,6 +886,7 @@ Proceed.
 | `local-tools/self-task-verify.ts`              | Four-gate verification: git changes, tests, push, remote confirm    |
 | `local-tools/self-task-report.ts`              | Report progress/completion                                          |
 | `local-tools/self-workspace-watch.ts`          | Add/remove watched workspaces                                       |
+| `adapters/atproto/authenticate.ts`             | Bluesky session management: login, refresh, expiry detection        |
 | `.memory/watched_workspaces.json`              | Persistent watch list                                               |
 | `.memory/discovered_peers.json`                | Persistent peer registry                                            |
 | `.memory/pending_commitments.jsonl`            | Persistent commitment queue                                         |
@@ -915,10 +932,17 @@ The agent handles API errors gracefully:
 - Network timeouts
 - Connection drops
 
+**Bluesky Token Expiration (Auto-Recovery):**
+
+- `accessJwt` expires every ~2 hours — Session Refresh loop (Loop 0) proactively refreshes every 15 minutes
+- `refreshJwt` expires every ~90 days — if refresh fails, falls back to full re-authentication with username/password
+- Recovery is two-tier: `refreshJwt` → full `authenticate()` → log error if both fail
+- No operator intervention needed unless the Bluesky app password itself is revoked
+
 **Fatal Errors (Agent Exits):**
 
 - Insufficient credits / billing issues (402)
-- Invalid API key (401)
+- Invalid API key (401) — AI Gateway only; Bluesky 401s are handled by session refresh
 - Access denied (403)
 
 When a fatal error occurs:

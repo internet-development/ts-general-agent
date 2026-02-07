@@ -1,5 +1,6 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my seven loops of being:
+//NOTE(self): Coordinates my eight loops of being:
+//NOTE(self): 0. Session Refresh (15m) - proactive Bluesky token refresh to prevent expiration
 //NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
 //NOTE(self): 1b. GitHub Awareness (2m) - checking GitHub notifications for mentions and replies
 //NOTE(self): 2. Expression (3-4h) - sharing thoughts from my SELF (scheduled)
@@ -20,7 +21,7 @@ import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
 import { getPostThread } from '@adapters/atproto/get-post-thread.js';
-import { getSession, ensureValidSession } from '@adapters/atproto/authenticate.js';
+import { getSession, ensureValidSession, authenticate as reauthenticate, isTokenExpired } from '@adapters/atproto/authenticate.js';
 import {
   prioritizeNotifications,
   recordInteraction,
@@ -256,6 +257,7 @@ export class AgentScheduler {
   private engagementCheckTimer: NodeJS.Timeout | null = null;
   private planAwarenessTimer: NodeJS.Timeout | null = null;
   private commitmentTimer: NodeJS.Timeout | null = null;
+  private sessionRefreshTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
 
   constructor(config: Partial<SchedulerConfig> = {}) {
@@ -351,6 +353,7 @@ export class AgentScheduler {
     //NOTE(self): Log jittered intervals so operator can verify per-SOUL staggering
     const agentName = this.appConfig.agent.name;
     const timerIntervals = {
+      'session-refresh': getTimerJitter(agentName, 'session-refresh', 15 * 60 * 1000),
       awareness: getTimerJitter(agentName, 'awareness', this.config.awarenessInterval),
       'github-awareness': getTimerJitter(agentName, 'github-awareness', this.config.githubAwarenessInterval),
       'expression-check': getTimerJitter(agentName, 'expression-check', 5 * 60_000),
@@ -365,6 +368,7 @@ export class AgentScheduler {
     ui.system('Timer jitter', `${agentName} → ${intervalSummary}`);
 
     //NOTE(self): Start the loops
+    this.startSessionRefreshLoop();
     this.startAwarenessLoop();
     this.startGitHubAwarenessLoop();
     this.startExpressionLoop();
@@ -424,8 +428,52 @@ export class AgentScheduler {
       clearInterval(this.commitmentTimer);
       this.commitmentTimer = null;
     }
+    if (this.sessionRefreshTimer) {
+      clearInterval(this.sessionRefreshTimer);
+      this.sessionRefreshTimer = null;
+    }
 
     ui.system('Scheduler stopped');
+  }
+
+  //NOTE(self): ========== SESSION REFRESH LOOP ==========
+  //NOTE(self): Proactive Bluesky token refresh to prevent expiration in long-running mode
+  //NOTE(self): accessJwt expires ~2 hours; this refreshes every 15 minutes as a safety net
+
+  private startSessionRefreshLoop(): void {
+    const interval = getTimerJitter(this.appConfig.agent.name, 'session-refresh', 15 * 60 * 1000);
+
+    this.sessionRefreshTimer = setInterval(async () => {
+      if (this.shutdownRequested) return;
+      await this.ensureSessionOrReauth();
+    }, interval);
+  }
+
+  //NOTE(self): Try token refresh first; if that fails, fall back to full re-authentication
+  private async ensureSessionOrReauth(): Promise<boolean> {
+    //NOTE(self): If token is still valid, nothing to do
+    if (!isTokenExpired()) return true;
+
+    //NOTE(self): Try refresh via refreshJwt
+    const refreshed = await ensureValidSession();
+    if (refreshed) {
+      logger.info('Session refreshed via refreshJwt');
+      return true;
+    }
+
+    //NOTE(self): refreshJwt may have expired too — fall back to full re-authentication
+    logger.warn('Session refresh failed, attempting full re-authentication');
+    const result = await reauthenticate(
+      this.appConfig.bluesky.username,
+      this.appConfig.bluesky.password
+    );
+    if (result.success) {
+      logger.info('Session re-established via full authentication');
+      return true;
+    }
+
+    logger.error('Session re-authentication failed', { error: result.error });
+    return false;
   }
 
   //NOTE(self): ========== AWARENESS LOOP ==========

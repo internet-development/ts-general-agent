@@ -27,6 +27,15 @@ A commitment = the author promises to DO something specific.
 Types: create_issue, create_plan, comment_issue
 NOT commitments: opinions, past-tense actions, suggestions to others, general statements
 
+Examples:
+- "I'll open 3 issues for this" → type: create_issue, count: 3
+- "I'll write up my findings" → type: create_issue (findings become an issue/memo)
+- "Let me document this in an issue" → type: create_issue
+- "I'll summarize what we discussed" → type: create_issue
+- "I'll put together a plan for this" → type: create_plan
+- "I'll comment on that issue" → type: comment_issue
+- "Let me create a memo about it" → type: create_issue
+
 Return JSON array: [{ "description": "...", "type": "...", "params": {"title": "...", "count": 1, "repo": "..."}, "confidence": "high"|"medium"|"low" }]
 Return [] if no commitments found. Only include high/medium confidence items.`;
 
