@@ -47,6 +47,7 @@ import {
   getExperiencesForReflection,
   markExperiencesIntegrated,
   pruneOldExperiences,
+  getExperienceTimeSpan,
 } from '@local-tools/self-capture-experiences.js';
 import {
   loadExpressionSchedule,
@@ -561,7 +562,10 @@ export class AgentScheduler {
       });
 
       if (needsResponse.length > 0) {
+        //NOTE(self): Show detailed notification info so terminal is readable (Scenario 11)
+        const notifDetails = needsResponse.map(pn => `${pn.notification.reason} from @${pn.notification.author.handle}`).join(', ');
         ui.stopSpinner(`${needsResponse.length} notification${needsResponse.length === 1 ? '' : 's'} found`);
+        ui.info('Notifications', notifDetails);
         this.state.pendingNotifications = needsResponse;
 
         //NOTE(self): Extract GitHub URLs from Bluesky notifications
@@ -1394,7 +1398,13 @@ export class AgentScheduler {
       //NOTE(self): Clear thread context now that tool execution is done
       setResponseThreadContext(null);
 
-      ui.stopSpinner('Check complete');
+      //NOTE(self): Show response summary so terminal is detailed (Scenario 11)
+      const repliesSent = collectedReplies.length;
+      const actionsExecuted = executedActionTools.size;
+      const summaryParts: string[] = [];
+      if (repliesSent > 0) summaryParts.push(`${repliesSent} ${repliesSent === 1 ? 'reply' : 'replies'} sent`);
+      if (actionsExecuted > 0) summaryParts.push(`${actionsExecuted} ${actionsExecuted === 1 ? 'action' : 'actions'} taken`);
+      ui.stopSpinner(summaryParts.length > 0 ? `Response complete: ${summaryParts.join(', ')}` : 'Check complete');
 
       //NOTE(self): Extract commitments from reply texts — per-reply for correct source attribution
       //NOTE(self): Skip commitments that match tools already executed in this session
@@ -1672,6 +1682,10 @@ Revise and post again.`;
                 recordSignificantEvent('original_post');
                 addInsight(`Posted about ${source} - how did it feel to express this?`);
                 ui.stopSpinner('Thought shared');
+                //NOTE(self): Show the posted text so the terminal is detailed (Scenario 11)
+                if (postText) {
+                  ui.printResponse(postText);
+                }
               }
             } catch {
               //NOTE(self): Not JSON, continue
@@ -1786,9 +1800,17 @@ Revise and post again.`;
 
       const systemPrompt = buildSystemPrompt(soul, fullSelf, 'AGENT-DEEP-REFLECTION');
 
+      //NOTE(self): Add temporal context so the SOUL can reflect on change over time (Scenario 7)
+      const timeSpan = getExperienceTimeSpan();
+      let temporalContext = '';
+      if (timeSpan.daysSinceFirst > 0) {
+        temporalContext = `\n**Time context:** You have been running for ${timeSpan.daysSinceFirst} day${timeSpan.daysSinceFirst === 1 ? '' : 's'}, with ${timeSpan.totalExperiences} total experiences recorded. Consider how you have changed and grown over this time.\n`;
+      }
+
       const reflectionData = renderSkillSection('AGENT-DEEP-REFLECTION', 'User Message Template', {
         experienceSummary: experienceData.summary,
         frictionSummary: frictionStats.unresolved > 0 ? `- ${frictionStats.unresolved} unresolved issues to work through` : '- No friction recorded',
+        temporalContext,
       });
 
       const messages: Message[] = [{ role: 'user', content: reflectionData }];
@@ -1864,8 +1886,9 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       ui.stopSpinner('Reflection complete');
 
+      //NOTE(self): Show the full reflection text in a readable box (Scenario 11)
       if (response.text) {
-        ui.contemplate(response.text);
+        ui.printResponse(response.text);
       }
 
       if (selfUpdated) {
@@ -2625,6 +2648,20 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           `All tasks complete in plan "${plan.title}" — project delivered!`,
           { source: 'github', url: planUrl }
         );
+
+        //NOTE(self): Trigger iterative quality loop (Scenario 10)
+        //NOTE(self): Post a doc review comment on the plan issue to prompt the next iteration
+        try {
+          await github.createIssueComment({
+            owner: workspace.owner,
+            repo: workspace.repo,
+            issue_number: issueNumber,
+            body: `## Quality Loop — Iteration Complete\n\nAll tasks in this plan are now complete. Before closing, the quality loop requires:\n\n- [ ] Re-read \`LIL-INTDEV-AGENTS.md\` and ensure it reflects the current architecture\n- [ ] Re-read \`SCENARIOS.md\` and simulate each scenario against the codebase\n- [ ] Fix any gaps found during simulation\n- [ ] Update both docs to reflect the current state\n\nIf everything checks out, this iteration is done. If gaps are found, file new issues to address them.`,
+          });
+          logger.info('Posted quality loop review comment on completed plan', { issueNumber });
+        } catch (docReviewError) {
+          logger.warn('Failed to post quality loop comment (non-fatal)', { error: String(docReviewError) });
+        }
       }
 
     } catch (error) {

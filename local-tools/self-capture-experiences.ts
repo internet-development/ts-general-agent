@@ -284,3 +284,24 @@ export function getUnintegratedCount(): number {
   const s = loadState();
   return s.experiences.filter(e => !e.integrated).length;
 }
+
+//NOTE(self): Get temporal span of all experiences for reflection context (Scenario 7)
+//NOTE(self): Helps the SOUL understand how long it has been running and growing
+export function getExperienceTimeSpan(): { totalExperiences: number; oldestTimestamp: string | null; newestTimestamp: string | null; daysSinceFirst: number } {
+  const s = loadState();
+  if (s.experiences.length === 0) {
+    return { totalExperiences: 0, oldestTimestamp: null, newestTimestamp: null, daysSinceFirst: 0 };
+  }
+
+  const timestamps = s.experiences.map(e => new Date(e.timestamp).getTime()).sort((a, b) => a - b);
+  const oldest = timestamps[0];
+  const newest = timestamps[timestamps.length - 1];
+  const daysSinceFirst = Math.floor((Date.now() - oldest) / (24 * 60 * 60 * 1000));
+
+  return {
+    totalExperiences: s.experiences.length,
+    oldestTimestamp: new Date(oldest).toISOString(),
+    newestTimestamp: new Date(newest).toISOString(),
+    daysSinceFirst,
+  };
+}

@@ -18,13 +18,13 @@ You MUST use self_update to integrate at least one learning into SELF.md. This i
 ## User Message Template
 
 # Your Recent Experiences
-
+{{temporalContext}}
 {{experienceSummary}}
 **Friction you've encountered:**
 {{frictionSummary}}
 
 ---
 
-These experiences are yours. What do they mean for who you are? What have you learned? How are you growing?
+These experiences are yours. What do they mean for who you are? What have you learned? How are you growing? If you have been running for multiple days, consider how your perspective has shifted over that time.
 
 Use self_update to integrate at least one insight into SELF.md.

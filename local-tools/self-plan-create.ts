@@ -98,9 +98,63 @@ export function generatePlanMarkdown(plan: PlanDefinition): string {
   return lines.join('\n');
 }
 
+//NOTE(self): Check if docs tasks (LIL-INTDEV-AGENTS.md, SCENARIOS.md) are present in plan tasks
+//NOTE(self): For workspace repos, these are required as early tasks (Scenario 10 quality loop)
+function hasDocsTasks(tasks: TaskDefinition[]): { hasAgentsMd: boolean; hasScenariosMd: boolean } {
+  const hasAgentsMd = tasks.some(t =>
+    t.title.toLowerCase().includes('lil-intdev-agents') ||
+    t.description.toLowerCase().includes('lil-intdev-agents.md')
+  );
+  const hasScenariosMd = tasks.some(t =>
+    t.title.toLowerCase().includes('scenarios') ||
+    t.description.toLowerCase().includes('scenarios.md')
+  );
+  return { hasAgentsMd, hasScenariosMd };
+}
+
+//NOTE(self): Auto-inject documentation tasks for workspace repos if missing (Scenario 10)
+//NOTE(self): The workspace-decision skill instructs the LLM to include these, but this is a safety net
+function ensureDocsTasks(plan: PlanDefinition, repo: string): PlanDefinition {
+  if (!repo.startsWith('www-lil-intdev-')) return plan;
+
+  const { hasAgentsMd, hasScenariosMd } = hasDocsTasks(plan.tasks);
+  const docsToInject: TaskDefinition[] = [];
+
+  if (!hasAgentsMd) {
+    docsToInject.push({
+      title: 'Create LIL-INTDEV-AGENTS.md',
+      estimate: '5-10 min',
+      dependencies: [],
+      files: ['LIL-INTDEV-AGENTS.md'],
+      description: 'Create the workspace documentation file. Model after AGENTS.md in the main repo but scoped to this project. Document architecture, roles, file structure, and constraints. This is written by the SOULs FOR the SOULs.',
+    });
+    logger.warn('Auto-injected LIL-INTDEV-AGENTS.md task into workspace plan (Scenario 10 enforcement)', { repo });
+  }
+
+  if (!hasScenariosMd) {
+    docsToInject.push({
+      title: 'Create SCENARIOS.md',
+      estimate: '5-10 min',
+      dependencies: [],
+      files: ['SCENARIOS.md'],
+      description: 'Define acceptance criteria as concrete scenarios. Each scenario follows the pattern "A human could do X and see Y." These are used to verify the project actually works and drive the iterative quality loop.',
+    });
+    logger.warn('Auto-injected SCENARIOS.md task into workspace plan (Scenario 10 enforcement)', { repo });
+  }
+
+  if (docsToInject.length > 0) {
+    //NOTE(self): Prepend docs tasks so they're Task 1 and Task 2
+    return { ...plan, tasks: [...docsToInject, ...plan.tasks] };
+  }
+
+  return plan;
+}
+
 //NOTE(self): Create a new plan issue
 export async function createPlan(params: CreatePlanParams): Promise<CreatePlanResult> {
-  const { owner, repo, plan } = params;
+  const { owner, repo } = params;
+  //NOTE(self): Auto-inject docs tasks for workspace repos (Scenario 10)
+  const plan = ensureDocsTasks(params.plan, repo);
 
   const body = generatePlanMarkdown(plan);
   const title = `[PLAN] ${plan.title}`;

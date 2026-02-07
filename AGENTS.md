@@ -1293,3 +1293,30 @@ export async function doSomething() {
 - Cost estimate at $0.01/1K tokens: **~$0.42/day** or **~$12.60/month**
 
 Uses full SELF.md context for all operations to maintain consistent identity and memory.
+
+---
+
+## Scenario Coverage
+
+The following table maps SCENARIOS.md requirements to their implementation. Every scenario is covered.
+
+| # | Scenario | Implementation | Enforcement |
+|---|----------|----------------|-------------|
+| 1 | Multi-SOUL collaborative project from Bluesky | Awareness loop → workspace-decision skill → workspace_create → plan_create → plan awareness loop → task execution → PR review → announce | Code + Prompt |
+| 2 | Completed project verification (example-conversation.ts) | example-conversation.ts demonstrates full lifecycle; workspace docs (LIL-INTDEV-AGENTS.md, SCENARIOS.md) verify artifacts | Documented |
+| 3 | "Write up findings" → GitHub Issue + link | commitment-extract.ts detects "write up" → commitment-fulfill.ts creates issue → scheduler.ts replies with URL in original thread | Code |
+| 4 | Correct Bluesky facets on all posts | ALL posts go through atproto/create-post.ts which detects URLs, @mentions, cashtags, hashtags. No code path skips facet generation. | Code |
+| 5 | Graceful conversation endings | graceful_exit tool (message or like) + markConversationConcluded + re-engagement support (1x casual, unlimited workspace) | Code |
+| 6 | Are.na image fetching | arena_search → arena_fetch_channel → download → upload blob → atproto.createPost with image. Fully dynamic, no hardcoded channels. | Code |
+| 7 | Self-reflection on change over time | Reflection cycle includes temporal context (days running, experience count). SELF.md stores learnings across cycles. Deep-reflection skill prompts change awareness. | Code + Prompt |
+| 8 | Self-improvement (implementing missing features) | Friction detection → self-improvement-decision skill → Claude Code execution → reloadSkills(). Also aspirational growth for proactive evolution. | Code |
+| 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. | Code |
+| 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist. | Code + Prompt |
+| 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
+| 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. | Code |
+
+**Enforcement types:**
+- **Code** — Behavior is enforced by code logic (cannot be bypassed)
+- **Prompt** — Behavior is guided by skill prompts (LLM follows instructions)
+- **Code + Prompt** — Code provides guardrails; prompts guide nuanced decisions
+- **Documented** — Verified by documentation/artifacts, not runtime enforcement
