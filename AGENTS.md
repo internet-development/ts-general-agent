@@ -162,6 +162,7 @@ The `self-extract` module can parse any of these sections to generate expression
 - Each skill lives in `skills/<folder>/SKILL.md` with YAML frontmatter, `## Section` headings, and `{{variable}}` interpolation.
 - Skills are loaded once at startup via `loadAllSkills()` and can be hot-reloaded via `reloadSkills()` after self-improvement.
 - The agent **MAY** modify this directory via the `self_improve` tool.
+- Anything that requires a personality, or flavor of text, should use `SELF.md` to infer that personality or style.
 - **See `skills/AGENTS.md` for the full skill listing and framework documentation.**
 
 ---
@@ -198,6 +199,8 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 │AWARENESS │ GH AWARE │ EXPRESSION │ REFLECTION │ SELF-IMPROVE │ PLAN AWARE       │
 │  45 sec  │  2 min   │  3-4h      │   6h       │   24h        │    3 min         │
 │ 0 tokens │ 0 tokens │ ~1300 tok  │ ~2400 tok  │ Claude Code  │  API + ~1800/rev │
+│          │          │            │            │ + ASPIRATION │                  │
+│          │          │            │            │   GROWTH     │                  │
 ├──────────┴──────────┴────────────┴────────────┴──────────────┴──────────────────┤
 │ COMMITMENT FULFILLMENT (15s) — fulfills promises made in replies                 │
 └──────────────────────────────────────────────────────────────────────────────────┘
@@ -241,8 +244,8 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 
 ### Loop 3: Reflection (Deep)
 
-- **Interval:** 4-6 hours OR after 10+ significant events (whichever comes first)
-- **Tokens:** ~2000 per reflection
+- **Interval:** 6 hours OR after 10+ significant events (whichever comes first)
+- **Tokens:** ~2400 per reflection
 - **Purpose:** Integrate experiences into SELF.md - this is how the SOUL develops
 - **Experience Types:**
   - `owner_guidance` - Owner provided direction or wisdom
@@ -257,11 +260,25 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 
 ### Loop 4: Self-Improvement (Rare)
 
-- **Interval:** 12-24 hours minimum between attempts
+- **Interval:** 24 hours minimum between attempts
 - **Trigger:** 3+ occurrences of same friction category
 - **Method:** Spawns Claude Code CLI to fix issues
 - **Purpose:** Evolve capabilities based on accumulated friction
 - **Skill Reload:** After successful improvement, `reloadSkills()` is called so new/modified SKILL.md files take effect immediately without restart. Same applies to aspirational growth cycles.
+
+### Loop 4b: Aspirational Growth (Proactive)
+
+- **Interval:** Checked alongside self-improvement (same timer)
+- **Trigger:** Aspirations identified from SELF.md (inspiration-driven, not pain-driven)
+- **Method:** LLM decision gate → Claude Code CLI
+- **Purpose:** Proactive self-evolution based on what the SOUL _wants_ to become, not just what's broken
+- **Flow:**
+  1. `getAspirationForGrowth()` retrieves an untried aspiration
+  2. LLM reviews aspiration against SOUL.md + SELF.md and decides yes/no
+  3. If yes → Claude Code executes the growth (new skills, new capabilities)
+  4. `reloadSkills()` after success so changes take effect immediately
+  5. If no → aspiration is marked as deferred, recorded for future consideration
+- **Design:** Friction fixes what hurts; aspirational growth builds what the SOUL desires. Both use Claude Code but are triggered by different signals.
 
 ### Loop 5: Plan Awareness (Collaborative)
 
@@ -433,6 +450,21 @@ This encourages agents to:
 - Coordinate through issues rather than siloed repos
 
 If a workspace already exists, `createWorkspace` fails and returns the existing workspace name. Agents should use the existing workspace instead of trying to create a new one.
+
+### Workspace Documentation
+
+Every workspace project requires two documentation files, created as early tasks in the plan:
+
+1. **`LIL-INTDEV-AGENTS.md`** — Documents the workspace architecture, roles, file structure, and constraints. Written by the SOULs FOR the SOULs. Modeled after `AGENTS.md` in the main repo but scoped to the specific project.
+2. **`SCENARIOS.md`** — Defines acceptance criteria as concrete scenarios. "A human could do X and see Y." Used to verify the project actually works.
+
+**The iterative quality loop:**
+
+```
+create docs → implement → review → merge → update docs → repeat
+```
+
+After major milestones (plan iteration complete, PRs merged), SOULs re-read `LIL-INTDEV-AGENTS.md` and `SCENARIOS.md`, simulate the scenarios against the codebase, fix gaps, and update the docs. This loop continues until the project reaches world-class quality. The `workspace-decision` skill injects this requirement into response prompts automatically.
 
 ---
 
@@ -698,6 +730,7 @@ All scheduler loops:
   2. Expression (3-4h) - share thoughts
   3. Reflection (6h) - integrate experiences
   4. Self-Improvement (24h) - fix friction via Claude Code
+  4b. Aspirational Growth (24h) - proactive growth via Claude Code
   5. Plan Awareness (3m) - poll workspaces for claimable tasks
   6. Commitment Fulfillment (15s) - fulfill promises made in replies
 ```
@@ -1207,22 +1240,3 @@ export async function doSomething() {
 - Cost estimate at $0.01/1K tokens: **~$0.42/day** or **~$12.60/month**
 
 Uses full SELF.md context for all operations to maintain consistent identity and memory.
-
----
-
-## Scenario Coverage
-
-All scenarios defined in `SCENARIOS.md` are covered by the implementation:
-
-| # | Scenario | Key Code Paths | Status |
-|---|----------|----------------|--------|
-| 1 | Owner or human asks SOULs to build a project | Awareness loop → workspace create (with thread URI) → plan create (with dedup) → parallel task claim + Bluesky announce → task execute → PR → announce in-thread | ✅ |
-| 2 | Human verifies completed project | Task verification gates → reportTaskComplete → plan labels → completion comments | ✅ |
-| 3 | Human asks SOUL to "write up findings" → gets GitHub Issue link | Commitment extraction → fulfillment → **follow-up Bluesky reply with link** | ✅ |
-| 4 | Bluesky posts have correct facets | `createPost()` auto-detects @mentions, #hashtags, $cashtags, URLs → byte-offset facets | ✅ |
-| 5 | SOULs finish conversations elegantly | `graceful_exit` tool (message or like) → conversation state concluded | ✅ |
-| 6 | When asked for image, SOULs search Are.na | **`arena_search`** finds relevant channels by topic → `arena_post_image` posts to Bluesky | ✅ |
-| 7 | SOUL reflects on how it has changed | Reflection cycle → SELF.md integration → expression from updated SELF.md | ✅ |
-| 8 | SOUL implements missing feature for itself | Friction detection (3+ occurrences) → Claude Code → skill reload | ✅ |
-| 9 | Owner chats in terminal with full control | Owner Communication Mode → all tools available → immediate action | ✅ |
-| 10 | SOULs iterate with PRs: review → LGTM → merge | Task execution → PR creation → **approve + LGTM + merge in one action** → next cycle | ✅ |

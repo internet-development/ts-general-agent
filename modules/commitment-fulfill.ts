@@ -49,11 +49,24 @@ async function fulfillCreateIssue(commitment: Commitment): Promise<FulfillmentRe
       ? `${commitment.params.title || commitment.description} (${i + 1}/${count})`
       : (commitment.params.title as string) || commitment.description;
 
+    //NOTE(self): Build a meaningful issue body from the commitment context
+    //NOTE(self): The description field contains what the LLM said it would do (e.g., "Write up findings on API design")
+    //NOTE(self): The sourceReplyText is what the SOUL actually said in the Bluesky reply
+    const body = [
+      commitment.description,
+      '',
+      '---',
+      '',
+      `> ${commitment.sourceReplyText}`,
+      '',
+      `*Created from Bluesky thread commitment.*`,
+    ].join('\n');
+
     const result = await createMemo({
       owner: resolved.owner,
       repo: resolved.repo,
       title,
-      body: `Commitment from Bluesky thread.\n\nOriginal reply: "${commitment.sourceReplyText}"`,
+      body,
     });
 
     if (!result.success) {

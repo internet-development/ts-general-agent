@@ -33,7 +33,7 @@ Compose a short Bluesky post about this GitHub activity. Be authentic — write 
 {{context}}
 
 **Guidelines:**
-- Keep it under 280 characters if possible — concise and punchy
+- Keep it under 300 graphemes — that's the Bluesky platform limit. Be concise and punchy
 - Share what you learned or what's interesting about this, not just "I made a PR"
 - Include the URL so people can check it out
 - Don't be self-congratulatory — be genuinely helpful or thought-provoking

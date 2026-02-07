@@ -49,9 +49,13 @@ This sends your closing comment AND marks the conversation concluded. Leaves war
 Your GitHub username: {{githubUsername}}
 Repository: {{owner}}/{{repo}}
 
+**CREATE RELATED ISSUES WHEN INSPIRED:**
+If a conversation sparks a deeper idea or a tangent worth exploring separately, create a new issue for it using `create_memo`. Don't just mention it — file it. This turns good conversations into actionable artifacts and "a lot of great content to read."
+
 Available tools:
 - graceful_exit: Close conversation warmly with a final message
 - github_create_issue_comment: Leave a comment on this issue
+- create_memo: Create a new GitHub issue when inspired to explore something deeper
 - github_review_pr: Submit a formal review (APPROVE, REQUEST_CHANGES, or COMMENT)
 - github_create_pr_comment: Comment on a pull request
 - github_merge_pr: Merge a PR (workspace repos with "www-lil-intdev-" prefix only)

@@ -4,23 +4,13 @@
 //NOTE(self): Self-discovery through expression, not passive waiting.
 
 import { logger } from '@modules/logger.js';
-import {
-  chatWithTools,
-  AGENT_TOOLS,
-  isFatalError,
-  createAssistantToolUseMessage,
-  createToolResultMessage,
-  type Message,
-} from '@modules/openai.js';
+import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools } from '@modules/executor.js';
 import { ui } from '@modules/ui.js';
 import { buildSystemPrompt } from '@modules/skills.js';
-import {
-  recordSignificantEvent,
-  addInsight,
-} from '@modules/engagement.js';
+import { recordSignificantEvent, addInsight } from '@modules/engagement.js';
 import { getScheduler } from '@modules/scheduler.js';
 import { recordFriction } from '@local-tools/self-detect-friction.js';
 import { createRequire } from 'module';
@@ -30,9 +20,7 @@ const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 const VERSION = pkg.version || '0.0.0';
 
-
 //NOTE(self): Types
-
 
 export interface LoopContext {
   config: Config;
@@ -47,11 +35,9 @@ export interface LoopCallbacks {
   onError?: (error: Error) => void;
 }
 
-
 //NOTE(self): ========== SCHEDULER-BASED LOOP ==========
 //NOTE(self): Uses the five-loop architecture: awareness, expression, reflection, self-improvement, plan awareness
 //NOTE(self): More efficient, more expressive, better self-discovery
-
 
 export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void> {
   const config = getConfig();
@@ -62,11 +48,14 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
   const selfContent = readSelf(config.paths.selfmd);
   const name =
     selfContent.match(/I'm\s+(\w+)/)?.[1] ||
-    selfContent.match(/^#\s*(.+)$/m)?.[1]?.replace(/^(SELF|Agent Self Document)\s*/i, '').trim() ||
+    selfContent
+      .match(/^#\s*(.+)$/m)?.[1]
+      ?.replace(/^(SELF|Agent Self Document)\s*/i, '')
+      .trim() ||
     'Agent';
 
   //NOTE(self): Display welcome
-  ui.printHeader(name, 'Autonomous Social Agent');
+  ui.printHeader(name, 'AUTONOMOUS SOUL');
   ui.printDivider('light');
 
   //NOTE(self): Enable status bar with command hints
@@ -187,7 +176,6 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
   }
 }
 
-
 //NOTE(self): Process owner input with full attention
 async function processOwnerInput(input: string, config: Config): Promise<void> {
   ui.startSpinner('Processing owner input');
@@ -248,7 +236,6 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
     recordFriction('social', 'Failed to process owner input', String(error));
   }
 }
-
 
 //NOTE(self): Legacy export for backward compatibility
 //NOTE(self): Just redirects to the scheduler-based loop

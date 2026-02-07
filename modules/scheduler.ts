@@ -454,25 +454,31 @@ export class AgentScheduler {
     //NOTE(self): If token is still valid, nothing to do
     if (!isTokenExpired()) return true;
 
+    ui.startSpinner('Refreshing Bluesky session');
+
     //NOTE(self): Try refresh via refreshJwt
     const refreshed = await ensureValidSession();
     if (refreshed) {
       logger.info('Session refreshed via refreshJwt');
+      ui.stopSpinner('Session refreshed');
       return true;
     }
 
     //NOTE(self): refreshJwt may have expired too — fall back to full re-authentication
     logger.warn('Session refresh failed, attempting full re-authentication');
+    ui.updateSpinner('Re-authenticating with Bluesky');
     const result = await reauthenticate(
       this.appConfig.bluesky.username,
       this.appConfig.bluesky.password
     );
     if (result.success) {
       logger.info('Session re-established via full authentication');
+      ui.stopSpinner('Session re-established');
       return true;
     }
 
     logger.error('Session re-authentication failed', { error: result.error });
+    ui.stopSpinner('Session refresh failed', false);
     return false;
   }
 
@@ -495,12 +501,14 @@ export class AgentScheduler {
     if (this.state.currentMode !== 'idle') return;
 
     this.state.lastAwarenessCheck = Date.now();
+    ui.startSpinner('Checking Bluesky notifications');
 
     try {
       //NOTE(self): Quick notification check - no LLM
       const notifResult = await atproto.getNotifications({ limit: 10 });
       if (!notifResult.success) {
         logger.debug('Awareness check failed', { error: notifResult.error });
+        ui.stopSpinner('Bluesky check failed', false);
         return;
       }
 
@@ -552,7 +560,7 @@ export class AgentScheduler {
       });
 
       if (needsResponse.length > 0) {
-        ui.info('Ready to respond');
+        ui.stopSpinner(`${needsResponse.length} notification${needsResponse.length === 1 ? '' : 's'} found`);
         this.state.pendingNotifications = needsResponse;
 
         //NOTE(self): Extract GitHub URLs from Bluesky notifications
@@ -644,6 +652,8 @@ export class AgentScheduler {
           await this.triggerGitHubResponseMode();
         }
 
+      } else {
+        ui.stopSpinner('No new notifications');
       }
 
       //NOTE(self): Always advance seenAt after fetching notifications, regardless of whether
@@ -667,6 +677,7 @@ export class AgentScheduler {
     } catch (error) {
       this.state.consecutiveErrors++;
       logger.debug('Awareness check error', { error: String(error) });
+      ui.stopSpinner('Awareness check error', false);
     }
   }
 
@@ -689,6 +700,7 @@ export class AgentScheduler {
     if (this.state.currentMode !== 'idle') return;
 
     this.state.lastGitHubAwarenessCheck = Date.now();
+    ui.startSpinner('Checking GitHub notifications');
 
     try {
       //NOTE(self): Check GitHub notifications
@@ -701,6 +713,7 @@ export class AgentScheduler {
 
       if (!notifResult.success) {
         logger.debug('GitHub awareness check failed', { error: notifResult.error });
+        ui.stopSpinner('GitHub check failed', false);
         return;
       }
 
@@ -792,11 +805,15 @@ export class AgentScheduler {
 
       //NOTE(self): Trigger GitHub response mode if we have pending conversations
       if (this.state.pendingGitHubConversations.length > 0 && this.state.currentMode === 'idle') {
+        ui.stopSpinner(`${this.state.pendingGitHubConversations.length} GitHub conversation${this.state.pendingGitHubConversations.length === 1 ? '' : 's'} found`);
         await this.triggerGitHubResponseMode();
+      } else {
+        ui.stopSpinner('No new GitHub notifications');
       }
 
     } catch (error) {
       logger.debug('GitHub awareness check error', { error: String(error) });
+      ui.stopSpinner('GitHub check error', false);
     }
   }
 
@@ -1230,7 +1247,15 @@ export class AgentScheduler {
           }
         }
 
-        notificationParts.push(`- **${n.reason}** from @${n.author.handle} (${who}) [${check.reason}]${relationshipContext}${threadContext}\n  **Latest message:** "${text}"\n  uri: ${n.uri}, cid: ${n.cid}`);
+        //NOTE(self): Extract full GitHub URLs from facets (not truncated text)
+        //NOTE(self): Scenario 12: when someone shares a GitHub URL on Bluesky, the LLM needs
+        //NOTE(self): the exact URL to reference it in the reply — record.text may be truncated
+        const githubUrls = extractGitHubUrlsFromRecord(n.record);
+        const urlContext = githubUrls.length > 0
+          ? `\n  **GitHub URLs mentioned:** ${githubUrls.map(u => u.url).join(', ')}`
+          : '';
+
+        notificationParts.push(`- **${n.reason}** from @${n.author.handle} (${who}) [${check.reason}]${relationshipContext}${threadContext}${urlContext}\n  **Latest message:** "${text}"\n  uri: ${n.uri}, cid: ${n.cid}`);
       }
       const notificationsText = notificationParts.join('\n\n---\n\n');
 
@@ -2135,11 +2160,14 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       return;
     }
 
+    ui.startSpinner(`Checking engagement on ${needsCheck.length} post${needsCheck.length === 1 ? '' : 's'}`);
+
     try {
       //NOTE(self): Fetch my recent posts to get engagement data
       const feedResult = await getAuthorFeed(session.did, { limit: 20 });
       if (!feedResult.success) {
         logger.debug('Failed to fetch author feed', { error: feedResult.error });
+        ui.stopSpinner('Engagement check failed', false);
         return;
       }
 
@@ -2178,8 +2206,10 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           updateExpressionEngagement(expression.postUri, { likes: 0, replies: 0, reposts: 0 });
         }
       }
+      ui.stopSpinner('Engagement check complete');
     } catch (error) {
       logger.debug('Engagement check error', { error: String(error) });
+      ui.stopSpinner('Engagement check error', false);
     }
   }
 
@@ -2211,11 +2241,14 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         return;
       }
 
+      ui.startSpinner(`Checking ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} for tasks`);
+
       //NOTE(self): Poll for plans with claimable tasks
       const discoveredPlans = await pollWorkspacesForPlans();
 
       if (discoveredPlans.length === 0) {
         logger.debug('No claimable tasks found in watched workspaces');
+        ui.stopSpinner('No claimable tasks');
         return;
       }
 
@@ -2365,8 +2398,10 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           }
         }
       }
+      ui.stopSpinner('Workspace check complete');
     } catch (error) {
       logger.error('Plan awareness check error', { error: String(error) });
+      ui.stopSpinner('Workspace check error', false);
     }
   }
 
