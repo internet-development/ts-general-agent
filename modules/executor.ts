@@ -43,6 +43,7 @@ import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.j
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest } from '@local-tools/self-task-execute.js';
 import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@local-tools/self-task-report.js';
+import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { parsePlan } from '@local-tools/self-plan-parse.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
@@ -2129,36 +2130,90 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: `Error: ${executionResult.error}`, is_error: true };
         }
 
-        //NOTE(self): Push feature branch
-        const taskPushResult = await pushChanges(workspaceResult.path, taskBranchName);
-
-        //NOTE(self): Create pull request
-        let taskPrUrl: string | undefined;
-        if (taskPushResult.success) {
-          const prTitle = `task(${task_number}): ${task.title}`;
-          const prBody = `## Task ${task_number} from plan #${issue_number}\n\n**Plan:** ${plan.title}\n**Goal:** ${plan.goal}\n\n### Changes\n${executionResult.output?.slice(0, 500) || 'Task completed'}\n\n---\nPart of #${issue_number}`;
-          const prResult = await createPullRequest(
-            owner, repo, taskBranchName, prTitle, prBody, workspaceResult.path
+        //NOTE(self): GATE 1 — Verify Claude Code actually produced git changes
+        const verification = await verifyGitChanges(workspaceResult.path);
+        if (!verification.hasCommits || !verification.hasChanges) {
+          await reportTaskFailed(
+            { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+            `Claude Code exited successfully but no git changes were produced. Commits: ${verification.commitCount}, Files changed: ${verification.filesChanged.length}`
           );
-
-          if (prResult.success) {
-            taskPrUrl = prResult.prUrl;
-          } else {
-            logger.warn('Failed to create PR in executor', { error: prResult.error });
-          }
+          return { tool_use_id: call.id, content: 'Error: Task execution produced no git changes', is_error: true };
         }
 
-        //NOTE(self): Report completion with PR URL
-        const taskSummary = taskPrUrl
-          ? `Task completed. PR: ${taskPrUrl}\n\n${executionResult.output?.slice(0, 500) || 'Task completed'}`
-          : executionResult.output?.slice(0, 500) || 'Task completed';
+        //NOTE(self): GATE 2 — Run tests if they exist
+        const testResult = await runTestsIfPresent(workspaceResult.path);
+        if (testResult.testsExist && testResult.testsRun && !testResult.testsPassed) {
+          await reportTaskFailed(
+            { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+            `Tests failed after task execution.\n\n${testResult.output}`
+          );
+          return { tool_use_id: call.id, content: `Error: Tests failed after task execution. ${testResult.output}`, is_error: true };
+        }
+
+        //NOTE(self): GATE 3 — Push feature branch (must succeed)
+        const taskPushResult = await pushChanges(workspaceResult.path, taskBranchName);
+        if (!taskPushResult.success) {
+          await reportTaskFailed(
+            { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+            `Failed to push branch '${taskBranchName}': ${taskPushResult.error}`
+          );
+          return { tool_use_id: call.id, content: `Error: Push failed: ${taskPushResult.error}`, is_error: true };
+        }
+
+        //NOTE(self): GATE 4 — Verify branch exists on remote
+        const pushVerification = await verifyPushSuccess(workspaceResult.path, taskBranchName);
+        if (!pushVerification.success) {
+          await reportTaskFailed(
+            { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+            `Push appeared to succeed but branch not found on remote: ${pushVerification.error}`
+          );
+          return { tool_use_id: call.id, content: `Error: Push verification failed: ${pushVerification.error}`, is_error: true };
+        }
+
+        //NOTE(self): Create pull request (must succeed — no silent failures)
+        const prTitle = `task(${task_number}): ${task.title}`;
+        const prBody = [
+          `## Task ${task_number} from plan #${issue_number}`,
+          '',
+          `**Plan:** ${plan.title}`,
+          `**Goal:** ${plan.goal}`,
+          '',
+          '### Changes',
+          `${verification.diffStat}`,
+          '',
+          `**Files changed (${verification.filesChanged.length}):**`,
+          ...verification.filesChanged.map(f => `- \`${f}\``),
+          '',
+          `**Tests:** ${testResult.testsExist ? (testResult.testsPassed ? 'Passed' : 'No tests ran') : 'None found'}`,
+          '',
+          '---',
+          `Part of #${issue_number}`,
+        ].join('\n');
+        const prResult = await createPullRequest(
+          owner, repo, taskBranchName, prTitle, prBody, workspaceResult.path
+        );
+
+        if (!prResult.success) {
+          await reportTaskFailed(
+            { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+            `Branch pushed but PR creation failed: ${prResult.error}`
+          );
+          return { tool_use_id: call.id, content: `Error: PR creation failed: ${prResult.error}`, is_error: true };
+        }
+
+        const taskPrUrl = prResult.prUrl;
+
+        //NOTE(self): Report completion — only reached if all gates pass
+        const taskSummary = `Task completed. PR: ${taskPrUrl}\n\n${verification.diffStat}\nFiles: ${verification.filesChanged.join(', ')}`;
 
         await reportTaskComplete(
           { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
           {
             success: true,
             summary: taskSummary,
-            filesChanged: task.files,
+            filesChanged: verification.filesChanged,
+            testsRun: testResult.testsRun,
+            testsPassed: testResult.testsPassed,
           }
         );
 
@@ -2168,6 +2223,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             success: true,
             output: executionResult.output?.slice(0, 1000),
             prUrl: taskPrUrl,
+            filesChanged: verification.filesChanged,
+            testsRun: testResult.testsRun,
+            testsPassed: testResult.testsPassed,
           }),
         };
       }

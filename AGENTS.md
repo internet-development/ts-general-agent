@@ -909,6 +909,12 @@ createPullRequest() → reportTaskComplete()
 
 No task reaches "complete" unless ALL gates pass. Each gate failure produces a specific error message on the plan issue.
 
+**Dual enforcement:** Gates are applied in both code paths that execute tasks:
+1. `scheduler.ts:executeClaimedTask()` — the scheduler's autonomous plan-polling path
+2. `executor.ts:plan_execute_task` — the LLM-invoked tool path
+
+Both paths must stay in sync. Any change to the gate sequence must be applied to both.
+
 ### Claude Code Execution for Tasks
 
 Tasks are executed using the same `runClaudeCode()` pattern as self-improvement:
