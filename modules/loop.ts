@@ -97,6 +97,16 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
     process.exit(0);
   };
 
+  //NOTE(self): Ensure terminal state is restored on ANY exit path
+  //NOTE(self): This catches process.exit(1) from scheduler fatal errors
+  //NOTE(self): which bypass the shutdown() function (only registered for signals)
+  process.on('exit', () => {
+    try { ui.finalizeInputBox(); } catch {}
+    if (process.stdin.isTTY) {
+      try { process.stdin.setRawMode(false); } catch {}
+    }
+  });
+
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 

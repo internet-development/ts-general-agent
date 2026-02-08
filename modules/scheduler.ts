@@ -2569,7 +2569,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         return;
       }
 
-      //NOTE(self): Verify branch actually exists on remote
+      //NOTE(self): GATE 4 — Verify branch actually exists on remote
       const pushVerification = await verifyPushSuccess(workspaceResult.path, branchName);
       if (!pushVerification.success) {
         ui.stopSpinner('Push verification failed', false);
@@ -2580,7 +2580,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         return;
       }
 
-      //NOTE(self): GATE 4 — PR creation MUST succeed (no more silent warning)
+      //NOTE(self): Create PR — must succeed for task to be marked complete
       const prTitle = `task(${task.number}): ${task.title}`;
       const prBody = [
         `## Task ${task.number} from plan #${issueNumber}`,
