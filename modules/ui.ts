@@ -500,9 +500,9 @@ export class TerminalUI {
       }
     }
 
-    //NOTE(self): Separator line
+    //NOTE(self): Separator line — matches header's double-border style
     process.stdout.write(CSI.moveTo(currentRow, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.dim}${BOX.horizontal.repeat(width)}${ANSI.reset}`);
+    process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.dBottomLeft}${BOX.dHorizontal.repeat(width - 2)}${BOX.dBottomRight}${ANSI.reset}`);
     currentRow++;
 
     //NOTE(self): Build the input box lines
