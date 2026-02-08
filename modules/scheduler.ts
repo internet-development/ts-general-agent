@@ -2678,6 +2678,16 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         if (planSummary.claimed > 0) taskParts.push(`${planSummary.claimed} claimed`);
         if (planSummary.blocked > 0) taskParts.push(`${planSummary.blocked} blocked`);
         if (planSummary.pending > 0) taskParts.push(`${planSummary.pending} pending`);
+        //NOTE(self): Show claimable count — if 0 and pending > 0, explain why
+        if (planSummary.claimable > 0) {
+          taskParts.push(`${planSummary.claimable} claimable`);
+        } else if (planSummary.pending > 0) {
+          const reasons: string[] = [];
+          if (planSummary.pendingBlockedByDeps > 0) reasons.push(`${planSummary.pendingBlockedByDeps} waiting on deps`);
+          if (planSummary.pendingHasAssignee > 0) reasons.push(`${planSummary.pendingHasAssignee} assigned`);
+          if (reasons.length > 0) taskParts.push(`0 claimable — ${reasons.join(', ')}`);
+          else taskParts.push('0 claimable');
+        }
         summaryParts.push(`${planSummary.plansFound} plan${planSummary.plansFound === 1 ? '' : 's'} (${planSummary.totalTasks} tasks: ${taskParts.join(', ')})`);
       }
 

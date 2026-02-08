@@ -53,6 +53,10 @@ export interface PlanPollResult {
     claimed: number;
     blocked: number;
     pending: number;
+    claimable: number;
+    //NOTE(self): Why pending tasks aren't claimable (for diagnostics)
+    pendingBlockedByDeps: number;
+    pendingHasAssignee: number;
   };
 }
 
@@ -243,7 +247,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   const state = loadState();
   const workspaces = Object.values(state.workspaces);
   const claimablePlans: DiscoveredPlan[] = [];
-  const summary = { plansFound: 0, totalTasks: 0, completed: 0, inProgress: 0, claimed: 0, blocked: 0, pending: 0 };
+  const summary = { plansFound: 0, totalTasks: 0, completed: 0, inProgress: 0, claimed: 0, blocked: 0, pending: 0, claimable: 0, pendingBlockedByDeps: 0, pendingHasAssignee: 0 };
 
   if (workspaces.length === 0) {
     logger.debug('No workspaces to poll');
@@ -287,6 +291,17 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
           else summary.pending++;
         }
 
+        //NOTE(self): Compute claimable diagnostics — why are pending tasks not claimable?
+        const completedIds = new Set(plan.tasks.filter(t => t.status === 'completed').map(t => `Task ${t.number}`));
+        for (const task of plan.tasks) {
+          if (task.status !== 'pending') continue;
+          if (task.assignee) {
+            summary.pendingHasAssignee++;
+          } else if (task.dependencies.some(dep => !completedIds.has(dep))) {
+            summary.pendingBlockedByDeps++;
+          }
+        }
+
         //NOTE(self): Register plan assignees as peers
         //NOTE(self): Anyone assigned to tasks in a plan we're watching is likely a peer SOUL
         const config = getConfig();
@@ -300,6 +315,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
 
         //NOTE(self): Find claimable tasks
         const claimableTasks = getClaimableTasks(plan);
+        summary.claimable += claimableTasks.length;
 
         if (claimableTasks.length > 0) {
           claimablePlans.push({
