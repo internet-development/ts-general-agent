@@ -23,3 +23,4 @@ export * from '@adapters/github/create-pull-request-review.js';
 export * from '@adapters/github/merge-pull-request.js';
 export * from '@adapters/github/list-pull-request-reviews.js';
 export * from '@adapters/github/create-reaction.js';
+export * from '@adapters/github/delete-branch.js';

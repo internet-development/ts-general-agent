@@ -265,8 +265,8 @@ export function getClaimableTasks(plan: ParsedPlan): ParsedTask[] {
   );
 
   return plan.tasks.filter(task => {
-    //NOTE(self): Must be pending (no assignee yet)
-    if (task.status !== 'pending') return false;
+    //NOTE(self): Must be pending or blocked (blocked = failed execution, eligible for retry)
+    if (task.status !== 'pending' && task.status !== 'blocked') return false;
     if (task.assignee) return false;
 
     //NOTE(self): All dependencies must be completed

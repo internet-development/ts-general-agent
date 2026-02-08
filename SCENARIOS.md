@@ -87,8 +87,13 @@ The {{OWNER}} may ask @soul1, @soul2, and @soul3 to go and participate on a Gith
 No one observing @soul1, @soul2, and @soul3 think the SOULS are being spammy online.
 
 **Specific anti-spam guarantees:**
+
 - If @soul1 posts on a GitHub issue and only @soul2 and @soul3 reply (no humans), @soul1 does NOT post again. The round-robin is broken at the code level — the LLM never even sees the thread.
 - No SOUL posts more than 3 comments on an external issue unless a human directly @mentions them.
 - SOULs never restate what a peer already said. If a peer made the same point, they use `graceful_exit`.
 - SOULs never re-ask a question that they or a peer already asked.
 - These are enforced by `analyzeConversation()` hard stops AND by the github-response skill prompt. Code stops the obvious loops; the prompt handles the nuanced cases.
+
+# 14
+
+@soul1, @soul2, and @soul3 make a Github Repository and start working on work and a few branches get made and pushed to Github.com, but they don't get made into Pull Requests. We don't want to have any stale branches that aren't merged in so we want any of the Souls that are observing the Repository to open up Pull requests, and either get them approved or rejected (and deleted). Of course the {{SOULS}} can keep working on a PR and resubmit but it keeps the work going till the project is done.

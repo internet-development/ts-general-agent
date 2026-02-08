@@ -132,11 +132,11 @@ import {
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest } from '@local-tools/self-task-execute.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
 import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
-import { parsePlan, fetchFreshPlan, getClaimableTasks } from '@local-tools/self-plan-parse.js';
+import { parsePlan, fetchFreshPlan, getClaimableTasks, freshUpdateTaskInPlan } from '@local-tools/self-plan-parse.js';
 import {
   trackConversation as trackBlueskyConversation,
   recordParticipantActivity,
@@ -266,6 +266,13 @@ export class AgentScheduler {
   private commitmentTimer: NodeJS.Timeout | null = null;
   private sessionRefreshTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
+  //NOTE(self): Track stuck tasks for timeout recovery (30 min) and retry limiting (max 3)
+  private stuckTaskTracker: Map<string, { firstSeen: number; retryCount: number }> = new Map();
+  private static readonly STUCK_TIMEOUT_MS = 30 * 60 * 1000;
+  private static readonly MAX_TASK_RETRIES = 3;
+  //NOTE(self): Track when the scheduler started — self-improvement is gated on 48h uptime
+  private readonly startedAt = Date.now();
+  private static readonly IMPROVEMENT_BURN_IN_MS = 48 * 60 * 60 * 1000;
 
   constructor(config: Partial<SchedulerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -1770,15 +1777,22 @@ Revise and post again.`;
       }
 
       //NOTE(self): Check for self-improvement opportunity (friction-driven)
-      if (shouldAttemptImprovement(this.config.improvementMinHours)) {
+      //NOTE(self): Gated on 48h burn-in to prove stability before modifying own code
+      const uptimeMs = Date.now() - this.startedAt;
+      if (uptimeMs < AgentScheduler.IMPROVEMENT_BURN_IN_MS) {
+        logger.debug('Self-improvement gated — burn-in period active', {
+          uptimeHours: Math.round(uptimeMs / (60 * 60 * 1000)),
+          requiredHours: 48,
+        });
+      } else if (shouldAttemptImprovement(this.config.improvementMinHours)) {
         if (this.state.currentMode === 'idle') {
           await this.improvementCycle();
         }
       }
 
       //NOTE(self): Check for aspirational growth opportunity (inspiration-driven)
-      //NOTE(self): This is proactive growth, not reactive fixes
-      if (shouldAttemptGrowth(this.config.improvementMinHours)) {
+      //NOTE(self): Same 48h burn-in gate as friction-driven improvement
+      if (uptimeMs >= AgentScheduler.IMPROVEMENT_BURN_IN_MS && shouldAttemptGrowth(this.config.improvementMinHours)) {
         if (this.state.currentMode === 'idle') {
           await this.growthCycle();
         }
@@ -2279,6 +2293,296 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     }, getTimerJitter(this.appConfig.agent.name, 'plan-awareness', this.config.planAwarenessInterval));
   }
 
+  //NOTE(self): Detect and recover tasks stuck in in_progress/claimed for > 30 minutes
+  //NOTE(self): Resets them to pending so they can be reclaimed on next poll cycle
+  private async recoverStuckTasks(): Promise<void> {
+    const workspaces = getWatchedWorkspaces();
+    if (workspaces.length === 0) return;
+
+    const now = Date.now();
+
+    for (const workspace of workspaces) {
+      try {
+        const issuesResult = await github.listIssues({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          state: 'open',
+          labels: ['plan'],
+          per_page: 10,
+        });
+
+        if (!issuesResult.success) continue;
+
+        for (const issue of issuesResult.data) {
+          const plan = parsePlan(issue.body || '', issue.title);
+          if (!plan) continue;
+
+          for (const task of plan.tasks) {
+            const taskKey = `${workspace.owner}/${workspace.repo}#${issue.number}/task-${task.number}`;
+
+            //NOTE(self): Only track tasks that are actively stuck (in_progress or claimed with assignee)
+            if ((task.status === 'in_progress' || task.status === 'claimed') && task.assignee) {
+              const tracked = this.stuckTaskTracker.get(taskKey);
+              if (!tracked) {
+                //NOTE(self): First time seeing this task stuck — start tracking
+                this.stuckTaskTracker.set(taskKey, { firstSeen: now, retryCount: 0 });
+                logger.debug('Tracking potentially stuck task', { taskKey, status: task.status });
+              } else if (now - tracked.firstSeen > AgentScheduler.STUCK_TIMEOUT_MS) {
+                //NOTE(self): Stuck for > 30 min — recover it
+                logger.warn('Recovering stuck task (timeout exceeded)', {
+                  taskKey,
+                  status: task.status,
+                  assignee: task.assignee,
+                  stuckMinutes: Math.round((now - tracked.firstSeen) / 60_000),
+                });
+
+                //NOTE(self): Reset task to pending with no assignee
+                await freshUpdateTaskInPlan(
+                  workspace.owner,
+                  workspace.repo,
+                  issue.number,
+                  task.number,
+                  { status: 'pending', assignee: null }
+                );
+
+                //NOTE(self): Remove assignee from the plan issue itself
+                await github.removeIssueAssignee({
+                  owner: workspace.owner,
+                  repo: workspace.repo,
+                  issue_number: issue.number,
+                  assignees: [task.assignee],
+                });
+
+                //NOTE(self): Post a comment explaining the timeout
+                await github.createIssueComment({
+                  owner: workspace.owner,
+                  repo: workspace.repo,
+                  issue_number: issue.number,
+                  body: `**Task ${task.number} timed out** — was \`${task.status}\` assigned to @${task.assignee} for over 30 minutes with no completion. Reset to \`pending\` for retry.`,
+                });
+
+                //NOTE(self): Increment retry count, clear firstSeen so it can be re-tracked if claimed again
+                this.stuckTaskTracker.set(taskKey, { firstSeen: 0, retryCount: tracked.retryCount + 1 });
+              }
+            } else {
+              //NOTE(self): Task is pending, completed, or blocked — no longer stuck
+              //NOTE(self): Preserve retryCount if it was previously tracked (for retry limiting)
+              const tracked = this.stuckTaskTracker.get(taskKey);
+              if (tracked && (task.status === 'pending' || task.status === 'completed')) {
+                //NOTE(self): Clear firstSeen but keep retryCount
+                if (tracked.firstSeen !== 0) {
+                  this.stuckTaskTracker.set(taskKey, { ...tracked, firstSeen: 0 });
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        logger.error('Error recovering stuck tasks in workspace', {
+          workspace: `${workspace.owner}/${workspace.repo}`,
+          error: String(error),
+        });
+      }
+    }
+  }
+
+  //NOTE(self): Recover orphaned branches — task branches that were pushed but never got a PR
+  //NOTE(self): Checks blocked/pending tasks for existing remote branches, then verifies + creates PR
+  private async recoverOrphanedBranches(): Promise<boolean> {
+    const workspaces = getWatchedWorkspaces();
+    if (workspaces.length === 0) return false;
+
+    const config = this.appConfig;
+
+    for (const workspace of workspaces) {
+      try {
+        const issuesResult = await github.listIssues({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          state: 'open',
+          labels: ['plan'],
+          per_page: 10,
+        });
+
+        if (!issuesResult.success) continue;
+
+        for (const issue of issuesResult.data) {
+          const plan = parsePlan(issue.body || '', issue.title);
+          if (!plan) continue;
+
+          //NOTE(self): Look for blocked tasks with no assignee — these may have orphaned branches
+          for (const task of plan.tasks) {
+            if (task.status !== 'blocked' || task.assignee) continue;
+
+            //NOTE(self): Check retry limit
+            const taskKey = `${workspace.owner}/${workspace.repo}#${issue.number}/task-${task.number}`;
+            const tracked = this.stuckTaskTracker.get(taskKey);
+            if (tracked && tracked.retryCount >= AgentScheduler.MAX_TASK_RETRIES) continue;
+
+            //NOTE(self): Try all candidate branch names (current + legacy naming schemes)
+            const candidates = getTaskBranchCandidates(task.number, task.title);
+            const workreposDir = config.paths.workrepos;
+
+            //NOTE(self): Clone workspace to check for remote branches
+            const tempResult = await ensureWorkspace(workspace.owner, workspace.repo, workreposDir);
+            if (!tempResult.success) continue;
+
+            let branchName: string | null = null;
+            for (const candidate of candidates) {
+              const exists = await checkRemoteBranchExists(tempResult.path, candidate);
+              if (exists) {
+                branchName = candidate;
+                break;
+              }
+            }
+
+            if (!branchName) continue;
+
+            //NOTE(self): Check if a PR already exists for this branch (open or merged)
+            //NOTE(self): Prevents re-creating PRs for branches that were already handled
+            const existingPRs = await github.listPullRequests({
+              owner: workspace.owner,
+              repo: workspace.repo,
+              head: `${workspace.owner}:${branchName}`,
+              state: 'all',
+              per_page: 1,
+            });
+
+            if (existingPRs.success && existingPRs.data.length > 0) {
+              logger.debug('Branch already has a PR, skipping recovery', {
+                branchName,
+                prNumber: existingPRs.data[0].number,
+                prState: existingPRs.data[0].state,
+              });
+              continue;
+            }
+
+            //NOTE(self): Found an orphaned branch! Recover it
+            logger.info('Found orphaned branch for blocked task', {
+              taskKey,
+              branchName,
+              workspace: `${workspace.owner}/${workspace.repo}`,
+            });
+
+            ui.startSpinner(`Recovering orphaned branch: ${branchName}`);
+
+            const recovery = await recoverOrphanedBranch(
+              workspace.owner, workspace.repo, branchName, workreposDir
+            );
+
+            if (!recovery.success) {
+              logger.warn('Failed to recover orphaned branch', { branchName, error: recovery.error });
+              ui.stopSpinner('Branch recovery failed', false);
+              continue;
+            }
+
+            //NOTE(self): Verify the branch has real changes
+            const verification = await verifyGitChanges(recovery.workspacePath);
+            if (!verification.hasCommits || !verification.hasChanges) {
+              logger.warn('Orphaned branch has no real changes, skipping', { branchName });
+              ui.stopSpinner('No changes on branch', false);
+              continue;
+            }
+
+            //NOTE(self): Run tests if available
+            const testResult = await runTestsIfPresent(recovery.workspacePath);
+            if (testResult.testsExist && testResult.testsRun && !testResult.testsPassed) {
+              logger.warn('Tests failed on orphaned branch', { branchName });
+              ui.stopSpinner('Tests failed on orphaned branch', false);
+              //NOTE(self): Don't create PR for a branch with failing tests
+              continue;
+            }
+
+            //NOTE(self): Create the PR
+            const prTitle = `task(${task.number}): ${task.title}`;
+            const prBody = [
+              `## Task ${task.number} from plan #${issue.number}`,
+              '',
+              `**Plan:** ${plan.title}`,
+              `**Goal:** ${plan.goal}`,
+              '',
+              '### Changes (recovered from orphaned branch)',
+              `${verification.diffStat}`,
+              '',
+              `**Files changed (${verification.filesChanged.length}):**`,
+              ...verification.filesChanged.map(f => `- \`${f}\``),
+              '',
+              `**Tests:** ${testResult.testsExist ? (testResult.testsPassed ? 'Passed' : 'No tests ran') : 'None found'}`,
+              '',
+              '---',
+              `Part of #${issue.number}`,
+              '',
+              '_This PR was recovered from an orphaned branch. The branch was previously pushed but PR creation failed._',
+            ].join('\n');
+
+            const prResult = await createPullRequest(
+              workspace.owner, workspace.repo, branchName, prTitle, prBody, recovery.workspacePath
+            );
+
+            if (!prResult.success) {
+              logger.warn('PR creation failed during orphaned branch recovery', {
+                branchName,
+                error: prResult.error,
+              });
+              ui.stopSpinner('PR creation failed', false);
+              //NOTE(self): Track the retry
+              const retryCount = tracked ? tracked.retryCount + 1 : 1;
+              this.stuckTaskTracker.set(taskKey, { firstSeen: 0, retryCount });
+              continue;
+            }
+
+            //NOTE(self): PR created! Report task completion
+            const summary = `Task completed (recovered from orphaned branch). PR: ${prResult.prUrl}\n\nFiles changed (${verification.filesChanged.length}): ${verification.filesChanged.join(', ')}\n${verification.diffStat}\nTests: ${testResult.testsRun ? (testResult.testsPassed ? 'passed' : 'failed') : 'none'}`;
+
+            await reportTaskComplete(
+              { owner: workspace.owner, repo: workspace.repo, issueNumber: issue.number, taskNumber: task.number, plan: plan as any },
+              {
+                success: true,
+                summary,
+                filesChanged: verification.filesChanged,
+                testsRun: testResult.testsRun,
+                testsPassed: testResult.testsPassed,
+              }
+            );
+
+            ui.stopSpinner(`Recovered task ${task.number} — PR: ${prResult.prUrl}`);
+            ui.info('Orphaned branch recovered', `${workspace.owner}/${workspace.repo} task ${task.number}: ${prResult.prUrl}`);
+
+            logger.info('Successfully recovered orphaned branch into PR', {
+              taskKey,
+              branchName,
+              prUrl: prResult.prUrl,
+            });
+
+            //NOTE(self): Record experience
+            recordExperience(
+              'helped_someone',
+              `Recovered orphaned branch "${branchName}" into PR for task "${task.title}" — ${prResult.prUrl}`,
+              { source: 'github', url: `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issue.number}` }
+            );
+
+            //NOTE(self): Announce on Bluesky (closes the feedback loop for watchers)
+            await announceIfWorthy(
+              { url: prResult.prUrl!, title: `task(${task.number}): ${task.title}`, repo: `${workspace.owner}/${workspace.repo}` },
+              'pr',
+              workspace.discoveredInThread
+            );
+
+            //NOTE(self): Only recover one branch per poll cycle
+            return true;
+          }
+        }
+      } catch (error) {
+        logger.error('Error during orphaned branch recovery', {
+          workspace: `${workspace.owner}/${workspace.repo}`,
+          error: String(error),
+        });
+      }
+    }
+
+    return false;
+  }
+
   private async planAwarenessCheck(): Promise<void> {
     if (this.state.currentMode !== 'idle') return;
 
@@ -2293,6 +2597,17 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       ui.startSpinner(`Checking ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} for tasks`);
+
+      //NOTE(self): Recover stuck tasks before looking for new ones
+      await this.recoverStuckTasks();
+
+      //NOTE(self): Try to recover orphaned branches (pushed but no PR) before claiming new tasks
+      const recovered = await this.recoverOrphanedBranches();
+      if (recovered) {
+        //NOTE(self): Successfully recovered a branch — skip claiming new tasks this cycle
+        ui.stopSpinner('Orphaned branch recovered');
+        return;
+      }
 
       //NOTE(self): Poll for plans with claimable tasks
       const discoveredPlans = await pollWorkspacesForPlans();
@@ -2333,8 +2648,37 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           continue;
         }
 
-        //NOTE(self): Pick the first claimable task (lowest number)
-        const task = freshClaimable.sort((a, b) => a.number - b.number)[0];
+        //NOTE(self): Pick the first claimable task (lowest number) that hasn't exceeded retry limit
+        const sortedClaimable = freshClaimable.sort((a, b) => a.number - b.number);
+        let task = null;
+        for (const candidate of sortedClaimable) {
+          const taskKey = `${discovered.workspace.owner}/${discovered.workspace.repo}#${discovered.issueNumber}/task-${candidate.number}`;
+          const tracked = this.stuckTaskTracker.get(taskKey);
+          if (tracked && tracked.retryCount >= AgentScheduler.MAX_TASK_RETRIES) {
+            logger.warn('Skipping task — retry limit reached', {
+              taskKey,
+              retryCount: tracked.retryCount,
+              maxRetries: AgentScheduler.MAX_TASK_RETRIES,
+            });
+            continue;
+          }
+          //NOTE(self): Track retry count for blocked tasks being retried
+          if (candidate.status === 'blocked' && tracked) {
+            this.stuckTaskTracker.set(taskKey, { ...tracked, retryCount: tracked.retryCount + 1 });
+          } else if (candidate.status === 'blocked' && !tracked) {
+            this.stuckTaskTracker.set(taskKey, { firstSeen: 0, retryCount: 1 });
+          }
+          task = candidate;
+          break;
+        }
+
+        if (!task) {
+          logger.info('All claimable tasks have exceeded retry limit', {
+            workspace: `${discovered.workspace.owner}/${discovered.workspace.repo}`,
+            issueNumber: discovered.issueNumber,
+          });
+          continue;
+        }
 
         //NOTE(self): Attempt to claim
         const claimResult = await claimTaskFromPlan({
@@ -2497,9 +2841,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         return;
       }
 
-      //NOTE(self): Create feature branch
-      const slugifiedTitle = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-      const branchName = `task-${task.number}-${slugifiedTitle}`;
+      //NOTE(self): Create feature branch (shared naming logic with executor)
+      const branchName = getTaskBranchName(task.number, task.title);
       const branchResult = await createBranch(workspaceResult.path, branchName);
 
       if (!branchResult.success) {

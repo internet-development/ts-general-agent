@@ -3,12 +3,40 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { logger } from '@modules/logger.js';
 import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import type { ParsedTask, ParsedPlan } from '@local-tools/self-plan-parse.js';
 import { renderSkill } from '@modules/skills.js';
 import { cloneRepository } from '@adapters/github/clone-repository.js';
+import { runGitCommand } from '@local-tools/self-task-verify.js';
+
+//NOTE(self): Generate a consistent branch name for a task
+//NOTE(self): Shared by scheduler.ts and executor.ts to avoid divergent naming
+export function getTaskBranchName(taskNumber: number, taskTitle: string): string {
+  const prefix = `task-${taskNumber}-`;
+  const maxSlugLen = 50 - prefix.length;
+  const fullSlug = taskTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const slug = fullSlug.length > maxSlugLen
+    ? fullSlug.slice(0, maxSlugLen).replace(/-[^-]*$/, '') // truncate at word boundary
+    : fullSlug;
+  return `${prefix}${slug || 'work'}`;
+}
+
+//NOTE(self): Generate candidate branch names for a task (current + legacy naming schemes)
+//NOTE(self): Used by orphaned branch recovery to find branches created with old naming logic
+export function getTaskBranchCandidates(taskNumber: number, taskTitle: string): string[] {
+  const current = getTaskBranchName(taskNumber, taskTitle);
+
+  //NOTE(self): Legacy naming: .slice(0, 40) with no word-boundary truncation
+  const legacySlug = taskTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  const legacy = `task-${taskNumber}-${legacySlug}`;
+
+  //NOTE(self): Deduplicate (short titles produce identical results)
+  const candidates = [current];
+  if (legacy !== current) candidates.push(legacy);
+  return candidates;
+}
 
 export interface TaskExecutionParams {
   owner: string;
@@ -175,7 +203,23 @@ export async function createBranch(
   });
 }
 
+//NOTE(self): Detect the default branch from a cloned workspace
+function getDefaultBranch(workspacePath: string): string {
+  try {
+    const result = execSync(
+      'git symbolic-ref refs/remotes/origin/HEAD',
+      { cwd: workspacePath, encoding: 'utf-8', timeout: 5000 }
+    ).trim();
+    //NOTE(self): Returns e.g. "refs/remotes/origin/main" — extract branch name
+    return result.replace('refs/remotes/origin/', '') || 'main';
+  } catch {
+    return 'main';
+  }
+}
+
 //NOTE(self): Create a pull request using gh CLI
+//NOTE(self): 2-minute timeout prevents hung promises if gh CLI hangs
+//NOTE(self): Always passes --base to prevent interactive prompt (stdin is ignored)
 export async function createPullRequest(
   owner: string,
   repo: string,
@@ -184,11 +228,22 @@ export async function createPullRequest(
   body: string,
   workspacePath: string
 ): Promise<{ success: boolean; prUrl?: string; error?: string }> {
+  const baseBranch = getDefaultBranch(workspacePath);
+
   return new Promise((resolve) => {
+    let resolved = false;
+    const safeResolve = (result: { success: boolean; prUrl?: string; error?: string }) => {
+      if (!resolved) {
+        resolved = true;
+        resolve(result);
+      }
+    };
+
     const gh = spawn('gh', [
       'pr', 'create',
       '--repo', `${owner}/${repo}`,
       '--head', branchName,
+      '--base', baseBranch,
       '--title', title,
       '--body', body,
     ], {
@@ -196,23 +251,36 @@ export async function createPullRequest(
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    //NOTE(self): Kill gh process if it hangs for more than 2 minutes
+    const timeout = setTimeout(() => {
+      logger.warn('gh pr create timed out after 2 minutes, killing process', { branchName });
+      gh.kill('SIGTERM');
+      safeResolve({ success: false, error: `gh pr create timed out after 2 minutes` });
+    }, 2 * 60_000);
+
     let stdout = '';
     let stderr = '';
     gh.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
     gh.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
 
     gh.on('close', (code) => {
+      clearTimeout(timeout);
       if (code !== 0) {
-        resolve({ success: false, error: `gh pr create failed: ${stderr}` });
+        safeResolve({ success: false, error: `gh pr create failed: ${stderr}` });
         return;
       }
       const prUrl = stdout.trim();
+      if (!prUrl) {
+        safeResolve({ success: false, error: 'gh pr create returned success but no PR URL' });
+        return;
+      }
       logger.info('Created pull request', { prUrl, branchName });
-      resolve({ success: true, prUrl });
+      safeResolve({ success: true, prUrl });
     });
 
     gh.on('error', (err) => {
-      resolve({ success: false, error: `gh pr create error: ${err.message}` });
+      clearTimeout(timeout);
+      safeResolve({ success: false, error: `gh pr create error: ${err.message}` });
     });
   });
 }
@@ -247,4 +315,63 @@ export async function pushChanges(
       resolve({ success: false, error: `Git push error: ${err.message}` });
     });
   });
+}
+
+//NOTE(self): Check if a task branch exists on remote (orphaned = pushed but no PR)
+export async function checkRemoteBranchExists(
+  workspacePath: string,
+  branchName: string
+): Promise<boolean> {
+  const result = await runGitCommand(
+    ['ls-remote', '--heads', 'origin', branchName],
+    workspacePath
+  );
+  return result.success && result.stdout.length > 0;
+}
+
+//NOTE(self): Recover an orphaned branch — fetch it, check it out, return workspace ready for PR creation
+//NOTE(self): Used when a task branch was pushed but PR creation failed (task left in blocked state)
+export async function recoverOrphanedBranch(
+  owner: string,
+  repo: string,
+  branchName: string,
+  baseDir: string
+): Promise<{ success: boolean; workspacePath: string; error?: string }> {
+  //NOTE(self): Clone the repo fresh
+  const workspacePath = path.join(baseDir, `${owner}-${repo}`);
+
+  if (fs.existsSync(workspacePath)) {
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+  }
+
+  const parentDir = path.dirname(workspacePath);
+  if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true });
+  }
+
+  const cloneResult = await cloneRepository({ owner, repo, targetDir: workspacePath });
+  if (!cloneResult.success) {
+    return { success: false, workspacePath: '', error: `Clone failed: ${cloneResult.error}` };
+  }
+
+  //NOTE(self): Fetch the orphaned branch
+  const fetchResult = await runGitCommand(
+    ['fetch', 'origin', branchName],
+    workspacePath
+  );
+  if (!fetchResult.success) {
+    return { success: false, workspacePath, error: `Fetch branch failed: ${fetchResult.stderr}` };
+  }
+
+  //NOTE(self): Check out the branch (tracking remote)
+  const checkoutResult = await runGitCommand(
+    ['checkout', '-b', branchName, `origin/${branchName}`],
+    workspacePath
+  );
+  if (!checkoutResult.success) {
+    return { success: false, workspacePath, error: `Checkout failed: ${checkoutResult.stderr}` };
+  }
+
+  logger.info('Recovered orphaned branch', { owner, repo, branchName, workspacePath });
+  return { success: true, workspacePath };
 }

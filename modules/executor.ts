@@ -41,7 +41,7 @@ import { processBase64ImageForUpload, processFileImageForUpload } from '@modules
 import { updateIssue } from '@adapters/github/update-issue.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest } from '@local-tools/self-task-execute.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, getTaskBranchName } from '@local-tools/self-task-execute.js';
 import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@local-tools/self-task-report.js';
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { parsePlan } from '@local-tools/self-plan-parse.js';
@@ -617,6 +617,29 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
         const result = await github.mergePullRequest({ owner, repo, pull_number, commit_title, commit_message, merge_method });
         if (result.success) {
+          //NOTE(self): Delete the feature branch after successful merge (cleanup)
+          try {
+            //NOTE(self): Fetch the PR to get its head ref for branch deletion
+            const prResponse = await fetch(
+              `https://api.github.com/repos/${owner}/${repo}/pulls/${pull_number}`,
+              { headers: github.getAuthHeaders() }
+            );
+            if (prResponse.ok) {
+              const prData = await prResponse.json();
+              const headRef = prData.head?.ref;
+              if (headRef && headRef !== 'main' && headRef !== 'master') {
+                const deleteResult = await github.deleteBranch(owner, repo, headRef);
+                if (deleteResult.success) {
+                  logger.info('Deleted feature branch after merge', { branch: headRef, pull_number });
+                } else {
+                  logger.debug('Branch deletion failed (non-fatal)', { branch: headRef, error: deleteResult.error });
+                }
+              }
+            }
+          } catch (branchDeleteError) {
+            logger.debug('Branch cleanup error (non-fatal)', { error: String(branchDeleteError) });
+          }
+
           return {
             tool_use_id: call.id,
             content: JSON.stringify({
@@ -2100,9 +2123,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           return { tool_use_id: call.id, content: `Error setting up workspace: ${workspaceResult.error}`, is_error: true };
         }
 
-        //NOTE(self): Create feature branch
-        const taskSlug = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
-        const taskBranchName = `task-${task_number}-${taskSlug}`;
+        //NOTE(self): Create feature branch (shared naming logic with scheduler)
+        const taskBranchName = getTaskBranchName(task_number, task.title);
         const branchResult = await createBranch(workspaceResult.path, taskBranchName);
 
         if (!branchResult.success) {
