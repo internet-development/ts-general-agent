@@ -761,7 +761,7 @@ export class AgentScheduler {
         );
 
         if (threadResult.success) {
-          const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username);
+          const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, {}, getPeerUsernames());
 
           if (analysis.shouldRespond) {
             //NOTE(self): Check if we already have this in pending

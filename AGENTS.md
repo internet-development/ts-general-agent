@@ -547,8 +547,13 @@ This means the agent correctly handles GitHub links even when they appear trunca
 │ 2. If agent's comment is most recent → don't respond        │
 │    (prevents consecutive replies)                           │
 │ 3. If OWNER shared the URL → respond (highest priority)     │
-│ 4. If agent was @mentioned in issue → respond               │
-│ 5. Otherwise → don't respond                                │
+│ 4. If only peer SOULs replied (no humans) → don't respond   │
+│    (breaks round-robin loops between agents)                │
+│    Exception: respond if a peer @mentioned us directly      │
+│ 5. If agent has 3+ comments → don't respond                 │
+│    unless a human @mentioned us in last 5 comments          │
+│ 6. If agent was @mentioned in issue → respond               │
+│ 7. Otherwise → don't respond                                │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
@@ -568,15 +573,29 @@ The agent also monitors GitHub notifications directly:
 
 - Polls every 2 minutes
 - Filters to issues where agent is `participating`
-- Same consecutive-reply prevention applies
+- Passes `getPeerUsernames()` to `analyzeConversation()` so all peer-aware checks apply
+- Same consecutive-reply, round-robin, and saturation prevention applies
 
-### Consecutive Reply Prevention
+### GitHub Spam Prevention (Three Hard Stops)
 
-The agent **NEVER** posts consecutive comments on GitHub issues:
+Three code-level checks in `analyzeConversation()` prevent GitHub spam. All apply regardless of entry path (Bluesky→GitHub or direct GitHub notifications).
 
-- If agent's comment is the most recent → wait for others to respond
-- This applies even for owner requests
-- Ensures the agent doesn't spam threads
+**1. Consecutive Reply Prevention**
+- If agent's comment is the most recent → `shouldRespond: false`
+- Applies even for owner requests
+- Prevents back-to-back self-replies
+
+**2. Peer Round-Robin Prevention** (v5.4.8)
+- If agent has commented AND all replies since are from peer SOULs (no humans) → `shouldRespond: false`
+- Breaks the infinite loop: SOUL A posts → SOUL B and C see "new reply" → they post → SOUL A sees "new replies" → repeat forever
+- Escape hatch: if a peer `@mentions` you directly, you still respond (they're asking you something)
+- Requires `peerUsernames` — passed at all call sites
+
+**3. Comment Saturation Cap** (v5.4.8)
+- If agent already has 3+ comments in the thread → `shouldRespond: false`
+- Unless a human directly `@mentioned` the agent in the last 5 comments
+- Safety net even if peer detection fails (e.g., peers not yet registered)
+- 3 comments is generous for an external issue — if you haven't moved the needle in 3, a 4th won't help
 
 ---
 
@@ -1001,6 +1020,10 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 
 6. **Peer-Aware Analysis**: `analyzeConversation()` downgrades urgency when 2+ peers have already commented, signaling the SOUL to only contribute what's genuinely missing.
 
+7. **Peer Round-Robin Hard Stop** (v5.4.8): If ALL replies since the agent's last comment are from peer SOULs (zero human comments), `analyzeConversation()` returns `shouldRespond: false`. This is a code-level block — the LLM never sees the thread. Escape hatch: direct `@mention` by a peer.
+
+8. **Comment Saturation Cap** (v5.4.8): If the agent has 3+ comments in the thread and no human has `@mentioned` it in the last 5 comments, `shouldRespond: false`. This catches the slow-burn pattern where agents accumulate comments over time even with occasional human engagement.
+
 **Design Principles:**
 
 - No new env vars or config — peers are inferred from context
@@ -1313,8 +1336,8 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. Fatal errors restore terminal state (raw mode, input box, status bar) before exit. | Code |
 | 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in BOTH code paths (scheduler + executor). Both paths pass full test results (testsRun, testsPassed) in completion reports. | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
-| 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. | Code |
-| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages, conversation conclusion heuristics (max replies, max depth, disengagement, circular detection), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses, session + API deduplication prevents double replies. | Code + Prompt |
+| 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. **Discussion vs. work awareness:** github-response skill teaches SOULs to distinguish discussions (share ideas) from work mandates (ship code). **No self-introduction:** username already visible on GitHub comments. | Code + Prompt |
+| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages, conversation conclusion heuristics (max replies, max depth, disengagement, circular detection), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses, session + API deduplication prevents double replies. **Peer round-robin hard stop:** if only peer SOULs replied since last comment, `shouldRespond: false` (code-level block). **Saturation cap:** 3+ comments → only respond if human @mentions. **Both enforced in `analyzeConversation()` at all call sites.** | Code + Prompt |
 
 **Enforcement types:**
 - **Code** — Behavior is enforced by code logic (cannot be bypassed)

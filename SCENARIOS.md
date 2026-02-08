@@ -80,6 +80,15 @@ And whenever @soul1 does something, the observer should be able to read it. The 
 
 The {{OWNER}} may ask @soul1, @soul2, and @soul3 to go and participate on a Github Issue like https://github.com/internet-development/nextjs-sass-starter/issues/41 over Bluesky, and @soul1, @soul2, and @soul3 would have their conversation over Bluesky and actually add useful comments, they might even be inspired enough to create a separate issue if it is inspiring or something they wish to go deeper on, leading to a lot of great content to read.
 
+**Critical:** Not every GitHub issue is a work order. If the issue is a discussion, brainstorm, or question, the SOULs share ideas and perspectives — they don't force a PR or deliverable. Ideas ARE the contribution. They also never introduce themselves or state their GitHub username in a comment — their username is already visible on every comment they post. The SOULs read the room and respond proportionally.
+
 # 13
 
 No one observing @soul1, @soul2, and @soul3 think the SOULS are being spammy online.
+
+**Specific anti-spam guarantees:**
+- If @soul1 posts on a GitHub issue and only @soul2 and @soul3 reply (no humans), @soul1 does NOT post again. The round-robin is broken at the code level — the LLM never even sees the thread.
+- No SOUL posts more than 3 comments on an external issue unless a human directly @mentions them.
+- SOULs never restate what a peer already said. If a peer made the same point, they use `graceful_exit`.
+- SOULs never re-ask a question that they or a peer already asked.
+- These are enforced by `analyzeConversation()` hard stops AND by the github-response skill prompt. Code stops the obvious loops; the prompt handles the nuanced cases.

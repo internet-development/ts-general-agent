@@ -188,6 +188,62 @@ export function analyzeConversation(
     };
   }
 
+  //NOTE(self): Peer-only round-robin prevention
+  //NOTE(self): If all replies since our last comment are from peer SOULs (no humans),
+  //NOTE(self): don't respond — breaks infinite peer-triggering loops.
+  //NOTE(self): Escape hatch: respond if a peer @mentioned us directly.
+  if (agentHasCommented && commentsAfterAgent > 0 && peerUsernames.length > 0) {
+    const agentLastIdx = comments.reduce((lastIdx, c, i) =>
+      c.user.login.toLowerCase() === agentUsername.toLowerCase() ? i : lastIdx, -1);
+    const commentsAfter = comments.slice(agentLastIdx + 1);
+    const humanComments = commentsAfter.filter(c => {
+      const login = c.user.login.toLowerCase();
+      return login !== agentUsername.toLowerCase() &&
+        !peerUsernames.some(p => p.toLowerCase() === login);
+    });
+
+    if (humanComments.length === 0) {
+      const peerMentionedUs = commentsAfter.some(c =>
+        peerUsernames.some(p => p.toLowerCase() === c.user.login.toLowerCase()) &&
+        c.body.toLowerCase().includes(`@${agentUsername.toLowerCase()}`)
+      );
+      if (!peerMentionedUs) {
+        return {
+          shouldRespond: false,
+          reason: 'Only peer SOULs replied — avoid round-robin',
+          urgency: 'none',
+          context: `All ${commentsAfterAgent} replies since your last comment are from peer SOULs. Wait for a human to engage.`,
+        };
+      }
+    }
+  }
+
+  //NOTE(self): Comment saturation — 3+ comments is already generous for an external issue.
+  //NOTE(self): Only continue if a human directly @mentioned us recently.
+  if (agentHasCommented) {
+    const agentCommentCount = comments.filter(c =>
+      c.user.login.toLowerCase() === agentUsername.toLowerCase()
+    ).length;
+
+    if (agentCommentCount >= 3) {
+      const recentHumanMention = comments.slice(-5).some(c => {
+        const login = c.user.login.toLowerCase();
+        const isHuman = login !== agentUsername.toLowerCase() &&
+          !peerUsernames.some(p => p.toLowerCase() === login);
+        return isHuman && c.body.toLowerCase().includes(`@${agentUsername.toLowerCase()}`);
+      });
+
+      if (!recentHumanMention) {
+        return {
+          shouldRespond: false,
+          reason: `You've contributed ${agentCommentCount} times — only respond if directly asked`,
+          urgency: 'none',
+          context: `You have ${agentCommentCount} comments in this thread. Only respond if a human directly @mentions you.`,
+        };
+      }
+    }
+  }
+
   //NOTE(self): Check if someone replied to agent
   if (agentHasCommented && commentsAfterAgent > 0) {
     return {
