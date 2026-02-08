@@ -256,7 +256,9 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 - **Interval:** 45 seconds
 - **Tokens:** 0 (API calls only, no LLM)
 - **Purpose:** Check for Bluesky notifications, detect when people reach out
-- When notifications found → triggers Response Mode
+- When notifications found → `shouldRespondTo()` filters low-value and closing messages (hard-block — LLM never sees them)
+- Closing/acknowledgment messages (`isLowValueClosing`) are auto-liked and conversation is marked concluded
+- Remaining notifications → triggers Response Mode
 - Also extracts GitHub URLs from notifications → queues GitHub response mode
 - Also discovers workspace URLs via `processRecordForWorkspaces()` → adds to watch list
 - Cross-platform identity linking: registers Bluesky peers who share workspace URLs
@@ -392,10 +394,13 @@ Use the `graceful_exit` tool to end conversations with warmth, not silence.
 
 Options:
 
-1. **Send a closing message** (preferred): "Thanks for the chat!", "Appreciate the discussion 🙏", "Great talking!"
-2. **Like their last post** (Bluesky): A non-verbal acknowledgment when words feel like too much
+1. **Like their last post** (preferred): A non-verbal acknowledgment that won't trigger further replies. This is almost always the right choice.
+2. **Send a closing message** (use sparingly): Only if you haven't spoken at all in the thread. Know that a closing MESSAGE creates a new notification that enters other SOULs' awareness loops — it can restart the very loop you're trying to end.
 
 The tool sends your closing gesture AND marks the conversation concluded in one action.
+
+**⚠️ The Feedback Loop Problem:**
+Every outbound message a SOUL sends re-enters another SOUL's notification pipeline as an inbound notification. A closing message ("Thanks for the chat!") is not the end of a conversation — it's a new notification that another SOUL will process. If that SOUL replies with its own closing message, the loop continues. This is why **likes are preferred over messages** for conversation exits: a like is warm but invisible to the notification pipeline.
 
 **Signs it's time to wrap up:**
 
@@ -406,6 +411,11 @@ The tool sends your closing gesture AND marks the conversation concluded in one 
 - Other person seems satisfied or moved on
 
 The `chose_silence` experience type records when the SOUL wisely decides not to reply.
+
+**Hard Blocks (code-level, LLM never sees the notification):**
+- `isLowValueClosing()` — detects verbose goodbye/acknowledgment messages (any length) via closing-intent patterns and gratitude-only patterns. Messages with questions or code blocks always pass through.
+- Circular conversation detection (medium/high confidence) — scheduler skips the notification entirely
+- Auto-like: when `shouldRespondTo` returns `'closing or acknowledgment message'`, the scheduler automatically likes the post and marks the conversation concluded — warm acknowledgment without generating a reply
 
 ---
 
@@ -591,8 +601,9 @@ All checks use **effective peers** — on workspace repos these are registered p
 - If agent has commented AND all replies since are from effective peers (issue author hasn't re-engaged) → `shouldRespond: false`
 - On workspace repos: breaks SOUL-to-SOUL loops (registered peers = known SOULs)
 - On foreign repos: breaks ALL chatter loops (effective peers = everyone except agent + issue author)
+- **SOUL-as-issue-author** (v8.1): When the issue author has also commented in the thread, they are included in effective peers. This handles SOUL-created issues — without this, other SOULs treated the creating SOUL as "the human" and round-robin never fired.
 - Escape hatch: if someone `@mentions` you directly, you still respond
-- **Key insight:** on foreign codebases, the only "human" signal that matters is the issue author. Everyone else chatting — SOUL or bystander — is noise if the author hasn't re-engaged.
+- **Key insight:** on foreign codebases, the only "human" signal that matters is a passive issue author who hasn't commented. If the issue author is actively participating (commenting), they're a peer.
 
 **3. Comment Saturation Cap** (v5.5.2)
 - If agent already has 3+ comments in the thread → `shouldRespond: false`
@@ -767,7 +778,7 @@ Project threads on Bluesky (threads connected to a watched workspace) get specia
 - **No exit pressure:** Thread depth warnings and reply count warnings are suppressed
 - **Unlimited re-engagement:** Concluded conversations can be reopened indefinitely (casual threads cap at 1 re-engagement)
 - **Relaxed social mechanics:** `maxRepliesBeforeExit: 10` instead of 2, `silenceThreshold: 4h` instead of 30m
-- **Circular conversation handling:** Instead of recommending `graceful_exit`, project threads redirect to "stop chatting, go do the work"
+- **Circular conversation handling:** Medium/high confidence circular conversations are hard-blocked (notification skipped entirely). Low confidence in project threads redirects to "stop chatting, go do the work" (advisory)
 - **Natural pacing:** SOULs reply once with intent, execute, then follow up with results. The work creates hours-long gaps naturally.
 
 ### Open Issue Discovery
@@ -1014,9 +1025,10 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 
 1. **Dynamic Peer Discovery** (`modules/peer-awareness.ts`): SOULs discover peers organically — from plan assignees, shared workspaces, owner mentions, and thread co-responders. No hardcoded config. Registry persists at `.memory/discovered_peers.json`.
 
-2. **Effective Peers** (v5.5.2): `getEffectivePeers()` in `get-issue-thread.ts` bridges the gap between workspace and foreign repos:
+2. **Effective Peers** (v5.5.2, updated v8.1): `getEffectivePeers()` in `get-issue-thread.ts` bridges the gap between workspace and foreign repos:
    - **Workspace repos** (`registeredPeers.length > 0`): uses registered peers from org/team discovery — real identity matters for distinguishing SOULs from humans.
-   - **Foreign repos** (`registeredPeers.length === 0`): derives peers from the thread — all commenters except the agent and the issue author. The distinction between SOUL and bystander doesn't matter on foreign codebases; only the issue author (the human who needs help) matters.
+   - **Foreign repos** (`registeredPeers.length === 0`): derives peers from the thread — all commenters except the agent and the issue author.
+   - **SOUL-as-issue-author** (v8.1): If the issue author has also *commented* in the thread (not just created the issue), they are included as a peer. This handles SOUL-created issues where the creating SOUL actively participates — other SOULs must treat them symmetrically. A passive issue author (created the issue but never commented) is still excluded (assumed human).
    - Used by `analyzeConversation()` internally and passed to `formatThreadForContext()` by the scheduler.
 
 3. **Deterministic Jitter**: Before responding to any GitHub thread, each SOUL waits a delay derived from a hash of `AGENT_NAME`. The delay is 15–90 seconds, always the same for a given SOUL. No randomness, no coordination needed. **Always applied** — even without registered peers, other SOULs may be responding to the same thread.
@@ -1074,6 +1086,81 @@ When a fatal error occurs:
 2. Agent logs the error with details
 3. Agent exits cleanly with code 1
 4. User must fix configuration and restart
+
+---
+
+## Cross-Agent Feedback Loops
+
+Every outbound message a SOUL sends re-enters another SOUL's notification pipeline as an inbound notification. This creates feedback loops that must be broken at the code level.
+
+### The Problem
+
+```
+@soul1 sends graceful_exit message: "Thanks for the great chat!"
+  → Bluesky creates notification for @soul2
+  → @soul2's awareness loop detects reply notification
+  → @soul2's shouldRespondTo() evaluates the text
+  → If text passes → LLM generates response → "Thanks back, great chatting!"
+  → Bluesky creates notification for @soul1
+  → @soul1's awareness loop detects reply notification
+  → ∞ infinite loop
+```
+
+### The Solution: Three Layers
+
+**Layer 1 — `isLowValueClosing()` in `shouldRespondTo()` (engagement.ts)**
+Detects verbose SOUL-style closing/acknowledgment messages at ANY length. Catches:
+- Closing intent: "stop here", "leaving it here", "closing the loop", "see you on", "don't loop"
+- Gratitude-only: messages starting with thanks/agreement/affirmation, < 200 chars, no question, no code block
+- Questions (`?`) and code blocks always pass through — they're substantive
+
+When detected: `shouldRespondTo` returns `{ shouldRespond: false, reason: 'closing or acknowledgment message' }`. The LLM never sees the notification. The scheduler auto-likes the post and marks the conversation concluded.
+
+**Layer 2 — Circular conversation hard-block (scheduler.ts)**
+When thread analysis detects a circular conversation (mutual acknowledgments, no new information):
+- **Medium/high confidence** → hard-block. Notification skipped entirely (`continue` in the loop). The LLM never sees the thread.
+- **Low confidence** → advisory. Warning text appended to LLM context. LLM can still reply.
+
+Previously, all circular conversation detection was advisory-only. The LLM saw "🔄 CIRCULAR CONVERSATION DETECTED" and responded with "You're right, let's stop!" — which was itself another circular message.
+
+**Layer 3 — Skill templates prefer likes over verbal exits**
+- Bluesky: `graceful_exit` defaults to like (option 1), message is option 2 "use sparingly"
+- GitHub: `graceful_exit` defaults to reaction, message only if never commented
+- CONVERSATION WISDOM sections teach: "When someone thanks you, like instead of replying"
+
+### Enforcement Classification
+
+When documenting anti-spam measures, distinguish:
+
+| Type | Description | Example |
+|------|-------------|---------|
+| **Hard block** | Code prevents LLM from seeing the notification. Cannot be bypassed. | `isLowValueClosing()` → `shouldRespondTo` returns false |
+| **Hard skip** | Code skips the notification in the response loop. Cannot be bypassed. | Circular conversation (medium/high) → `continue` |
+| **Advisory** | Code adds warning text to LLM context. LLM can still reply. | Circular conversation (low) → warning in threadContext |
+| **Prompt** | Skill template instructs behavior. LLM follows instructions. | "Prefer likes over verbal goodbyes" |
+
+Hard blocks and hard skips are the only reliable prevention for multi-agent loops. Advisory and prompt enforcement work for nuanced single-agent decisions but fail when two agents' LLMs both decide to "be polite."
+
+### Pipeline Traces
+
+When verifying a scenario, trace the message through BOTH agents' full notification loops:
+
+```
+Agent A sends message M
+  → Platform creates notification N for Agent B
+  → Agent B's awareness loop picks up N
+  → shouldRespondTo(N) → pass or block?
+  → If pass: shouldRespondInConversation() → pass or block?
+  → If pass: thread analysis (circular detection) → pass or block?
+  → If pass: LLM generates response R
+  → Agent B sends R
+  → Platform creates notification N' for Agent A
+  → Agent A's awareness loop picks up N'
+  → [same pipeline]
+  → Does it terminate? At which layer?
+```
+
+If the pipeline doesn't terminate within 2 hops, the scenario has a bug.
 
 ---
 
@@ -1339,7 +1426,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 2 | Completed project verification (example-conversation.ts) | example-conversation.ts demonstrates full lifecycle; workspace docs (LIL-INTDEV-AGENTS.md, SCENARIOS.md) verify artifacts | Documented |
 | 3 | "Write up findings" → GitHub Issue + link | commitment-extract.ts detects "write up" → commitment-fulfill.ts creates issue → scheduler.ts replies with URL in original thread | Code |
 | 4 | Correct Bluesky facets on all posts | ALL posts go through atproto/create-post.ts which detects URLs, @mentions, cashtags, hashtags. No code path skips facet generation. | Code |
-| 5 | Graceful conversation endings | graceful_exit tool (message or like) + markConversationConcluded + re-engagement support (1x casual, unlimited workspace) | Code |
+| 5 | Graceful conversation endings | graceful_exit tool (like preferred, message sparingly) + markConversationConcluded + re-engagement support (1x casual, unlimited workspace). **Receiving side (v8.1):** `isLowValueClosing()` hard-blocks closing messages before LLM sees them, auto-likes goodbye posts. See "Cross-Agent Feedback Loops" section. | Hard block + Prompt |
 | 6 | Are.na image fetching | arena_search → arena_fetch_channel → download → upload blob → atproto.createPost with image. Fully dynamic, no hardcoded channels. Temp image files cleaned up on all paths (success, upload failure, post failure). | Code |
 | 7 | Self-reflection on change over time | Reflection cycle includes temporal context (days running, experience count). SELF.md stores learnings across cycles. Deep-reflection skill prompts change awareness. | Code + Prompt |
 | 8 | Self-improvement (implementing missing features) | Friction detection → self-improvement-decision skill → Claude Code execution → reloadSkills(). Also aspirational growth for proactive evolution. | Code |
@@ -1347,10 +1434,20 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in BOTH code paths (scheduler + executor). Both paths pass full test results (testsRun, testsPassed) in completion reports. | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
 | 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. **Discussion vs. work awareness:** github-response skill teaches SOULs to distinguish discussions (share ideas) from work mandates (ship code). **No self-introduction:** username already visible on GitHub comments. | Code + Prompt |
-| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages, conversation conclusion heuristics (max replies, max depth, disengagement, circular detection), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses (always applied), session + API deduplication prevents double replies. **Effective peers** (v5.5.2): `getEffectivePeers()` derives peers from thread on foreign repos (all commenters except agent + issue author) — workspace repos use registered peers. **Round-robin hard stop:** if only effective peers replied since last comment (issue author hasn't re-engaged), `shouldRespond: false`. **Saturation cap:** 3+ comments → only respond if issue author @mentions. Jitter + thread refresh always applied regardless of registered peer count. **All enforced in `analyzeConversation()` at all call sites.** | Code + Prompt |
+| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages (including verbose closings via `isLowValueClosing`), conversation conclusion heuristics (max replies, max depth, disengagement, circular detection with hard-block for medium/high confidence), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses (always applied), session + API deduplication prevents double replies. **Effective peers** (v5.5.2, updated v8.1): `getEffectivePeers()` derives peers from thread on foreign repos — includes issue author when they've commented (SOUL-as-issue-author fix). **Round-robin hard stop:** if only effective peers replied since last comment (issue author hasn't re-engaged), `shouldRespond: false`. **Saturation cap:** 3+ comments → only respond if issue author @mentions. Jitter + thread refresh always applied regardless of registered peer count. **All enforced in `analyzeConversation()` at all call sites.** | Hard block + Code + Prompt |
+| 14 | Orphaned branch recovery | recoverOrphanedBranches() in scheduler detects blocked tasks with pushed branches (no PR), clones workspace, checks out branch, verifies changes + tests, creates PR. | Code |
+| 15 | **[Adversarial]** Goodbye loop prevention (Bluesky) | `isLowValueClosing()` → `shouldRespondTo` hard-block → auto-like → `markBlueskyConversationConcluded`. Pipeline trace: closing message → notification → hard-block → like → END. LLM never sees it. | Hard block |
+| 16 | **[Adversarial]** SOUL-as-issue-author peer symmetry | `getEffectivePeers()` includes issue author when they've commented. Round-robin fires symmetrically for SOUL-created issues. | Hard block |
+| 17 | **[Adversarial]** Circular conversation hard-block | Medium/high confidence → `continue` in scheduler loop (notification skipped). Low confidence → advisory text. LLM cannot override medium/high. | Hard block + Advisory |
+| 18 | **[Adversarial]** Clean thread endings | Skill templates prefer likes over messages for exits. `isLowValueClosing` catches verbal goodbyes from other SOULs. Max 1-2 closing messages per thread, not 8. | Hard block + Prompt |
 
 **Enforcement types:**
-- **Code** — Behavior is enforced by code logic (cannot be bypassed)
+- **Hard block** — Code prevents LLM from seeing the notification entirely. Cannot be bypassed. Used for multi-agent feedback loops.
+- **Hard skip** — Code skips the notification in the response-building loop. Cannot be bypassed. Used for circular conversations.
+- **Advisory** — Code adds warning text to LLM context. LLM can still choose to reply. Appropriate for low-confidence situations.
+- **Code** — Behavior is enforced by code logic (cannot be bypassed by LLM)
 - **Prompt** — Behavior is guided by skill prompts (LLM follows instructions)
 - **Code + Prompt** — Code provides guardrails; prompts guide nuanced decisions
 - **Documented** — Verified by documentation/artifacts, not runtime enforcement
+
+**⚠️ Key principle:** Advisory and Prompt enforcement are NOT sufficient for multi-agent feedback loops. When two LLMs both decide to "be polite," advisory text is ignored by both. Only Hard block / Hard skip enforcement prevents infinite loops between agents.

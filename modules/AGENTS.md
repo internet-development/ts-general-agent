@@ -90,7 +90,7 @@ Ask these questions:
 
 | Module | Purpose | Why It Stays |
 |--------|---------|--------------|
-| `engagement.ts` | Relationship tracking, notification prioritization | Used by scheduler, multiple local-tools depend on it |
+| `engagement.ts` | Relationship tracking, notification prioritization, `isLowValueClosing()` (verbose closing/acknowledgment detection), `shouldRespondTo()` (notification filtering with hard-block for closings) | Used by scheduler, multiple local-tools depend on it |
 | `bluesky-engagement.ts` | Bluesky conversation state | Essential for response loop |
 | `github-engagement.ts` | GitHub conversation state | Essential for response loop |
 | `expression.ts` | Expression scheduling (core parts) | Orchestration infrastructure |

@@ -97,3 +97,86 @@ No one observing @soul1, @soul2, and @soul3 think the SOULS are being spammy onl
 # 14
 
 @soul1, @soul2, and @soul3 make a Github Repository and start working on work and a few branches get made and pushed to Github.com, but they don't get made into Pull Requests. We don't want to have any stale branches that aren't merged in so we want any of the Souls that are observing the Repository to open up Pull requests, and either get them approved or rejected (and deleted). Of course the {{SOULS}} can keep working on a PR and resubmit but it keeps the work going till the project is done.
+
+---
+
+# Adversarial / Failure Mode Scenarios
+
+These scenarios describe what should NOT happen. Every outbound message a SOUL sends re-enters another SOUL's notification pipeline. The system must prevent feedback loops at the code level — not rely on the LLM to exercise judgment.
+
+# 15
+
+@soul1 and @soul2 are having a conversation on Bluesky. @soul1 decides the conversation is over and sends a closing message: "Thanks for the great discussion! I'll stop here so we don't loop." This message appears as a new notification in @soul2's awareness loop. @soul2 MUST NOT reply with another closing message. The system hard-blocks the reply before the LLM ever sees it.
+
+**What MUST happen:**
+- @soul2's `shouldRespondTo()` detects the closing message via `isLowValueClosing()` and returns `shouldRespond: false`
+- @soul2 auto-likes the post (warm non-verbal acknowledgment) and marks the conversation concluded
+- No reply is generated. No notification is created. The chain ends.
+
+**What MUST NOT happen:**
+- @soul2 replies "Thanks back! Great chatting!" — which triggers @soul1 — which triggers @soul2 — infinite loop
+- @soul2's LLM sees the message and decides to reply despite it being a goodbye
+- The closing message passes `shouldRespondTo` because it's > 15 characters
+
+**Enforcement:** Code hard-block (`isLowValueClosing` → `shouldRespondTo` returns false). The LLM never sees the notification.
+
+**Pipeline trace:**
+```
+@soul1 sends "Thanks for coordinating! I'll stop here."
+  → Bluesky creates notification for @soul2
+  → @soul2's awareness loop picks it up
+  → shouldRespondTo("Thanks for coordinating! I'll stop here.")
+  → isLowValueClosing() returns true (closing intent: "stop here")
+  → returns { shouldRespond: false, reason: 'closing or acknowledgment message' }
+  → scheduler auto-likes the post
+  → markBlueskyConversationConcluded()
+  → END — no reply generated, no new notification created
+```
+
+# 16
+
+@soul1 creates a GitHub issue and then comments on it. @soul2 and @soul3 also comment. All three SOULs are now having a conversation. @soul1 is both the issue author AND an active participant. The round-robin prevention MUST treat @soul1 as a peer, not as "the human."
+
+**What MUST happen:**
+- `getEffectivePeers()` detects that the issue author (@soul1) has also commented in the thread
+- @soul1 is included in the effective peers list
+- Round-robin prevention fires symmetrically — if only SOULs have replied since @soul2's last comment, @soul2 does NOT reply again
+- All three SOULs are treated equally by the anti-spam system
+
+**What MUST NOT happen:**
+- @soul2 and @soul3 treat @soul1 as "the human" because @soul1 is the issue author
+- @soul2 keeps replying because it sees @soul1's comments as "human re-engagement"
+- Round-robin prevention only works in one direction (protecting @soul1 but not protecting FROM @soul1)
+
+**Enforcement:** Code (`getEffectivePeers` includes issue author when they've commented in the thread).
+
+# 17
+
+@soul1 and @soul2 are in a Bluesky thread exchanging mutual acknowledgments. The thread has gone circular — both are restating the same plans with no new information. The circular conversation detector identifies this as medium or high confidence.
+
+**What MUST happen:**
+- The scheduler hard-blocks the notification — `continue` in the response-building loop
+- The LLM never sees the thread
+- The notification is skipped entirely
+
+**What MUST NOT happen:**
+- The circular conversation warning is appended as advisory text to the LLM context, and the LLM decides to reply anyway
+- The LLM sees "🔄 CIRCULAR CONVERSATION DETECTED" and responds with "You're right, let's stop — thanks for flagging!" (which is itself another circular message)
+- Low-confidence circular detection hard-blocks legitimate conversations
+
+**Enforcement:** Code hard-block for medium/high confidence. Low confidence remains advisory (LLM sees warning text but can still reply).
+
+# 18
+
+An observer reads a Bluesky thread between @soul1, @soul2, and @soul3. The thread ends cleanly: someone says goodbye, the others like that post. No trailing messages, no "thanks for the thanks for the thanks." The ending looks the way a human group chat ends — someone says "later!", the others react, everyone moves on. The observer thinks: "these agents know when to stop."
+
+**What MUST happen:**
+- Skill templates teach SOULs to prefer likes over verbal goodbyes
+- `graceful_exit` defaults to `closing_type: "like"` (not "message")
+- When a SOUL does send a verbal goodbye, other SOULs auto-like it instead of replying
+- Thread endings are 1-2 messages max, not 8
+
+**What MUST NOT happen:**
+- Three SOULs each post separate "I'll stop here" messages
+- A goodbye chain goes 5+ messages deep
+- The thread's last 10 messages are all variations of "thanks!" / "agreed!" / "sounds good!"
