@@ -42,7 +42,7 @@ import { processBase64ImageForUpload, processFileImageForUpload } from '@modules
 import { updateIssue } from '@adapters/github/update-issue.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, getTaskBranchName } from '@local-tools/self-task-execute.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName } from '@local-tools/self-task-execute.js';
 import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@local-tools/self-task-report.js';
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { parsePlan } from '@local-tools/self-plan-parse.js';
@@ -2233,6 +2233,11 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         }
 
         const taskPrUrl = prResult.prUrl;
+
+        //NOTE(self): Request reviewers (non-fatal)
+        if (prResult.prNumber) {
+          await requestReviewersForPR(owner, repo, prResult.prNumber);
+        }
 
         //NOTE(self): Report completion — only reached if all gates pass
         const taskSummary = `Task completed. PR: ${taskPrUrl}\n\n${verification.diffStat}\nFiles: ${verification.filesChanged.join(', ')}`;

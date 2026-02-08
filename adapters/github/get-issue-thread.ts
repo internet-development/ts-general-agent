@@ -158,13 +158,23 @@ export function getEffectivePeers(
   if (registeredPeers.length > 0) return registeredPeers;
 
   //NOTE(self): Derive from thread — everyone except agent and issue author
+  //NOTE(self): Exception: if the issue author also COMMENTED (not just created the issue),
+  //NOTE(self): include them as a peer. This handles SOUL-created issues where the author
+  //NOTE(self): is actively participating — other SOULs should treat them symmetrically.
+  const issueAuthor = thread.issue.user.login.toLowerCase();
+  const authorHasCommented = thread.comments.some(
+    c => c.user.login.toLowerCase() === issueAuthor
+  );
+
   const seen = new Set<string>();
   const derived: string[] = [];
   for (const comment of thread.comments) {
     const login = comment.user.login;
     const lower = login.toLowerCase();
     if (lower === agentUsername.toLowerCase()) continue;
-    if (lower === thread.issue.user.login.toLowerCase()) continue;
+    //NOTE(self): Skip issue author ONLY if they haven't commented — if they're actively
+    //NOTE(self): participating in discussion, they're a peer not a passive "human"
+    if (lower === issueAuthor && !authorHasCommented) continue;
     if (seen.has(lower)) continue;
     seen.add(lower);
     derived.push(login);

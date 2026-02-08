@@ -132,7 +132,7 @@ import {
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
 import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
@@ -146,6 +146,7 @@ import {
   shouldRespondInConversation,
   getConversation as getBlueskyConversation,
   cleanupOldConversations as cleanupOldBlueskyConversations,
+  markConversationConcluded as markBlueskyConversationConcluded,
 } from '@modules/bluesky-engagement.js';
 import {
   enqueueCommitment,
@@ -1083,6 +1084,20 @@ export class AgentScheduler {
         const check = shouldRespondTo(pn.notification, config.owner.blueskyDid);
         if (!check.shouldRespond) {
           logger.debug('Skipping notification', { reason: check.reason, uri: pn.notification.uri });
+
+          //NOTE(self): Auto-like closing/acknowledgment messages — warm acknowledgment without creating a new reply
+          if (check.reason === 'closing or acknowledgment message') {
+            const record = pn.notification.record as { reply?: { root?: { uri?: string; cid?: string } } };
+            const postUri = pn.notification.uri;
+            const postCid = pn.notification.cid;
+            if (postUri && postCid) {
+              atproto.likePost({ uri: postUri, cid: postCid }).catch(() => {});
+              //NOTE(self): Also conclude the conversation — the goodbye was received
+              const rootUri = record?.reply?.root?.uri || postUri;
+              markBlueskyConversationConcluded(rootUri, 'Closing message received — liked and concluded');
+            }
+          }
+
           //NOTE(self): Record choosing silence so reflection can learn from it
           if (choseSilenceCount < 3) {
             recordExperience(
@@ -1230,10 +1245,23 @@ export class AgentScheduler {
               threadContext += `\n\n  **Full conversation:**\n${ta.conversationHistory.split('\n').map(line => `  ${line}`).join('\n')}`;
             }
 
-            //NOTE(self): Detect and warn about circular conversations (thank-you chains)
-            //NOTE(self): Even project threads should avoid circular acknowledgment loops
+            //NOTE(self): Detect and hard-block circular conversations (thank-you chains)
+            //NOTE(self): Medium/high confidence circular conversations are skipped entirely
+            //NOTE(self): Low confidence still passes through with advisory warning
             if (ta.circularConversation.isCircular) {
               const cc = ta.circularConversation;
+
+              //NOTE(self): Hard block for medium/high confidence — skip notification entirely
+              if (cc.confidence !== 'low') {
+                logger.info('Hard-blocking circular conversation', {
+                  uri: n.uri,
+                  confidence: cc.confidence,
+                  pattern: cc.pattern,
+                });
+                continue;
+              }
+
+              //NOTE(self): Low confidence — advisory warning only
               if (isProjectThread) {
                 //NOTE(self): Project threads: warn but don't recommend exit — redirect to doing work
                 threadContext += `\n\n  🔄 **ACKNOWLEDGMENT LOOP** — You're going back and forth without new information.`;
@@ -2537,6 +2565,11 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               continue;
             }
 
+            //NOTE(self): Request reviewers (non-fatal)
+            if (prResult.prNumber) {
+              await requestReviewersForPR(workspace.owner, workspace.repo, prResult.prNumber);
+            }
+
             //NOTE(self): PR created! Report task completion
             const summary = `Task completed (recovered from orphaned branch). PR: ${prResult.prUrl}\n\nFiles changed (${verification.filesChanged.length}): ${verification.filesChanged.join(', ')}\n${verification.diffStat}\nTests: ${testResult.testsRun ? (testResult.testsPassed ? 'passed' : 'failed') : 'none'}`;
 
@@ -2966,6 +2999,11 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       const prUrl = prResult.prUrl;
       logger.info('PR created for task', { prUrl, taskNumber: task.number });
+
+      //NOTE(self): Request reviewers (non-fatal)
+      if (prResult.prNumber) {
+        await requestReviewersForPR(workspace.owner, workspace.repo, prResult.prNumber);
+      }
 
       //NOTE(self): Re-fetch the plan to get latest state
       const updatedPlan = markResult.success ? { ...plan, rawBody: markResult.newBody } : plan;

@@ -469,6 +469,35 @@ export function hasUrgentNotifications(notifications: PrioritizedNotification[])
   );
 }
 
+//NOTE(self): Detect verbose SOUL-style closing/acknowledgment messages
+//NOTE(self): SOULs write "Thanks for coordinating! I'll stop here so we don't loop" — 80+ chars but zero value
+//NOTE(self): Questions and code blocks always return false (substantive content)
+export function isLowValueClosing(text: string): boolean {
+  const trimmed = text.trim();
+
+  //NOTE(self): Questions are always substantive
+  if (trimmed.includes('?')) return false;
+
+  //NOTE(self): Code blocks are always substantive
+  if (trimmed.includes('```')) return false;
+
+  //NOTE(self): Closing intent patterns — verbose goodbye/sign-off language
+  const closingIntentPatterns = [
+    /\b(stop(?:ping)? here|leaving it here|closing (?:on my|the loop|this))\b/i,
+    /\b(see you (?:on|in)|let'?s keep the rest in)\b/i,
+    /\b(tag .+ (?:on|in|when)|wait for the .+ PR)\b/i,
+    /\bdon'?t (?:keep )?loop/i,
+  ];
+
+  const hasClosingIntent = closingIntentPatterns.some(p => p.test(trimmed));
+
+  //NOTE(self): Gratitude-only patterns — starts with thanks/agreement, short, no question, no code
+  const gratitudePattern = /^(thanks|thank you|thx|ty|appreciate|perfect|sounds good|sounds great|great|awesome|wonderful|excellent|amazing|totally|deal|love it|all good|makes sense|aligned|nice|yep|agreed)/i;
+  const isGratitudeOnly = gratitudePattern.test(trimmed) && trimmed.length < 200;
+
+  return hasClosingIntent || isGratitudeOnly;
+}
+
 //NOTE(self): Low-cost heuristic to check if a notification warrants a response
 //NOTE(self): Better to stay silent than add noise to a conversation
 export function shouldRespondTo(notification: AtprotoNotification, ownerDid: string): {
@@ -527,6 +556,12 @@ export function shouldRespondTo(notification: AtprotoNotification, ownerDid: str
         return { shouldRespond: false, reason: 'low-value acknowledgment' };
       }
     }
+  }
+
+  //NOTE(self): Catch verbose closing/acknowledgment messages regardless of length
+  //NOTE(self): SOULs write "Thanks for coordinating! I'll stop here so we don't loop" — 80+ chars but zero value
+  if (isLowValueClosing(text)) {
+    return { shouldRespond: false, reason: 'closing or acknowledgment message' };
   }
 
   //NOTE(self): Direct questions warrant responses

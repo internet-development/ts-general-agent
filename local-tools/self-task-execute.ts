@@ -10,8 +10,12 @@ import type { ParsedTask, ParsedPlan } from '@local-tools/self-plan-parse.js';
 import { renderSkill } from '@modules/skills.js';
 import { cloneRepository } from '@adapters/github/clone-repository.js';
 import { createPullRequest as createPullRequestAPI } from '@adapters/github/create-pull-request.js';
+import { requestPullRequestReviewers } from '@adapters/github/request-pull-request-reviewers.js';
+import { listRepositoryCollaborators } from '@adapters/github/list-repository-collaborators.js';
+import { getAuth } from '@adapters/github/authenticate.js';
 import { runGitCommand } from '@local-tools/self-task-verify.js';
 import { createSlug } from '@modules/strings.js';
+import { getPeerUsernames, registerPeer } from '@modules/peer-awareness.js';
 
 //NOTE(self): Generate a consistent branch name for a task
 //NOTE(self): Shared by scheduler.ts and executor.ts to avoid divergent naming
@@ -143,6 +147,24 @@ export async function executeTask(params: TaskExecutionParams): Promise<TaskExec
   };
 }
 
+//NOTE(self): Configure git identity in a workspace so commits are attributed to the SOUL
+//NOTE(self): Uses the SOUL's GitHub username + noreply email — local config only, never touches global
+function configureGitIdentity(workspacePath: string): void {
+  const auth = getAuth();
+  if (!auth) return;
+
+  const { username } = auth;
+  const email = `${username}@users.noreply.github.com`;
+
+  try {
+    execSync(`git config user.name "${username}"`, { cwd: workspacePath, timeout: 5000 });
+    execSync(`git config user.email "${email}"`, { cwd: workspacePath, timeout: 5000 });
+    logger.info('Configured git identity for workspace', { username, email, workspacePath });
+  } catch (err) {
+    logger.warn('Failed to configure git identity (non-fatal)', { username, error: String(err) });
+  }
+}
+
 //NOTE(self): Fresh clone the workspace repository (rm + clone every time for clean state)
 //NOTE(self): Uses cloneRepository adapter for authenticated HTTPS clones (supports private repos + push)
 export async function ensureWorkspace(
@@ -172,6 +194,9 @@ export async function ensureWorkspace(
   if (!result.success) {
     return { success: false, path: '', error: result.error };
   }
+
+  //NOTE(self): Configure git identity so commits are attributed to the SOUL, not the host machine
+  configureGitIdentity(workspacePath);
 
   return { success: true, path: workspacePath };
 }
@@ -228,7 +253,7 @@ export async function createPullRequest(
   title: string,
   body: string,
   workspacePath: string
-): Promise<{ success: boolean; prUrl?: string; error?: string }> {
+): Promise<{ success: boolean; prUrl?: string; prNumber?: number; error?: string }> {
   const baseBranch = getDefaultBranch(workspacePath);
 
   logger.info('Creating pull request via GitHub API', { owner, repo, branchName, baseBranch });
@@ -251,8 +276,76 @@ export async function createPullRequest(
     return { success: false, error: 'PR creation succeeded but no URL returned' };
   }
 
-  logger.info('Created pull request', { prUrl, branchName });
-  return { success: true, prUrl };
+  const prNumber = result.data.number;
+  logger.info('Created pull request', { prUrl, prNumber, branchName });
+  return { success: true, prUrl, prNumber };
+}
+
+//NOTE(self): Request reviewers for a PR after creation
+//NOTE(self): Central function used by all 3 callers (scheduler executeClaimedTask, recoverOrphanedBranches, executor)
+//NOTE(self): Non-fatal — failures are logged but never block PR creation or task completion
+export async function requestReviewersForPR(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<{ requested: string[]; skipped: string[]; error?: string }> {
+  const auth = getAuth();
+  const selfUsername = auth?.username;
+
+  //NOTE(self): Get candidates from peer registry first
+  let candidates = getPeerUsernames().filter(u => u !== selfUsername);
+
+  //NOTE(self): Cold-start fallback: discover collaborators when peer registry is empty
+  if (candidates.length === 0) {
+    const collabResult = await listRepositoryCollaborators(owner, repo);
+    if (collabResult.success && collabResult.data.length > 0) {
+      //NOTE(self): Filter to push-access users, exclude self
+      const pushCollaborators = collabResult.data
+        .filter(c => c.permissions.push && c.login !== selfUsername);
+
+      //NOTE(self): Register discovered collaborators as peers (seeds registry for future PRs)
+      for (const collab of pushCollaborators) {
+        registerPeer(collab.login, 'workspace', `${owner}/${repo}`);
+      }
+
+      candidates = pushCollaborators.map(c => c.login);
+      if (candidates.length > 0) {
+        logger.info('Discovered collaborators as reviewer candidates', {
+          owner, repo, candidates,
+        });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    logger.info('No reviewer candidates found', { owner, repo, pullNumber });
+    return { requested: [], skipped: [] };
+  }
+
+  //NOTE(self): Cap at 3 reviewers
+  const reviewers = candidates.slice(0, 3);
+  const skipped = candidates.slice(3);
+
+  const result = await requestPullRequestReviewers({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    reviewers,
+  });
+
+  if (!result.success) {
+    logger.warn('Failed to request reviewers (non-fatal)', {
+      owner, repo, pullNumber, reviewers, error: result.error,
+    });
+    return { requested: [], skipped: [], error: result.error };
+  }
+
+  const actuallyRequested = result.data.requested_reviewers.map(r => r.login);
+  logger.info('Requested reviewers for PR', {
+    owner, repo, pullNumber, requested: actuallyRequested,
+  });
+
+  return { requested: actuallyRequested, skipped };
 }
 
 //NOTE(self): Push changes after task completion (branch-aware)
@@ -358,6 +451,9 @@ export async function recoverOrphanedBranch(
   if (!cloneResult.success) {
     return { success: false, workspacePath: '', error: `Clone failed: ${cloneResult.error}` };
   }
+
+  //NOTE(self): Configure git identity so commits are attributed to the SOUL, not the host machine
+  configureGitIdentity(workspacePath);
 
   //NOTE(self): Fetch the orphaned branch
   const fetchResult = await runGitCommand(
