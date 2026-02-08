@@ -229,6 +229,15 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
       ui.error('Fatal API Error', error.message);
       ui.printResponse(`The agent must stop: ${error.message}\n\nPlease check your API configuration and restart.`);
       logger.error('Fatal API error - shutting down', { code: error.code, message: error.message });
+
+      //NOTE(self): Restore terminal state before exit — raw mode left on corrupts the terminal
+      ui.stopSpinner();
+      ui.finalizeInputBox();
+      ui.disableStatusBar();
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
       process.exit(1);
     }
 

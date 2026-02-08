@@ -191,6 +191,10 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         //NOTE(self): Upload the processed image blob
         const uploadResult = await atproto.uploadBlob(processedImage.buffer, processedImage.mimeType);
         if (!uploadResult.success) {
+          //NOTE(self): Clean up temp image file on upload failure
+          if (imageFilePath) {
+            try { fs.unlinkSync(imageFilePath); } catch { /* best effort */ }
+          }
           return { tool_use_id: call.id, content: `Error uploading image: ${uploadResult.error}`, is_error: true };
         }
 
@@ -209,19 +213,19 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           }],
         });
 
+        //NOTE(self): Clean up temp image file regardless of post outcome
+        if (imageFilePath) {
+          try {
+            fs.unlinkSync(imageFilePath);
+            logger.debug('Cleaned up image file', { filePath: imageFilePath });
+          } catch (err) {
+            logger.warn('Failed to clean up image file', { filePath: imageFilePath, error: String(err) });
+          }
+        }
+
         if (postResult.success) {
           //NOTE(self): Only show in chat after successful post - reduces perceived duplicates
           ui.social(`${config.agent.name} (with image)`, text);
-
-          //NOTE(self): Clean up the temp image file after successful post
-          if (imageFilePath) {
-            try {
-              fs.unlinkSync(imageFilePath);
-              logger.debug('Cleaned up image file', { filePath: imageFilePath });
-            } catch (err) {
-              logger.warn('Failed to clean up image file', { filePath: imageFilePath, error: String(err) });
-            }
-          }
 
           //NOTE(self): Log post for future context
           //NOTE(self): Convert AT URI to bsky.app URL

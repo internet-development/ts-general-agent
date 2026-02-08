@@ -2627,6 +2627,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           success: true,
           summary,
           filesChanged: verification.filesChanged,
+          testsRun: testResult.testsRun,
+          testsPassed: testResult.testsPassed,
         }
       );
 
