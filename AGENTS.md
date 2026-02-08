@@ -788,7 +788,16 @@ Beyond plan-labeled issues, SOULs discover ALL open issues in watched workspaces
 - `pollWorkspacesForOpenIssues()` runs every 3 minutes alongside plan polling
 - Finds issues without the `plan` label (feature requests, bugs, asks filed by anyone)
 - Filters out PRs (GitHub API returns them as issues), plan issues (handled separately), issues assigned to others
-- Queues them for GitHub response mode — SOULs engage with and pick up open issues
+- Queues them for GitHub response mode with `isWorkspaceIssue: true` — SOULs engage proactively even without @mentions
+- `analyzeConversation()` with `isWorkspaceIssue: true` bypasses the "not mentioned" gate — workspace issues are our responsibility
+
+### Workspace Issue Auto-Close
+
+When a SOUL finishes engaging with a workspace issue (via `graceful_exit` or `conclude_conversation`), the issue is automatically closed. This prevents resolved issues from lingering open:
+
+- **Workspace repos** (`www-lil-intdev-*` prefix, checked via `isWatchingWorkspace()`): auto-close after conversation conclusion
+- **External repos**: never auto-close — that's the maintainer's job
+- Plan issues use their own close logic (`handlePlanComplete()` → `closePlan()`) and are not affected
 
 ### Plan Awareness Loop (6th Scheduler Loop)
 

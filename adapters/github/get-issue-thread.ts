@@ -144,6 +144,9 @@ export interface AnalyzeConversationOptions {
   //NOTE(self): If true, this PR was discovered via workspace polling (proactive review)
   //NOTE(self): Agent should respond even when not mentioned
   isWorkspacePRReview?: boolean;
+  //NOTE(self): If true, this issue was discovered in a watched workspace (proactive engagement)
+  //NOTE(self): Agent should respond even when not mentioned — workspace issues are our responsibility
+  isWorkspaceIssue?: boolean;
 }
 
 //NOTE(self): Derive effective peers for a thread
@@ -189,7 +192,7 @@ export function analyzeConversation(
   peerUsernames: string[] = []
 ): ConversationAnalysis {
   const { issue, comments, agentHasCommented, commentsAfterAgent, isOpen } = thread;
-  const { isOwnerRequest = false, isWorkspacePRReview = false } = options;
+  const { isOwnerRequest = false, isWorkspacePRReview = false, isWorkspaceIssue = false } = options;
 
   //NOTE(self): Use effective peers — thread-derived when no registered peers exist
   const effectivePeers = getEffectivePeers(thread, agentUsername, peerUsernames);
@@ -356,6 +359,30 @@ export function analyzeConversation(
         reason: 'Open PR in watched workspace needs review',
         urgency: 'low',
         context: `PR discovered in watched workspace. Review and provide feedback.`,
+      };
+    }
+
+    //NOTE(self): Proactive workspace issue engagement — respond to open issues in our workspaces
+    //NOTE(self): Workspace issues are our responsibility — we don't need an @mention to engage
+    if (isWorkspaceIssue) {
+      const peerCommentCount = comments.filter(c =>
+        effectivePeers.some(p => c.user.login.toLowerCase() === p.toLowerCase())
+      ).length;
+
+      if (peerCommentCount >= 2) {
+        return {
+          shouldRespond: true,
+          reason: `Open issue in workspace — ${peerCommentCount} peers already engaged, only add what's missing`,
+          urgency: 'low',
+          context: `Issue discovered in watched workspace. Peers have already contributed.`,
+        };
+      }
+
+      return {
+        shouldRespond: true,
+        reason: 'Open issue in watched workspace needs attention',
+        urgency: 'low',
+        context: `Issue discovered in watched workspace. Engage proactively.`,
       };
     }
 

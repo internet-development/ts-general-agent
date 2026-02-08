@@ -2853,7 +2853,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             );
             if (!threadResult.success) continue;
 
-            const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, {}, getPeerUsernames());
+            const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, { isWorkspaceIssue: true }, getPeerUsernames());
             if (analysis.shouldRespond) {
               this.state.pendingGitHubConversations.push({
                 owner: workspace.owner,

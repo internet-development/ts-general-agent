@@ -57,7 +57,7 @@ export function registerOnPRMerged(callback: () => void): void {
 }
 import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 import { createMemo, createGitHubIssue } from '@local-tools/self-github-create-issue.js';
-import { watchWorkspace, getWatchedWorkspaceForRepo } from '@modules/workspace-discovery.js';
+import { watchWorkspace, getWatchedWorkspaceForRepo, isWatchingWorkspace } from '@modules/workspace-discovery.js';
 import { announceIfWorthy } from '@modules/announcement.js';
 import { recordExperience } from '@local-tools/self-capture-experiences.js';
 import {
@@ -1897,6 +1897,23 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           //NOTE(self): Mark conversation concluded
           markGitHubConversationConcluded(owner, repo, number, reason);
 
+          //NOTE(self): Auto-close workspace issues when gracefully exiting
+          //NOTE(self): Workspace issues that are concluded should be closed — don't leave resolved issues open
+          //NOTE(self): Only for workspace repos (www-lil-intdev-* prefix) — never close external repo issues
+          if (isWatchingWorkspace(owner, repo)) {
+            const closeResult = await github.updateIssue({
+              owner,
+              repo,
+              issue_number: number,
+              state: 'closed',
+            });
+            if (closeResult.success) {
+              logger.info('Auto-closed workspace issue after graceful_exit', { owner, repo, number });
+            } else {
+              logger.debug('Failed to auto-close workspace issue', { error: closeResult.error });
+            }
+          }
+
           return {
             tool_use_id: call.id,
             content: JSON.stringify({
@@ -1966,6 +1983,21 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             logger.info('Concluding untracked GitHub conversation', { owner, repo, number, reason });
           }
           markGitHubConversationConcluded(owner, repo, number, reason);
+
+          //NOTE(self): Auto-close workspace issues when concluding — same rationale as graceful_exit
+          if (isWatchingWorkspace(owner, repo)) {
+            const closeResult = await github.updateIssue({
+              owner,
+              repo,
+              issue_number: number,
+              state: 'closed',
+            });
+            if (closeResult.success) {
+              logger.info('Auto-closed workspace issue after conclude_conversation', { owner, repo, number });
+            } else {
+              logger.debug('Failed to auto-close workspace issue', { error: closeResult.error });
+            }
+          }
 
           return {
             tool_use_id: call.id,

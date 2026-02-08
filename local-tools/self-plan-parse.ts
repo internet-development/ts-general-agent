@@ -164,7 +164,18 @@ export function parsePlan(issueBody: string, issueTitle: string): ParsedPlan | n
           if (depsMatch) {
             const deps = depsMatch[1].trim();
             if (deps.toLowerCase() !== 'none') {
-              currentTask.dependencies = deps.split(',').map(d => d.trim()).filter(Boolean);
+              //NOTE(self): Normalize dependency strings to canonical "Task N" format
+              //NOTE(self): Handles: "Task 2", "task 2", "Task-2", "2", "task-2", etc.
+              currentTask.dependencies = deps.split(',').map(d => {
+                const trimmedDep = d.trim();
+                if (!trimmedDep) return '';
+                //NOTE(self): Extract the task number from various formats
+                const numMatch = trimmedDep.match(/(?:task[\s\-]*)?(\d+)/i);
+                if (numMatch) {
+                  return `Task ${numMatch[1]}`;
+                }
+                return trimmedDep; //NOTE(self): Fallback to raw string if no number found
+              }).filter(Boolean);
             }
             continue;
           }
