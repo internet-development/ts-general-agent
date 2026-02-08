@@ -34,6 +34,7 @@ import {
   recordReflectionComplete,
   getRelationshipSummary,
   shouldRespondTo,
+  canPostOriginal,
   getSeenAt,
   updateSeenAt,
   type PrioritizedNotification,
@@ -1526,6 +1527,13 @@ export class AgentScheduler {
   }
 
   private async expressionCycle(): Promise<void> {
+    //NOTE(self): Check daily post limit before spending tokens on expression
+    const postingDecision = canPostOriginal();
+    if (!postingDecision.shouldPost) {
+      logger.info('Expression cycle skipped', { reason: postingDecision.reason });
+      return;
+    }
+
     this.state.currentMode = 'expressing';
     ui.startSpinner('Expressing a thought');
 

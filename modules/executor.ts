@@ -25,7 +25,7 @@ import { graphemeLen } from '@atproto/common-web';
 
 //NOTE(self): Bluesky enforces 300 graphemes max per post
 const BLUESKY_MAX_GRAPHEMES = 300;
-import { markInteractionResponded } from '@modules/engagement.js';
+import { markInteractionResponded, recordOriginalPost } from '@modules/engagement.js';
 import {
   markConversationConcluded as markBlueskyConversationConcluded,
   getConversation as getBlueskyConversation,
@@ -100,6 +100,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         if (result.success) {
           //NOTE(self): Only show in chat after successful post - reduces perceived duplicates
           ui.social(`${config.agent.name}`, text);
+          recordOriginalPost();
           return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
         }
         return { tool_use_id: call.id, content: `Error: ${result.error}`, is_error: true };
@@ -252,6 +253,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             },
           };
           logPost(imagePostLogEntry);
+          recordOriginalPost();
 
           return {
             tool_use_id: call.id,

@@ -2,6 +2,7 @@ import { config as dotenvConfig } from 'dotenv';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '@modules/logger.js';
+import { getRepoRoot } from '@modules/sandbox.js';
 
 dotenvConfig();
 
@@ -44,7 +45,7 @@ function optionalEnv(key: string, defaultValue: string): string {
 }
 
 export function loadConfig(): Config {
-  const root = process.cwd();
+  const root = getRepoRoot();
 
   return {
     agent: {
