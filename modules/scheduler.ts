@@ -2979,7 +2979,9 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       ui.stopSpinner('Workspace check complete');
       if (summaryParts.length > 0) {
-        ui.info('Workspace', summaryParts.join(' · '));
+        const workspaces = getWatchedWorkspaces();
+        const wsLabel = workspaces.map(w => w.url).join(', ');
+        ui.info('Workspace', `${wsLabel}\n  ${summaryParts.join(' · ')}`);
       }
     } catch (error) {
       logger.error('Plan awareness check error', { error: String(error) });
