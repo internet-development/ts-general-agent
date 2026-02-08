@@ -42,6 +42,20 @@ export interface DiscoveredPlan {
   claimableTasks: ParsedTask[];
 }
 
+//NOTE(self): Summary stats from plan polling — used for terminal display
+export interface PlanPollResult {
+  claimablePlans: DiscoveredPlan[];
+  summary: {
+    plansFound: number;
+    totalTasks: number;
+    completed: number;
+    inProgress: number;
+    claimed: number;
+    blocked: number;
+    pending: number;
+  };
+}
+
 interface WorkspaceDiscoveryState {
   //NOTE(self): Workspaces we're watching (discovered via Bluesky)
   workspaces: Record<string, WatchedWorkspace>;
@@ -225,14 +239,15 @@ export function parseGitHubWorkspaceUrl(url: string): { owner: string; repo: str
 }
 
 //NOTE(self): Poll all watched workspaces for plan issues
-export async function pollWorkspacesForPlans(): Promise<DiscoveredPlan[]> {
+export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   const state = loadState();
   const workspaces = Object.values(state.workspaces);
-  const discoveredPlans: DiscoveredPlan[] = [];
+  const claimablePlans: DiscoveredPlan[] = [];
+  const summary = { plansFound: 0, totalTasks: 0, completed: 0, inProgress: 0, claimed: 0, blocked: 0, pending: 0 };
 
   if (workspaces.length === 0) {
     logger.debug('No workspaces to poll');
-    return [];
+    return { claimablePlans, summary };
   }
 
   logger.info('Polling workspaces for plans', { workspaceCount: workspaces.length });
@@ -261,6 +276,17 @@ export async function pollWorkspacesForPlans(): Promise<DiscoveredPlan[]> {
         const plan = parsePlan(issue.body || '', issue.title);
         if (!plan) continue;
 
+        //NOTE(self): Accumulate task stats across all plans
+        summary.plansFound++;
+        for (const task of plan.tasks) {
+          summary.totalTasks++;
+          if (task.status === 'completed') summary.completed++;
+          else if (task.status === 'in_progress') summary.inProgress++;
+          else if (task.status === 'claimed') summary.claimed++;
+          else if (task.status === 'blocked') summary.blocked++;
+          else summary.pending++;
+        }
+
         //NOTE(self): Register plan assignees as peers
         //NOTE(self): Anyone assigned to tasks in a plan we're watching is likely a peer SOUL
         const config = getConfig();
@@ -276,7 +302,7 @@ export async function pollWorkspacesForPlans(): Promise<DiscoveredPlan[]> {
         const claimableTasks = getClaimableTasks(plan);
 
         if (claimableTasks.length > 0) {
-          discoveredPlans.push({
+          claimablePlans.push({
             workspace,
             issueNumber: issue.number,
             issueUrl: issue.html_url,
@@ -310,7 +336,7 @@ export async function pollWorkspacesForPlans(): Promise<DiscoveredPlan[]> {
   state.lastFullPoll = new Date().toISOString();
   saveState();
 
-  return discoveredPlans;
+  return { claimablePlans, summary };
 }
 
 //NOTE(self): A non-plan issue discovered in a watched workspace
@@ -388,9 +414,9 @@ export async function getNextClaimableTask(): Promise<{
   task: ParsedTask;
   plan: ParsedPlan;
 } | null> {
-  const plans = await pollWorkspacesForPlans();
+  const { claimablePlans } = await pollWorkspacesForPlans();
 
-  for (const discoveredPlan of plans) {
+  for (const discoveredPlan of claimablePlans) {
     if (discoveredPlan.claimableTasks.length > 0) {
       //NOTE(self): Return the first claimable task (lowest number)
       const task = discoveredPlan.claimableTasks.sort((a, b) => a.number - b.number)[0];

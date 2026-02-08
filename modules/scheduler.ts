@@ -128,6 +128,7 @@ import {
   type DiscoveredPlan,
   type DiscoveredIssue,
   type ReviewablePR,
+  type PlanPollResult,
 } from '@modules/workspace-discovery.js';
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
@@ -2666,20 +2667,30 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Poll for plans with claimable tasks
-      const discoveredPlans = await pollWorkspacesForPlans();
+      const { claimablePlans: discoveredPlans, summary: planSummary } = await pollWorkspacesForPlans();
+
+      //NOTE(self): Build workspace summary for terminal display
+      const summaryParts: string[] = [];
+      if (planSummary.plansFound > 0) {
+        const taskParts: string[] = [];
+        if (planSummary.completed > 0) taskParts.push(`${planSummary.completed} done`);
+        if (planSummary.inProgress > 0) taskParts.push(`${planSummary.inProgress} active`);
+        if (planSummary.claimed > 0) taskParts.push(`${planSummary.claimed} claimed`);
+        if (planSummary.blocked > 0) taskParts.push(`${planSummary.blocked} blocked`);
+        if (planSummary.pending > 0) taskParts.push(`${planSummary.pending} pending`);
+        summaryParts.push(`${planSummary.plansFound} plan${planSummary.plansFound === 1 ? '' : 's'} (${planSummary.totalTasks} tasks: ${taskParts.join(', ')})`);
+      }
 
       if (discoveredPlans.length === 0) {
         logger.debug('No claimable tasks found in watched workspaces');
-        ui.stopSpinner('No claimable tasks');
-        return;
+      } else {
+        logger.info('Found plans with claimable tasks', {
+          planCount: discoveredPlans.length,
+          totalClaimable: discoveredPlans.reduce((sum, p) => sum + p.claimableTasks.length, 0),
+        });
       }
 
-      logger.info('Found plans with claimable tasks', {
-        planCount: discoveredPlans.length,
-        totalClaimable: discoveredPlans.reduce((sum, p) => sum + p.claimableTasks.length, 0),
-      });
-
-      //NOTE(self): Attempt to claim and execute ONE task
+      //NOTE(self): Attempt to claim and execute ONE task (if any claimable)
       //NOTE(self): Fair distribution: only claim one task per poll cycle
       for (const discovered of discoveredPlans) {
         if (discovered.claimableTasks.length === 0) continue;
@@ -2799,8 +2810,10 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       //NOTE(self): Check for PRs needing review in workspaces
       //NOTE(self): Only if we're still idle (task execution didn't activate)
+      let reviewablePRCount = 0;
       if (this.state.currentMode === 'idle') {
         const reviewablePRs = await pollWorkspacesForReviewablePRs();
+        reviewablePRCount = reviewablePRs.length;
         if (reviewablePRs.length > 0) {
           logger.info('Found PRs needing review', { count: reviewablePRs.length });
           //NOTE(self): Review ONE PR per poll cycle (fair distribution)
@@ -2809,8 +2822,10 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Discover open issues (not just plans) filed by anyone in watched workspaces
+      let openIssueCount = 0;
       if (this.state.currentMode === 'idle') {
         const openIssues = await pollWorkspacesForOpenIssues();
+        openIssueCount = openIssues.length;
         if (openIssues.length > 0) {
           logger.info('Found open issues in watched workspaces', { count: openIssues.length });
           //NOTE(self): Queue them as GitHub conversations for response
@@ -2849,7 +2864,15 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           }
         }
       }
+
+      //NOTE(self): Build and display workspace summary
+      if (reviewablePRCount > 0) summaryParts.push(`${reviewablePRCount} PR${reviewablePRCount === 1 ? '' : 's'} to review`);
+      if (openIssueCount > 0) summaryParts.push(`${openIssueCount} open issue${openIssueCount === 1 ? '' : 's'}`);
+
       ui.stopSpinner('Workspace check complete');
+      if (summaryParts.length > 0) {
+        ui.info('Workspace', summaryParts.join(' · '));
+      }
     } catch (error) {
       logger.error('Plan awareness check error', { error: String(error) });
       ui.stopSpinner('Workspace check error', false);
