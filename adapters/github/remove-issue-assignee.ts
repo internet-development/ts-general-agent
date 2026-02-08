@@ -23,6 +23,25 @@ export async function removeIssueAssignee(
   }
 
   try {
+    //NOTE(self): Guard — never remove the last assignee from an issue
+    //NOTE(self): Fetch current assignees first, then check if removal would leave zero
+    const issueResponse = await fetch(
+      `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}`,
+      { headers: getAuthHeaders() }
+    );
+
+    if (issueResponse.ok) {
+      const issueData = await issueResponse.json();
+      const currentAssignees: string[] = (issueData.assignees || []).map((a: { login: string }) => a.login.toLowerCase());
+      const removing = new Set(params.assignees.map(a => a.toLowerCase()));
+      const remaining = currentAssignees.filter(a => !removing.has(a));
+
+      if (remaining.length === 0 && currentAssignees.length > 0) {
+        //NOTE(self): Would remove the last assignee — skip the removal
+        return { success: true, data: issueData };
+      }
+    }
+
     const response = await fetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/assignees`,
       {

@@ -4,6 +4,7 @@
 import { createIssue } from '@adapters/github/create-issue.js';
 import { updateIssue } from '@adapters/github/update-issue.js';
 import { logger } from '@modules/logger.js';
+import { getConfig } from '@modules/config.js';
 import type { TaskStatus, ParsedTask } from '@local-tools/self-plan-parse.js';
 
 export interface TaskDefinition {
@@ -161,12 +162,15 @@ export async function createPlan(params: CreatePlanParams): Promise<CreatePlanRe
 
   logger.info('Creating plan issue', { owner, repo, title, taskCount: plan.tasks.length });
 
+  //NOTE(self): Always assign the creating SOUL — issues must never be unassigned
+  const config = getConfig();
   const result = await createIssue({
     owner,
     repo,
     title,
     body,
     labels: ['plan', 'plan:active'],
+    assignees: [config.github.username],
   });
 
   if (!result.success) {

@@ -84,6 +84,8 @@ export interface GitHubPullRequest {
   updated_at: string;
   merged_at: string | null;
   closed_at: string | null;
+  assignees?: Array<{ login: string; id: number }>;
+  requested_reviewers?: Array<{ login: string; id: number }>;
   //NOTE(self): PR statistics from GitHub API
   comments?: number;
   review_comments?: number;

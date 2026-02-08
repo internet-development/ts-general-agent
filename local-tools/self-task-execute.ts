@@ -149,6 +149,7 @@ export async function executeTask(params: TaskExecutionParams): Promise<TaskExec
 
 //NOTE(self): Configure git identity in a workspace so commits are attributed to the SOUL
 //NOTE(self): Uses the SOUL's GitHub username + noreply email — local config only, never touches global
+//NOTE(self): Also writes .claude/settings.json to suppress Co-Authored-By trailers
 function configureGitIdentity(workspacePath: string): void {
   const auth = getAuth();
   if (!auth) return;
@@ -162,6 +163,20 @@ function configureGitIdentity(workspacePath: string): void {
     logger.info('Configured git identity for workspace', { username, email, workspacePath });
   } catch (err) {
     logger.warn('Failed to configure git identity (non-fatal)', { username, error: String(err) });
+  }
+
+  //NOTE(self): Suppress Claude Code co-author attribution — commits should only show the PAT user
+  try {
+    const claudeDir = path.join(workspacePath, '.claude');
+    if (!fs.existsSync(claudeDir)) {
+      fs.mkdirSync(claudeDir, { recursive: true });
+    }
+    const settingsPath = path.join(claudeDir, 'settings.json');
+    const settings = { attribution: { commit: '', pr: '' } };
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    logger.debug('Wrote .claude/settings.json to suppress co-author attribution', { workspacePath });
+  } catch (err) {
+    logger.warn('Failed to write .claude/settings.json (non-fatal)', { error: String(err) });
   }
 }
 

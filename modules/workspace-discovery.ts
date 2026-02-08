@@ -9,6 +9,9 @@ import { listIssues } from '@adapters/github/list-issues.js';
 import { getRepository } from '@adapters/github/get-repository.js';
 import { listPullRequests } from '@adapters/github/list-pull-requests.js';
 import { listPullRequestReviews } from '@adapters/github/list-pull-request-reviews.js';
+import { updateIssue } from '@adapters/github/update-issue.js';
+import { mergePullRequest } from '@adapters/github/merge-pull-request.js';
+import { deleteBranch } from '@adapters/github/delete-branch.js';
 import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
@@ -552,4 +555,183 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
   }
 
   return results;
+}
+
+//NOTE(self): Stale issue threshold — 7 days of no activity
+const STALE_ISSUE_DAYS = 7;
+
+//NOTE(self): Find and close stale open issues in watched workspaces
+//NOTE(self): Stale = open, no activity for 7+ days, not a plan issue, not a PR
+//NOTE(self): SOULs should keep workspaces clean — open issues that linger are noise
+export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; found: number }> {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  let found = 0;
+  let closed = 0;
+
+  if (workspaces.length === 0) return { closed, found };
+
+  const now = Date.now();
+  const staleThresholdMs = STALE_ISSUE_DAYS * 24 * 60 * 60 * 1000;
+
+  for (const workspace of workspaces) {
+    try {
+      const issuesResult = await listIssues({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        state: 'open',
+        sort: 'updated',
+        direction: 'asc', //NOTE(self): Oldest-updated first — most likely to be stale
+        per_page: 20,
+      });
+
+      if (!issuesResult.success) continue;
+
+      for (const issue of issuesResult.data) {
+        //NOTE(self): Skip PRs (GitHub API returns them as issues)
+        if (issue.pull_request) continue;
+
+        //NOTE(self): Skip plan issues — plans have their own lifecycle
+        const hasPlanLabel = issue.labels.some(l => l.name.toLowerCase() === 'plan');
+        if (hasPlanLabel) continue;
+
+        //NOTE(self): Check if stale (no activity for threshold days)
+        const lastActivity = new Date(issue.updated_at).getTime();
+        const staleDuration = now - lastActivity;
+        if (staleDuration < staleThresholdMs) continue;
+
+        found++;
+        const staleDays = Math.floor(staleDuration / (24 * 60 * 60 * 1000));
+
+        //NOTE(self): Close the stale issue
+        const closeResult = await updateIssue({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          issue_number: issue.number,
+          state: 'closed',
+        });
+
+        if (closeResult.success) {
+          closed++;
+          logger.info('Closed stale workspace issue', {
+            workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+            issue: issue.number,
+            title: issue.title,
+            staleDays,
+          });
+        }
+      }
+    } catch (err) {
+      logger.error('Error cleaning up stale workspace issues', {
+        workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+        error: String(err),
+      });
+    }
+  }
+
+  return { closed, found };
+}
+
+//NOTE(self): Find approved PRs in watched workspaces that can be auto-merged
+//NOTE(self): A PR is auto-mergeable when it has >= 1 APPROVED review and no CHANGES_REQUESTED
+export async function pollWorkspacesForApprovedPRs(): Promise<{ workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[]> {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  const results: { workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[] = [];
+
+  if (workspaces.length === 0) return [];
+
+  const config = getConfig();
+  const agentUsername = config.github.username.toLowerCase();
+
+  for (const workspace of workspaces) {
+    try {
+      const prsResult = await listPullRequests({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        state: 'open',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 10,
+      });
+
+      if (!prsResult.success) continue;
+
+      for (const pr of prsResult.data) {
+        if (pr.draft === true) continue;
+
+        //NOTE(self): Get reviews to check approval status
+        const reviewsResult = await listPullRequestReviews({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          pull_number: pr.number,
+        });
+
+        if (!reviewsResult.success) continue;
+
+        //NOTE(self): Compute final review state per user (latest review wins)
+        const latestReviewByUser = new Map<string, string>();
+        for (const review of reviewsResult.data) {
+          if (review.state === 'COMMENTED' || review.state === 'PENDING') continue;
+          latestReviewByUser.set(review.user.login.toLowerCase(), review.state);
+        }
+
+        const hasChangesRequested = [...latestReviewByUser.values()].some(s => s === 'CHANGES_REQUESTED');
+        if (hasChangesRequested) continue;
+
+        const approvalCount = [...latestReviewByUser.values()].filter(s => s === 'APPROVED').length;
+        if (approvalCount === 0) continue;
+
+        //NOTE(self): Require approvals >= number of assignees on the PR
+        //NOTE(self): If no assignees, require at least 1 approval
+        const assigneeCount = (pr.assignees || []).length;
+        const requiredApprovals = Math.max(assigneeCount, 1);
+        if (approvalCount < requiredApprovals) continue;
+
+        results.push({ workspace, pr, approvals: approvalCount });
+      }
+    } catch (err) {
+      logger.error('Error polling workspace for approved PRs', {
+        workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+        error: String(err),
+      });
+    }
+  }
+
+  return results;
+}
+
+//NOTE(self): Auto-merge an approved PR — squash merge, then delete the feature branch
+export async function autoMergeApprovedPR(
+  owner: string,
+  repo: string,
+  pr: GitHubPullRequest
+): Promise<{ success: boolean; error?: string }> {
+  logger.info('Auto-merging approved PR', { owner, repo, number: pr.number, title: pr.title });
+
+  const mergeResult = await mergePullRequest({
+    owner,
+    repo,
+    pull_number: pr.number,
+    commit_title: `${pr.title} (#${pr.number})`,
+    merge_method: 'squash',
+  });
+
+  if (!mergeResult.success) {
+    logger.warn('Auto-merge failed', { owner, repo, number: pr.number, error: mergeResult.error });
+    return { success: false, error: mergeResult.error };
+  }
+
+  //NOTE(self): Delete the feature branch after successful merge
+  const headRef = pr.head?.ref;
+  if (headRef && headRef !== 'main' && headRef !== 'master') {
+    const deleteResult = await deleteBranch(owner, repo, headRef);
+    if (deleteResult.success) {
+      logger.info('Deleted feature branch after auto-merge', { branch: headRef, number: pr.number });
+    } else {
+      logger.debug('Branch deletion failed after auto-merge (non-fatal)', { branch: headRef, error: deleteResult.error });
+    }
+  }
+
+  return { success: true };
 }

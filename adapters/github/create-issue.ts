@@ -20,6 +20,11 @@ export async function createIssue(
     return { success: false, error: 'GitHub not authenticated' };
   }
 
+  //NOTE(self): Issues must always have an assignee — default to the authenticated user
+  const assignees = params.assignees && params.assignees.length > 0
+    ? params.assignees
+    : [auth.username];
+
   try {
     const response = await fetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues`,
@@ -30,7 +35,7 @@ export async function createIssue(
           title: params.title,
           body: params.body,
           labels: params.labels,
-          assignees: params.assignees,
+          assignees,
         }),
       }
     );

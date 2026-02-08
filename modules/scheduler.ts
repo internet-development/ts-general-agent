@@ -121,7 +121,10 @@ import {
 import {
   pollWorkspacesForPlans,
   pollWorkspacesForReviewablePRs,
+  pollWorkspacesForApprovedPRs,
+  autoMergeApprovedPR,
   pollWorkspacesForOpenIssues,
+  cleanupStaleWorkspaceIssues,
   threadHasWorkspaceContext,
   getWatchedWorkspaces,
   getWorkspaceDiscoveryStats,
@@ -1102,6 +1105,37 @@ export class AgentScheduler {
             }
           }
 
+          //NOTE(self): Emoji-only posts are terminal signals — treat them like closing messages
+          //NOTE(self): Someone sending just 🎉 or 👍 after a conversation means "we're good, conversation over"
+          if (check.reason === 'emoji reaction') {
+            const record = pn.notification.record as { reply?: { root?: { uri?: string; cid?: string } } };
+            const postUri = pn.notification.uri;
+            const postCid = pn.notification.cid;
+            if (postUri && postCid) {
+              atproto.likePost({ uri: postUri, cid: postCid }).catch(() => {});
+              const rootUri = record?.reply?.root?.uri || postUri;
+              markBlueskyConversationConcluded(rootUri, 'Emoji reaction received — conversation concluded');
+            }
+          }
+
+          //NOTE(self): Likes on our posts in a conversation are also terminal signals
+          //NOTE(self): If someone likes our reply, they're acknowledging it without replying — conversation is done
+          if (check.reason === 'acknowledgment only') {
+            //NOTE(self): The liked post's URI is in the notification subject
+            const subjectUri = (pn.notification as any).reasonSubject;
+            if (subjectUri) {
+              //NOTE(self): Best-effort: conclude the thread rooted at the liked post
+              //NOTE(self): We use the subject URI directly — if we have a conversation tracked for it, it'll match
+              //NOTE(self): Fire-and-forget async thread lookup to find the actual root URI
+              getPostThread(subjectUri, 0, 0).then(threadResult => {
+                if (threadResult.success && threadResult.data) {
+                  const rootUri = threadResult.data.thread.post.record?.reply?.root?.uri || subjectUri;
+                  markBlueskyConversationConcluded(rootUri, 'Like received on our post — conversation concluded');
+                }
+              }).catch(() => { /* non-fatal */ });
+            }
+          }
+
           //NOTE(self): Record choosing silence so reflection can learn from it
           if (choseSilenceCount < 3) {
             recordExperience(
@@ -1443,6 +1477,39 @@ export class AgentScheduler {
 
       //NOTE(self): Clear thread context now that tool execution is done
       setResponseThreadContext(null);
+
+      //NOTE(self): Post-response auto-conclude: if we just replied and the conversation NOW meets
+      //NOTE(self): conclusion criteria (reply count, depth, etc.), but the LLM didn't call graceful_exit,
+      //NOTE(self): auto-conclude with a like so we never ghost — we always end gracefully
+      for (const pn of worthResponding) {
+        const record = pn.notification.record as { reply?: { root?: { uri?: string; cid?: string } } };
+        const rootUri = record?.reply?.root?.uri || pn.notification.uri;
+        const isProjectThread = threadHasWorkspaceContext(rootUri, pn.notification.author.did, pn.notification.author.handle);
+
+        const postResponseAnalysis = analyzeBlueskyConversation(rootUri, agentDid, undefined, undefined, {
+          hasWorkspaceContext: isProjectThread,
+        });
+
+        //NOTE(self): If the conversation should now conclude and hasn't been concluded yet
+        if (postResponseAnalysis.shouldConclude) {
+          //NOTE(self): Check if it was already concluded (graceful_exit may have been called)
+          const convState = getBlueskyConversation(rootUri);
+          if (convState && convState.state !== 'concluded') {
+            //NOTE(self): Auto-conclude with a like on their last post — warm, non-verbal ending
+            const postUri = pn.notification.uri;
+            const postCid = pn.notification.cid;
+            if (postUri && postCid) {
+              atproto.likePost({ uri: postUri, cid: postCid }).catch(() => {});
+            }
+            markBlueskyConversationConcluded(rootUri, `Auto-concluded after response: ${postResponseAnalysis.reason}`);
+            logger.info('Auto-concluded conversation after response', {
+              rootUri,
+              reason: postResponseAnalysis.reason,
+              ourReplyCount: postResponseAnalysis.ourReplyCount,
+            });
+          }
+        }
+      }
 
       //NOTE(self): Show response summary so terminal is detailed (Scenario 11)
       const repliesSent = collectedReplies.length;
@@ -2831,6 +2898,27 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         }
       }
 
+      //NOTE(self): Auto-merge approved PRs in workspaces
+      //NOTE(self): Any SOUL can merge — if it has >= 1 approval and no changes requested, merge it
+      let autoMergedCount = 0;
+      if (this.state.currentMode === 'idle') {
+        const approvedPRs = await pollWorkspacesForApprovedPRs();
+        for (const { workspace: ws, pr, approvals } of approvedPRs) {
+          const mergeResult = await autoMergeApprovedPR(ws.owner, ws.repo, pr);
+          if (mergeResult.success) {
+            autoMergedCount++;
+            logger.info('Auto-merged approved PR', {
+              repo: `${ws.owner}/${ws.repo}`,
+              number: pr.number,
+              title: pr.title,
+              approvals,
+            });
+            //NOTE(self): Signal post-merge so plan awareness picks up newly unblocked tasks
+            this.requestEarlyPlanCheck();
+          }
+        }
+      }
+
       //NOTE(self): Discover open issues (not just plans) filed by anyone in watched workspaces
       let openIssueCount = 0;
       if (this.state.currentMode === 'idle') {
@@ -2853,7 +2941,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             );
             if (!threadResult.success) continue;
 
-            const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, { isWorkspaceIssue: true }, getPeerUsernames());
+            const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, { isWorkspaceIssue: true, repoFullName: `${workspace.owner}/${workspace.repo}` }, getPeerUsernames());
             if (analysis.shouldRespond) {
               this.state.pendingGitHubConversations.push({
                 owner: workspace.owner,
@@ -2875,8 +2963,18 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         }
       }
 
+      //NOTE(self): Cleanup stale workspace artifacts — keep workspaces tidy
+      //NOTE(self): Only run when idle (don't block task execution or PR review)
+      if (this.state.currentMode === 'idle') {
+        const cleanup = await cleanupStaleWorkspaceIssues();
+        if (cleanup.closed > 0) {
+          summaryParts.push(`${cleanup.closed} stale issue${cleanup.closed === 1 ? '' : 's'} closed`);
+        }
+      }
+
       //NOTE(self): Build and display workspace summary
       if (reviewablePRCount > 0) summaryParts.push(`${reviewablePRCount} PR${reviewablePRCount === 1 ? '' : 's'} to review`);
+      if (autoMergedCount > 0) summaryParts.push(`${autoMergedCount} PR${autoMergedCount === 1 ? '' : 's'} auto-merged`);
       if (openIssueCount > 0) summaryParts.push(`${openIssueCount} open issue${openIssueCount === 1 ? '' : 's'}`);
 
       ui.stopSpinner('Workspace check complete');
@@ -3117,15 +3215,52 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         );
 
         //NOTE(self): Trigger iterative quality loop (Scenario 10)
-        //NOTE(self): Post a doc review comment on the plan issue to prompt the next iteration
+        //NOTE(self): Post a doc review comment, then run automated gap analysis via Claude Code
         try {
           await github.createIssueComment({
             owner: workspace.owner,
             repo: workspace.repo,
             issue_number: issueNumber,
-            body: `## Quality Loop — Iteration Complete\n\nAll tasks in this plan are now complete. Before closing, the quality loop requires:\n\n- [ ] Re-read \`LIL-INTDEV-AGENTS.md\` and ensure it reflects the current architecture\n- [ ] Re-read \`SCENARIOS.md\` and simulate each scenario against the codebase\n- [ ] Fix any gaps found during simulation\n- [ ] Update both docs to reflect the current state\n\nIf everything checks out, this iteration is done. If gaps are found, file new issues to address them.`,
+            body: `## Quality Loop — Iteration Complete\n\nAll tasks in this plan are now complete. Running automated quality verification...`,
           });
           logger.info('Posted quality loop review comment on completed plan', { issueNumber });
+
+          //NOTE(self): Run automated quality verification via Claude Code
+          //NOTE(self): This reads LIL-INTDEV-AGENTS.md and SCENARIOS.md, simulates scenarios,
+          //NOTE(self): and creates follow-up issues for any gaps found
+          const workreposDir = this.appConfig.paths.workrepos;
+          const workspaceResult = await ensureWorkspace(workspace.owner, workspace.repo, workreposDir);
+          if (workspaceResult.success) {
+            const qualityPrompt = `You are running a quality verification loop for a completed plan.
+
+**Repository:** ${workspace.owner}/${workspace.repo}
+**Plan:** ${plan.title}
+
+**Instructions:**
+1. Read \`LIL-INTDEV-AGENTS.md\` if it exists — verify it reflects the current architecture
+2. Read \`SCENARIOS.md\` if it exists — simulate each scenario against the codebase
+3. For any gaps or issues found, create a GitHub issue using the gh CLI:
+   \`gh issue create --repo ${workspace.owner}/${workspace.repo} --title "Gap: <description>" --body "<details>"\`
+4. If the docs need updating, update them and commit the changes
+5. If everything looks good, report that no gaps were found
+
+**Constraints:**
+- Do NOT create issues for things that are already working
+- Focus on real, observable gaps — not hypothetical improvements
+- Be concise — each issue should have a clear title and actionable description
+- Do NOT modify any application code — only docs and issue creation`;
+
+            try {
+              const qualityResult = await runClaudeCode(qualityPrompt, workspaceResult.path, this.appConfig.paths.memory);
+              if (qualityResult.success) {
+                logger.info('Quality loop verification completed', { workspace: `${workspace.owner}/${workspace.repo}` });
+              } else {
+                logger.warn('Quality loop verification failed (non-fatal)', { error: qualityResult.error });
+              }
+            } catch (qualityError) {
+              logger.warn('Quality loop Claude Code error (non-fatal)', { error: String(qualityError) });
+            }
+          }
         } catch (docReviewError) {
           logger.warn('Failed to post quality loop comment (non-fatal)', { error: String(docReviewError) });
         }
@@ -3200,7 +3335,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       const analysis = analyzeConversation(
         thread,
         config.github.username,
-        { isWorkspacePRReview: true },
+        { isWorkspacePRReview: true, repoFullName: `${workspace.owner}/${workspace.repo}` },
         peers
       );
 

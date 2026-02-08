@@ -1,5 +1,7 @@
 //NOTE(self): Run Claude Code with a prompt for self-improvement
 import { spawn } from 'child_process';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { logger } from '@modules/logger.js';
 import { createMemory } from '@modules/memory.js';
 import { findClaudeBinary } from '@local-tools/self-improve-find-claude.js';
@@ -72,6 +74,19 @@ ${prompt}`;
 ${prefixedPrompt}
 \`\`\`
 `);
+
+  //NOTE(self): Ensure .claude/settings.json exists to suppress co-author attribution
+  try {
+    const claudeDir = join(workingDir, '.claude');
+    if (!existsSync(claudeDir)) {
+      mkdirSync(claudeDir, { recursive: true });
+    }
+    const settingsPath = join(claudeDir, 'settings.json');
+    const settings = { attribution: { commit: '', pr: '' } };
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+  } catch (settingsErr) {
+    logger.debug('Failed to write .claude/settings.json (non-fatal)', { error: String(settingsErr) });
+  }
 
   //NOTE(self): Run Claude Code with spawn for long-running tasks
   //NOTE(self): Pass prompt as argument, just like typing "claude 'prompt'" in terminal

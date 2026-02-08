@@ -147,6 +147,8 @@ export interface AnalyzeConversationOptions {
   //NOTE(self): If true, this issue was discovered in a watched workspace (proactive engagement)
   //NOTE(self): Agent should respond even when not mentioned — workspace issues are our responsibility
   isWorkspaceIssue?: boolean;
+  //NOTE(self): Display name for the workspace repo (e.g. "owner/repo") — shown in reason/context strings
+  repoFullName?: string;
 }
 
 //NOTE(self): Derive effective peers for a thread
@@ -192,7 +194,8 @@ export function analyzeConversation(
   peerUsernames: string[] = []
 ): ConversationAnalysis {
   const { issue, comments, agentHasCommented, commentsAfterAgent, isOpen } = thread;
-  const { isOwnerRequest = false, isWorkspacePRReview = false, isWorkspaceIssue = false } = options;
+  const { isOwnerRequest = false, isWorkspacePRReview = false, isWorkspaceIssue = false, repoFullName } = options;
+  const repoLabel = repoFullName ? ` (${repoFullName})` : '';
 
   //NOTE(self): Use effective peers — thread-derived when no registered peers exist
   const effectivePeers = getEffectivePeers(thread, agentUsername, peerUsernames);
@@ -348,17 +351,17 @@ export function analyzeConversation(
       if (peerCommentCount >= 2) {
         return {
           shouldRespond: true,
-          reason: `Open PR in workspace — ${peerCommentCount} peers already reviewed, only add if genuinely needed`,
+          reason: `Open PR in workspace${repoLabel} — ${peerCommentCount} peers already reviewed, only add if genuinely needed`,
           urgency: 'low',
-          context: `PR discovered in watched workspace. Peers have already contributed reviews.`,
+          context: `PR discovered in watched workspace${repoLabel}. Peers have already contributed reviews.`,
         };
       }
 
       return {
         shouldRespond: true,
-        reason: 'Open PR in watched workspace needs review',
+        reason: `Open PR in watched workspace${repoLabel} needs review`,
         urgency: 'low',
-        context: `PR discovered in watched workspace. Review and provide feedback.`,
+        context: `PR discovered in watched workspace${repoLabel}. Review and provide feedback.`,
       };
     }
 
@@ -372,17 +375,17 @@ export function analyzeConversation(
       if (peerCommentCount >= 2) {
         return {
           shouldRespond: true,
-          reason: `Open issue in workspace — ${peerCommentCount} peers already engaged, only add what's missing`,
+          reason: `Open issue in workspace${repoLabel} — ${peerCommentCount} peers already engaged, only add what's missing`,
           urgency: 'low',
-          context: `Issue discovered in watched workspace. Peers have already contributed.`,
+          context: `Issue discovered in watched workspace${repoLabel}. Peers have already contributed.`,
         };
       }
 
       return {
         shouldRespond: true,
-        reason: 'Open issue in watched workspace needs attention',
+        reason: `Open issue in watched workspace${repoLabel} needs attention`,
         urgency: 'low',
-        context: `Issue discovered in watched workspace. Engage proactively.`,
+        context: `Issue discovered in watched workspace${repoLabel}. Engage proactively.`,
       };
     }
 
