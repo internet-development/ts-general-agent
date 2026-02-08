@@ -12,7 +12,7 @@ import {
   type ParsedTask,
   type TaskStatus,
 } from '@local-tools/self-plan-parse.js';
-import { updatePlanStatus } from '@local-tools/self-plan-create.js';
+import { updatePlanStatus, closePlan } from '@local-tools/self-plan-create.js';
 import { getGitHubPhrase } from '@modules/voice-phrases.js';
 
 export interface ReportTaskParams {
@@ -221,8 +221,9 @@ async function handlePlanComplete(
     logger.warn('Failed to post plan completion comment', { error: completionResult.error });
   }
 
-  //NOTE(self): Update labels to complete
+  //NOTE(self): Update labels to complete and close the issue
   await updatePlanStatus(owner, repo, issueNumber, 'complete');
+  await closePlan(owner, repo, issueNumber);
 }
 
 //NOTE(self): Report task failed (unrecoverable error)

@@ -3,6 +3,7 @@
 //NOTE(self): Are.na public API: GET /v2/search/channels?q=TERM
 
 import type { ArenaResult } from '@adapters/arena/types.js';
+import { isEmpty } from '@modules/strings.js';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -43,7 +44,7 @@ export async function searchChannels(
 ): Promise<ArenaResult<SearchChannelsResponse>> {
   const { query, page = 1, per = 10 } = params;
 
-  if (!query.trim()) {
+  if (isEmpty(query)) {
     return { success: false, error: 'Search query cannot be empty' };
   }
 

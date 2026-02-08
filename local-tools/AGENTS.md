@@ -147,7 +147,7 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | Local Tool | Purpose |
 |-------|---------|
 | `task-claim` | Claim tasks via GitHub assignee API (first-writer-wins protocol) |
-| `task-execute` | Execute claimed tasks via Claude Code. Also exports `createBranch` (feature branch creation) and `createPullRequest` (PR via gh CLI) |
+| `task-execute` | Execute claimed tasks via Claude Code. Also exports `createBranch` (feature branch creation) and `createPullRequest` (PR via GitHub REST API with PAT) |
 | `task-verify` | Four-gate quality check: verify git changes exist, run tests if present, push to remote, verify push success |
 | `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes, enabling the scheduler to announce on Bluesky |
 

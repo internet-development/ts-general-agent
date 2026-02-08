@@ -22,9 +22,10 @@ import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
 import * as arena from '@adapters/arena/index.js';
 import { graphemeLen } from '@atproto/common-web';
+import { isEmpty, truncateGraphemes, PORTABLE_MAX_GRAPHEMES } from '@modules/strings.js';
 
 //NOTE(self): Bluesky enforces 300 graphemes max per post
-const BLUESKY_MAX_GRAPHEMES = 300;
+const BLUESKY_MAX_GRAPHEMES = PORTABLE_MAX_GRAPHEMES;
 import { markInteractionResponded, recordOriginalPost } from '@modules/engagement.js';
 import {
   markConversationConcluded as markBlueskyConversationConcluded,
@@ -276,7 +277,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         const { text, post_uri, post_cid, root_uri, root_cid } = call.input as Record<string, string>;
 
         //NOTE(self): Validate required parameters
-        if (!text || typeof text !== 'string' || text.trim().length === 0) {
+        if (isEmpty(text)) {
           return { tool_use_id: call.id, content: 'Error: Reply text is required and cannot be empty', is_error: true };
         }
         const replyGraphemes = graphemeLen(text);
@@ -1125,7 +1126,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
       case 'arena_search': {
         const { query, page, per } = call.input as { query: string; page?: number; per?: number };
 
-        if (!query?.trim()) {
+        if (isEmpty(query)) {
           return { tool_use_id: call.id, content: 'Error: Search query is required', is_error: true };
         }
 
@@ -1183,7 +1184,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         const simplified = result.data.imageBlocks.map((block) => ({
           id: block.id,
           title: block.title || block.generated_title,
-          description: block.description?.slice(0, 200),
+          description: block.description ? truncateGraphemes(block.description) : undefined,
           imageUrl: block.image?.original?.url,
           sourceUrl: block.source?.url || `https://www.are.na/block/${block.id}`,
           connected_at: block.connected_at,

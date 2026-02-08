@@ -132,7 +132,7 @@ import {
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
-import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
+import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
 import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
@@ -2434,6 +2434,12 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
                 branchName = candidate;
                 break;
               }
+            }
+
+            //NOTE(self): Fallback: search by task number prefix when title-based candidates don't match
+            //NOTE(self): Handles case where plan task titles were edited after branches were created
+            if (!branchName) {
+              branchName = await findRemoteBranchByTaskNumber(tempResult.path, task.number);
             }
 
             if (!branchName) continue;

@@ -84,6 +84,7 @@ Ask these questions:
 | `loop.ts` | Main agent loop runner | Scheduler |
 | `skills.ts` | Skills framework (loads `skills/*/SKILL.md`, interpolation, prompt assembly) | Logger |
 | `peer-awareness.ts` | Dynamic peer SOUL discovery from plans, workspaces, threads | Config, Memory |
+| `strings.ts` | Shared string utilities: `isEmpty`, `createSlug`, `truncateGraphemes`, `PORTABLE_MAX_GRAPHEMES` (300) | `@atproto/common-web` |
 
 ### State Management (Keep in Modules)
 

@@ -1,4 +1,5 @@
 //NOTE(self): Core module exports
+export * from '@modules/strings.js';
 export * from '@modules/config.js';
 export * from '@modules/logger.js';
 export * from '@modules/memory.js';

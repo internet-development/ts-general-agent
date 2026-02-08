@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { isEmpty } from '@modules/strings.js';
 
 const EXPERIENCES_PATH = '.memory/experiences.json';
 
@@ -222,7 +223,7 @@ export function getExperiencesForReflection(): {
     summary += '\n\n';
   }
 
-  if (summary === '') {
+  if (isEmpty(summary)) {
     summary = '*No new experiences to reflect on.*\n';
   }
 

@@ -1,4 +1,5 @@
 import { createMemory } from '@modules/memory.js';
+import { createSlug } from '@modules/strings.js';
 
 export function recordRelationship(
   memoryPath: string,
@@ -12,6 +13,6 @@ export function recordRelationship(
     note,
   };
 
-  const filename = `people/${handle.replace(/[^a-zA-Z0-9]/g, '_')}.jsonl`;
+  const filename = `people/${createSlug(handle)}.jsonl`;
   memory.append(filename, JSON.stringify(entry) + '\n');
 }

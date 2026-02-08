@@ -9,18 +9,20 @@ import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import type { ParsedTask, ParsedPlan } from '@local-tools/self-plan-parse.js';
 import { renderSkill } from '@modules/skills.js';
 import { cloneRepository } from '@adapters/github/clone-repository.js';
+import { createPullRequest as createPullRequestAPI } from '@adapters/github/create-pull-request.js';
 import { runGitCommand } from '@local-tools/self-task-verify.js';
+import { createSlug } from '@modules/strings.js';
 
 //NOTE(self): Generate a consistent branch name for a task
 //NOTE(self): Shared by scheduler.ts and executor.ts to avoid divergent naming
 export function getTaskBranchName(taskNumber: number, taskTitle: string): string {
   const prefix = `task-${taskNumber}-`;
   const maxSlugLen = 50 - prefix.length;
-  const fullSlug = taskTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const fullSlug = createSlug(taskTitle);
   const slug = fullSlug.length > maxSlugLen
     ? fullSlug.slice(0, maxSlugLen).replace(/-[^-]*$/, '') // truncate at word boundary
     : fullSlug;
-  return `${prefix}${slug || 'work'}`;
+  return `${prefix}${slug}`;
 }
 
 //NOTE(self): Generate candidate branch names for a task (current + legacy naming schemes)
@@ -217,9 +219,8 @@ function getDefaultBranch(workspacePath: string): string {
   }
 }
 
-//NOTE(self): Create a pull request using gh CLI
-//NOTE(self): 2-minute timeout prevents hung promises if gh CLI hangs
-//NOTE(self): Always passes --base to prevent interactive prompt (stdin is ignored)
+//NOTE(self): Create a pull request using the GitHub REST API via PAT
+//NOTE(self): Replaces the previous gh CLI approach — PAT is always available, gh CLI may not be
 export async function createPullRequest(
   owner: string,
   repo: string,
@@ -230,59 +231,28 @@ export async function createPullRequest(
 ): Promise<{ success: boolean; prUrl?: string; error?: string }> {
   const baseBranch = getDefaultBranch(workspacePath);
 
-  return new Promise((resolve) => {
-    let resolved = false;
-    const safeResolve = (result: { success: boolean; prUrl?: string; error?: string }) => {
-      if (!resolved) {
-        resolved = true;
-        resolve(result);
-      }
-    };
+  logger.info('Creating pull request via GitHub API', { owner, repo, branchName, baseBranch });
 
-    const gh = spawn('gh', [
-      'pr', 'create',
-      '--repo', `${owner}/${repo}`,
-      '--head', branchName,
-      '--base', baseBranch,
-      '--title', title,
-      '--body', body,
-    ], {
-      cwd: workspacePath,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    //NOTE(self): Kill gh process if it hangs for more than 2 minutes
-    const timeout = setTimeout(() => {
-      logger.warn('gh pr create timed out after 2 minutes, killing process', { branchName });
-      gh.kill('SIGTERM');
-      safeResolve({ success: false, error: `gh pr create timed out after 2 minutes` });
-    }, 2 * 60_000);
-
-    let stdout = '';
-    let stderr = '';
-    gh.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-    gh.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-
-    gh.on('close', (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        safeResolve({ success: false, error: `gh pr create failed: ${stderr}` });
-        return;
-      }
-      const prUrl = stdout.trim();
-      if (!prUrl) {
-        safeResolve({ success: false, error: 'gh pr create returned success but no PR URL' });
-        return;
-      }
-      logger.info('Created pull request', { prUrl, branchName });
-      safeResolve({ success: true, prUrl });
-    });
-
-    gh.on('error', (err) => {
-      clearTimeout(timeout);
-      safeResolve({ success: false, error: `gh pr create error: ${err.message}` });
-    });
+  const result = await createPullRequestAPI({
+    owner,
+    repo,
+    title,
+    body,
+    head: branchName,
+    base: baseBranch,
   });
+
+  if (!result.success) {
+    return { success: false, error: `PR creation failed: ${result.error}` };
+  }
+
+  const prUrl = result.data.html_url;
+  if (!prUrl) {
+    return { success: false, error: 'PR creation succeeded but no URL returned' };
+  }
+
+  logger.info('Created pull request', { prUrl, branchName });
+  return { success: true, prUrl };
 }
 
 //NOTE(self): Push changes after task completion (branch-aware)
@@ -327,6 +297,41 @@ export async function checkRemoteBranchExists(
     workspacePath
   );
   return result.success && result.stdout.length > 0;
+}
+
+//NOTE(self): Find a remote branch by task number prefix when name-based candidates don't match
+//NOTE(self): Handles the case where plan task titles were edited after branches were created
+export async function findRemoteBranchByTaskNumber(
+  workspacePath: string,
+  taskNumber: number
+): Promise<string | null> {
+  const result = await runGitCommand(
+    ['ls-remote', '--heads', 'origin'],
+    workspacePath
+  );
+  if (!result.success) return null;
+
+  const prefix = `task-${taskNumber}-`;
+  const matches: string[] = [];
+
+  for (const line of result.stdout.split('\n')) {
+    //NOTE(self): ls-remote output format: "<sha>\trefs/heads/<branch>"
+    const match = line.match(/refs\/heads\/(.+)$/);
+    if (match && match[1].startsWith(prefix)) {
+      matches.push(match[1]);
+    }
+  }
+
+  //NOTE(self): Only return if exactly one match — ambiguity means we can't be sure
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    logger.info('Multiple branches match task number prefix, skipping ambiguous match', {
+      taskNumber,
+      prefix,
+      matches,
+    });
+  }
+  return null;
 }
 
 //NOTE(self): Recover an orphaned branch — fetch it, check it out, return workspace ready for PR creation
