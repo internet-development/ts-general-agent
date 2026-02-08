@@ -146,6 +146,32 @@ export interface AnalyzeConversationOptions {
   isWorkspacePRReview?: boolean;
 }
 
+//NOTE(self): Derive effective peers for a thread
+//NOTE(self): When registered peers exist (workspace repos), use them directly.
+//NOTE(self): When empty (external repos), treat all non-agent, non-issue-author commenters as peers.
+//NOTE(self): This ensures SOULs recognize each other even on external issues.
+export function getEffectivePeers(
+  thread: IssueThread,
+  agentUsername: string,
+  registeredPeers: string[]
+): string[] {
+  if (registeredPeers.length > 0) return registeredPeers;
+
+  //NOTE(self): Derive from thread — everyone except agent and issue author
+  const seen = new Set<string>();
+  const derived: string[] = [];
+  for (const comment of thread.comments) {
+    const login = comment.user.login;
+    const lower = login.toLowerCase();
+    if (lower === agentUsername.toLowerCase()) continue;
+    if (lower === thread.issue.user.login.toLowerCase()) continue;
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    derived.push(login);
+  }
+  return derived;
+}
+
 export function analyzeConversation(
   thread: IssueThread,
   agentUsername: string,
@@ -154,6 +180,9 @@ export function analyzeConversation(
 ): ConversationAnalysis {
   const { issue, comments, agentHasCommented, commentsAfterAgent, isOpen } = thread;
   const { isOwnerRequest = false, isWorkspacePRReview = false } = options;
+
+  //NOTE(self): Use effective peers — thread-derived when no registered peers exist
+  const effectivePeers = getEffectivePeers(thread, agentUsername, peerUsernames);
 
   //NOTE(self): Closed issues generally don't need responses
   if (!isOpen) {
@@ -188,31 +217,31 @@ export function analyzeConversation(
     };
   }
 
-  //NOTE(self): Peer-only round-robin prevention
-  //NOTE(self): If all replies since our last comment are from peer SOULs (no humans),
-  //NOTE(self): don't respond — breaks infinite peer-triggering loops.
-  //NOTE(self): Escape hatch: respond if a peer @mentioned us directly.
-  if (agentHasCommented && commentsAfterAgent > 0 && peerUsernames.length > 0) {
+  //NOTE(self): Round-robin prevention using effective peers
+  //NOTE(self): "Human" = issue author. Everyone else (SOULs, bystanders) = effective peer.
+  //NOTE(self): If only peers replied since our last comment, stop — wait for the issue author.
+  //NOTE(self): Escape hatch: respond if someone @mentioned us directly.
+  if (agentHasCommented && commentsAfterAgent > 0 && effectivePeers.length > 0) {
     const agentLastIdx = comments.reduce((lastIdx, c, i) =>
       c.user.login.toLowerCase() === agentUsername.toLowerCase() ? i : lastIdx, -1);
     const commentsAfter = comments.slice(agentLastIdx + 1);
     const humanComments = commentsAfter.filter(c => {
       const login = c.user.login.toLowerCase();
       return login !== agentUsername.toLowerCase() &&
-        !peerUsernames.some(p => p.toLowerCase() === login);
+        !effectivePeers.some(p => p.toLowerCase() === login);
     });
 
     if (humanComments.length === 0) {
-      const peerMentionedUs = commentsAfter.some(c =>
-        peerUsernames.some(p => p.toLowerCase() === c.user.login.toLowerCase()) &&
+      const mentionedUs = commentsAfter.some(c =>
+        c.user.login.toLowerCase() !== agentUsername.toLowerCase() &&
         c.body.toLowerCase().includes(`@${agentUsername.toLowerCase()}`)
       );
-      if (!peerMentionedUs) {
+      if (!mentionedUs) {
         return {
           shouldRespond: false,
-          reason: 'Only peer SOULs replied — avoid round-robin',
+          reason: 'Issue author hasn\'t re-engaged — waiting for human',
           urgency: 'none',
-          context: `All ${commentsAfterAgent} replies since your last comment are from peer SOULs. Wait for a human to engage.`,
+          context: `All ${commentsAfterAgent} replies since your last comment are from other participants (not the issue author). Wait for @${issue.user.login} to engage.`,
         };
       }
     }
@@ -226,10 +255,11 @@ export function analyzeConversation(
     ).length;
 
     if (agentCommentCount >= 3) {
+      //NOTE(self): "Human" = not agent, not effective peer (i.e., the issue author)
       const recentHumanMention = comments.slice(-5).some(c => {
         const login = c.user.login.toLowerCase();
         const isHuman = login !== agentUsername.toLowerCase() &&
-          !peerUsernames.some(p => p.toLowerCase() === login);
+          !effectivePeers.some(p => p.toLowerCase() === login);
         return isHuman && c.body.toLowerCase().includes(`@${agentUsername.toLowerCase()}`);
       });
 
@@ -274,19 +304,17 @@ export function analyzeConversation(
     //NOTE(self): Only respond to new issues if we're mentioned in the issue body
     const mentionedInIssue = issue.body?.toLowerCase().includes(`@${agentUsername.toLowerCase()}`);
     if (mentionedInIssue) {
-      //NOTE(self): If 2+ peers already commented and we haven't, downgrade urgency
-      const peerCommentCount = peerUsernames.length > 0
-        ? comments.filter(c =>
-            peerUsernames.some(p => c.user.login.toLowerCase() === p.toLowerCase())
-          ).length
-        : 0;
+      //NOTE(self): If 2+ effective peers already commented and we haven't, downgrade urgency
+      const peerCommentCount = comments.filter(c =>
+        effectivePeers.some(p => c.user.login.toLowerCase() === p.toLowerCase())
+      ).length;
 
       if (peerCommentCount >= 2) {
         return {
           shouldRespond: true,
-          reason: `${peerCommentCount} peer SOULs have already commented — only add what's genuinely missing`,
+          reason: `${peerCommentCount} others have already commented — only add what's genuinely missing`,
           urgency: 'low',
-          context: `Your peers have contributed. Review their comments before adding yours.`,
+          context: `Others have already contributed. Review their comments before adding yours.`,
         };
       }
 
@@ -300,11 +328,9 @@ export function analyzeConversation(
 
     //NOTE(self): Proactive workspace PR review - respond even when not mentioned
     if (isWorkspacePRReview) {
-      const peerCommentCount = peerUsernames.length > 0
-        ? comments.filter(c =>
-            peerUsernames.some(p => c.user.login.toLowerCase() === p.toLowerCase())
-          ).length
-        : 0;
+      const peerCommentCount = comments.filter(c =>
+        effectivePeers.some(p => c.user.login.toLowerCase() === p.toLowerCase())
+      ).length;
 
       if (peerCommentCount >= 2) {
         return {

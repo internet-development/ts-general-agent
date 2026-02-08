@@ -102,6 +102,7 @@ import {
 import {
   getIssueThread,
   analyzeConversation,
+  getEffectivePeers,
   formatThreadForContext,
   type IssueThread,
 } from '@adapters/github/get-issue-thread.js';
@@ -835,14 +836,13 @@ export class AgentScheduler {
 
     //NOTE(self): Deterministic jitter based on my name
     //NOTE(self): Gives other SOULs time to post first, then thread refresh catches their comments
+    //NOTE(self): Always applied — even without registered peers, other SOULs may be responding
     const peers = getPeerUsernames();
-    if (peers.length > 0) {
-      const jitterMs = getAgentJitter(this.appConfig.agent.name);
-      logger.debug('Applying peer jitter before GitHub response', {
-        jitterMs, agentName: this.appConfig.agent.name,
-      });
-      await new Promise(resolve => setTimeout(resolve, jitterMs));
-    }
+    const jitterMs = getAgentJitter(this.appConfig.agent.name);
+    logger.debug('Applying jitter before GitHub response', {
+      jitterMs, agentName: this.appConfig.agent.name,
+    });
+    await new Promise(resolve => setTimeout(resolve, jitterMs));
 
     this.state.currentMode = 'github_responding';
     ui.startSpinner('Checking GitHub conversations');
@@ -856,8 +856,9 @@ export class AgentScheduler {
       for (const pending of this.state.pendingGitHubConversations) {
         ui.startSpinner(`GitHub: ${pending.owner}/${pending.repo}#${pending.number}`);
 
-        //NOTE(self): Re-fetch thread to catch peer comments posted during jitter wait
-        if (peers.length > 0) {
+        //NOTE(self): Re-fetch thread to catch comments posted during jitter wait
+        //NOTE(self): Always re-fetch — other SOULs may have responded even if not registered as peers
+        {
           const freshThread = await getIssueThread(
             { owner: pending.owner, repo: pending.repo, issue_number: pending.number },
             config.github.username
@@ -896,13 +897,15 @@ export class AgentScheduler {
           }
         }
 
-        //NOTE(self): Build context for the LLM with peer awareness
-        const threadContext = formatThreadForContext(pending.thread, 15, peers);
+        //NOTE(self): Build context for the LLM with effective peer awareness
+        //NOTE(self): On external repos, effective peers = all thread participants except agent + issue author
+        const effectivePeers = getEffectivePeers(pending.thread, config.github.username, peers);
+        const threadContext = formatThreadForContext(pending.thread, 15, effectivePeers);
 
-        //NOTE(self): Identify peers who have already commented in this thread
+        //NOTE(self): Identify effective peers who have already commented in this thread
         const threadPeers = pending.thread.comments
           .map(c => c.user.login)
-          .filter(login => peers.some(p => p.toLowerCase() === login.toLowerCase()));
+          .filter(login => effectivePeers.some(p => p.toLowerCase() === login.toLowerCase()));
         const uniqueThreadPeers = [...new Set(threadPeers)];
 
         //NOTE(self): Peer awareness section for the system prompt
@@ -2769,12 +2772,13 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       //NOTE(self): Build context
       const soul = readSoul(config.paths.soul);
       const selfContent = readSelf(config.paths.selfmd);
-      const threadContext = formatThreadForContext(thread, 15, peers);
+      const prEffectivePeers = getEffectivePeers(thread, config.github.username, peers);
+      const threadContext = formatThreadForContext(thread, 15, prEffectivePeers);
 
-      //NOTE(self): Identify peers who have already commented
+      //NOTE(self): Identify effective peers who have already commented
       const threadPeers = thread.comments
         .map(c => c.user.login)
-        .filter(login => peers.some(p => p.toLowerCase() === login.toLowerCase()));
+        .filter(login => prEffectivePeers.some(p => p.toLowerCase() === login.toLowerCase()));
       const uniqueThreadPeers = [...new Set(threadPeers)];
 
       //NOTE(self): Build peer section

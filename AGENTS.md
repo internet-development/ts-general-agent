@@ -580,21 +580,25 @@ The agent also monitors GitHub notifications directly:
 
 Three code-level checks in `analyzeConversation()` prevent GitHub spam. All apply regardless of entry path (Bluesky→GitHub or direct GitHub notifications).
 
+All checks use **effective peers** — on workspace repos these are registered peers from org/team discovery; on foreign repos these are derived from the thread (all commenters except the agent and the issue author). See "Effective Peers" below.
+
 **1. Consecutive Reply Prevention**
 - If agent's comment is the most recent → `shouldRespond: false`
 - Applies even for owner requests
 - Prevents back-to-back self-replies
 
-**2. Peer Round-Robin Prevention** (v5.4.8)
-- If agent has commented AND all replies since are from peer SOULs (no humans) → `shouldRespond: false`
-- Breaks the infinite loop: SOUL A posts → SOUL B and C see "new reply" → they post → SOUL A sees "new replies" → repeat forever
-- Escape hatch: if a peer `@mentions` you directly, you still respond (they're asking you something)
-- Requires `peerUsernames` — passed at all call sites
+**2. Round-Robin Prevention** (v5.5.2)
+- If agent has commented AND all replies since are from effective peers (issue author hasn't re-engaged) → `shouldRespond: false`
+- On workspace repos: breaks SOUL-to-SOUL loops (registered peers = known SOULs)
+- On foreign repos: breaks ALL chatter loops (effective peers = everyone except agent + issue author)
+- Escape hatch: if someone `@mentions` you directly, you still respond
+- **Key insight:** on foreign codebases, the only "human" signal that matters is the issue author. Everyone else chatting — SOUL or bystander — is noise if the author hasn't re-engaged.
 
-**3. Comment Saturation Cap** (v5.4.8)
+**3. Comment Saturation Cap** (v5.5.2)
 - If agent already has 3+ comments in the thread → `shouldRespond: false`
-- Unless a human directly `@mentioned` the agent in the last 5 comments
-- Safety net even if peer detection fails (e.g., peers not yet registered)
+- Unless the issue author directly `@mentioned` the agent in the last 5 comments
+- On workspace repos: non-peer, non-agent commenters also count as human
+- On foreign repos: only the issue author counts as human (effective peers include everyone else)
 - 3 comments is generous for an external issue — if you haven't moved the needle in 3, a 4th won't help
 
 ---
@@ -1010,19 +1014,24 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 
 1. **Dynamic Peer Discovery** (`modules/peer-awareness.ts`): SOULs discover peers organically — from plan assignees, shared workspaces, owner mentions, and thread co-responders. No hardcoded config. Registry persists at `.memory/discovered_peers.json`.
 
-2. **Deterministic Jitter**: Before responding to any thread, each SOUL waits a delay derived from a hash of `AGENT_NAME`. The delay is 15–90 seconds, always the same for a given SOUL. No randomness, no coordination needed.
+2. **Effective Peers** (v5.5.2): `getEffectivePeers()` in `get-issue-thread.ts` bridges the gap between workspace and foreign repos:
+   - **Workspace repos** (`registeredPeers.length > 0`): uses registered peers from org/team discovery — real identity matters for distinguishing SOULs from humans.
+   - **Foreign repos** (`registeredPeers.length === 0`): derives peers from the thread — all commenters except the agent and the issue author. The distinction between SOUL and bystander doesn't matter on foreign codebases; only the issue author (the human who needs help) matters.
+   - Used by `analyzeConversation()` internally and passed to `formatThreadForContext()` by the scheduler.
 
-3. **Thread Refresh**: After the jitter wait, the SOUL re-fetches the thread to catch any peer comments posted during the delay. If the conversation no longer needs a response, it skips.
+3. **Deterministic Jitter**: Before responding to any GitHub thread, each SOUL waits a delay derived from a hash of `AGENT_NAME`. The delay is 15–90 seconds, always the same for a given SOUL. No randomness, no coordination needed. **Always applied** — even without registered peers, other SOULs may be responding to the same thread.
 
-4. **Contribution-Aware Formatting**: `formatThreadForContext()` accepts peer usernames and appends a "Peer SOUL Contributions" section that makes peer comments unmissable to the LLM.
+4. **Thread Refresh**: After the jitter wait, the SOUL re-fetches the thread to catch any comments posted during the delay. If the conversation no longer needs a response, it skips. **Always applied** — pairs with jitter to catch concurrent responses.
 
-5. **Peer-Aware System Prompt**: When peers have commented in a thread, the system prompt includes explicit instructions: don't repeat their points, build on what they said, fill gaps, @mention peers, stay silent if everything is covered.
+5. **Contribution-Aware Formatting**: `formatThreadForContext()` accepts effective peer usernames and appends a "Peer SOUL Contributions" section that makes peer comments unmissable to the LLM. On foreign repos, this section now appears for thread-derived peers, so SOULs see each other's contributions even without prior registration.
 
-6. **Peer-Aware Analysis**: `analyzeConversation()` downgrades urgency when 2+ peers have already commented, signaling the SOUL to only contribute what's genuinely missing.
+6. **Peer-Aware System Prompt**: When effective peers have commented in a thread, the system prompt includes explicit instructions: don't repeat their points, build on what they said, fill gaps, @mention peers, stay silent if everything is covered.
 
-7. **Peer Round-Robin Hard Stop** (v5.4.8): If ALL replies since the agent's last comment are from peer SOULs (zero human comments), `analyzeConversation()` returns `shouldRespond: false`. This is a code-level block — the LLM never sees the thread. Escape hatch: direct `@mention` by a peer.
+7. **Peer-Aware Analysis**: `analyzeConversation()` downgrades urgency when 2+ effective peers have already commented, signaling the SOUL to only contribute what's genuinely missing.
 
-8. **Comment Saturation Cap** (v5.4.8): If the agent has 3+ comments in the thread and no human has `@mentioned` it in the last 5 comments, `shouldRespond: false`. This catches the slow-burn pattern where agents accumulate comments over time even with occasional human engagement.
+8. **Round-Robin Hard Stop** (v5.5.2): If ALL replies since the agent's last comment are from effective peers (zero human/issue-author comments), `analyzeConversation()` returns `shouldRespond: false`. This is a code-level block — the LLM never sees the thread. Escape hatch: direct `@mention` by anyone.
+
+9. **Comment Saturation Cap** (v5.5.2): If the agent has 3+ comments in the thread and the issue author hasn't `@mentioned` it in the last 5 comments, `shouldRespond: false`. On foreign repos, only the issue author qualifies as "human" for the escape hatch — other commenters (SOULs or bystanders) can't bypass the cap.
 
 **Design Principles:**
 
@@ -1030,7 +1039,8 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 - SOULs remain fully autonomous — the LLM still decides whether to comment
 - No shared state between SOULs — discovery is local observation
 - No inter-process communication
-- Existing consecutive-reply prevention still works
+- Workspace peer identity preserved — foreign repos use thread-derived fallback
+- Issue author is the only human signal on foreign codebases
 
 ---
 
@@ -1337,7 +1347,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in BOTH code paths (scheduler + executor). Both paths pass full test results (testsRun, testsPassed) in completion reports. | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
 | 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. **Discussion vs. work awareness:** github-response skill teaches SOULs to distinguish discussions (share ideas) from work mandates (ship code). **No self-introduction:** username already visible on GitHub comments. | Code + Prompt |
-| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages, conversation conclusion heuristics (max replies, max depth, disengagement, circular detection), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses, session + API deduplication prevents double replies. **Peer round-robin hard stop:** if only peer SOULs replied since last comment, `shouldRespond: false` (code-level block). **Saturation cap:** 3+ comments → only respond if human @mentions. **Both enforced in `analyzeConversation()` at all call sites.** | Code + Prompt |
+| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages, conversation conclusion heuristics (max replies, max depth, disengagement, circular detection), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses (always applied), session + API deduplication prevents double replies. **Effective peers** (v5.5.2): `getEffectivePeers()` derives peers from thread on foreign repos (all commenters except agent + issue author) — workspace repos use registered peers. **Round-robin hard stop:** if only effective peers replied since last comment (issue author hasn't re-engaged), `shouldRespond: false`. **Saturation cap:** 3+ comments → only respond if issue author @mentions. Jitter + thread refresh always applied regardless of registered peer count. **All enforced in `analyzeConversation()` at all call sites.** | Code + Prompt |
 
 **Enforcement types:**
 - **Code** — Behavior is enforced by code logic (cannot be bypassed)
