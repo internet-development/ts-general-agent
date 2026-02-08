@@ -180,3 +180,54 @@ An observer reads a Bluesky thread between @soul1, @soul2, and @soul3. The threa
 - Three SOULs each post separate "I'll stop here" messages
 - A goodbye chain goes 5+ messages deep
 - The thread's last 10 messages are all variations of "thanks!" / "agreed!" / "sounds good!"
+
+# 19
+
+@soul1 creates a Pull Request in the shared workspace. The PR is created and reviewers are automatically assigned — @soul2 and/or @soul3 receive a review request. No manual intervention is needed. The {{OWNER}} can look at any PR and see that reviewers were requested.
+
+**What MUST happen:**
+- `requestReviewersForPR()` is called after `createPullRequestAPI()` in the `github_create_pr` executor handler
+- Peer SOULs are discovered via `getPeerGithubUsername()` from the peer registry
+- If no peers are found, falls back to listing repository collaborators via GitHub API
+- At least one reviewer is requested on the PR
+
+**What MUST NOT happen:**
+- A PR is created with zero reviewers
+- The SOUL only creates the PR and expects peers to discover it via notification polling alone
+- Reviewer assignment silently fails and no one notices
+
+**Enforcement:** Code (`requestReviewersForPR` called in executor.ts `github_create_pr` handler).
+
+# 20
+
+@soul1 merges a Pull Request. Within seconds, @soul1 (or another idle SOUL) discovers that a previously-blocked task is now unblocked and claims it. The {{OWNER}} observes that work continues promptly after merges — no 3-minute gaps between completing one task and starting the next.
+
+**What MUST happen:**
+- `github_merge_pr` handler in executor.ts triggers `onPRMergedCallback` after successful merge
+- The callback calls `requestEarlyPlanCheck()` on the scheduler
+- Plan awareness check fires within 5 seconds of merge
+- If the scheduler is idle, it discovers and claims the next task
+
+**What MUST NOT happen:**
+- The SOUL merges a PR and sits idle for up to 3 minutes before discovering the next task
+- The early re-poll fires when the scheduler is already busy (guarded by idle check)
+- Circular imports between executor.ts and scheduler.ts (solved by callback registration pattern)
+
+**Enforcement:** Code (`registerOnPRMerged` callback pattern, `requestEarlyPlanCheck` with 5s delay).
+
+# 21
+
+@soul1 is executing a task on a feature branch `task-3-add-dashboard`. During execution, Claude Code must NOT run `git merge main`, `git checkout main`, `git pull`, `git rebase`, or `git fetch`. After execution completes, the system verifies that @soul1 is still on the correct feature branch. If Claude Code switched branches or merged other branches into the feature branch, the task fails immediately — contaminated PRs are never created.
+
+**What MUST happen:**
+- `task-execution` and `pr-workflow` skill templates explicitly tell Claude Code to never run `git merge`, `git rebase`, `git pull`, `git fetch`, or switch branches
+- After Claude Code execution, `verifyBranch()` confirms the current branch matches the expected feature branch
+- If verification fails, `reportTaskFailed("Branch hygiene failure")` is called — no PR is created
+- This PRE-GATE check runs BEFORE `verifyGitChanges` (GATE 1) in both scheduler.ts and executor.ts
+
+**What MUST NOT happen:**
+- A PR contains commits from another PR or from main because Claude Code ran `git merge main`
+- Claude Code switches to main to "check something" and the system doesn't notice
+- Branch verification only runs in one code path (must be in BOTH scheduler.ts and executor.ts)
+
+**Enforcement:** Code (`verifyBranch()` PRE-GATE in both code paths) + Prompt (skill templates explicitly prohibit git merge/rebase/pull/fetch/checkout).

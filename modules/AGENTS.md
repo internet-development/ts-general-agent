@@ -70,8 +70,8 @@ Ask these questions:
 
 | Module | Purpose | Depends On |
 |--------|---------|------------|
-| `scheduler.ts` | Multi-loop architecture (awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment) | All modules |
-| `executor.ts` | Tool execution handlers | Adapters, local-tools |
+| `scheduler.ts` | Multi-loop architecture (awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment). `executeClaimedTask()` includes PRE-GATE `verifyBranch()` check. `requestEarlyPlanCheck()` fires plan awareness 5s after PR merge via `registerOnPRMerged()` callback. | All modules |
+| `executor.ts` | Tool execution handlers. `github_create_pr` auto-requests reviewers via `requestReviewersForPR()`. `github_merge_pr` triggers `onPRMergedCallback` for early re-poll. `plan_execute_task` includes PRE-GATE `verifyBranch()` check. Exports `registerOnPRMerged()` callback to avoid circular imports with scheduler. | Adapters, local-tools |
 | `tools.ts` | Tool definitions for LLM | None |
 | `config.ts` | Environment configuration | None |
 | `logger.ts` | Logging infrastructure | None |

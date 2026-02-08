@@ -44,10 +44,17 @@ import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.j
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName } from '@local-tools/self-task-execute.js';
 import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@local-tools/self-task-report.js';
-import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
+import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess, verifyBranch } from '@local-tools/self-task-verify.js';
 import { parsePlan } from '@local-tools/self-plan-parse.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { ui } from '@modules/ui.js';
+
+//NOTE(self): Callback hook for post-merge actions (avoids circular import with scheduler)
+//NOTE(self): Registered by scheduler at startup to trigger early plan check after PR merge
+let onPRMergedCallback: (() => void) | null = null;
+export function registerOnPRMerged(callback: () => void): void {
+  onPRMergedCallback = callback;
+}
 import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 import { createMemo, createGitHubIssue } from '@local-tools/self-github-create-issue.js';
 import { watchWorkspace, getWatchedWorkspaceForRepo } from '@modules/workspace-discovery.js';
@@ -583,6 +590,12 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
 
         const result = await github.createPullRequest({ owner, repo, title, body, head, base, draft });
         if (result.success) {
+          //NOTE(self): Request reviewers from peers (non-fatal)
+          //NOTE(self): Matches the task execution paths in scheduler.ts and plan_execute_task
+          if (result.data.number) {
+            requestReviewersForPR(owner, repo, result.data.number).catch(() => {});
+          }
+
           return {
             tool_use_id: call.id,
             content: JSON.stringify({
@@ -639,6 +652,11 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             }
           } catch (branchDeleteError) {
             logger.debug('Branch cleanup error (non-fatal)', { error: String(branchDeleteError) });
+          }
+
+          //NOTE(self): Signal post-merge — scheduler can pick up newly unblocked tasks
+          if (onPRMergedCallback) {
+            try { onPRMergedCallback(); } catch { /* non-fatal */ }
           }
 
           return {
@@ -2159,6 +2177,16 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             );
           }
           return { tool_use_id: call.id, content: `Error: ${executionResult.error}`, is_error: true };
+        }
+
+        //NOTE(self): PRE-GATE — Verify Claude Code didn't switch branches or merge other branches
+        const branchCheck = await verifyBranch(workspaceResult.path, taskBranchName);
+        if (!branchCheck.success) {
+          await reportTaskFailed(
+            { owner, repo, issueNumber: issue_number, taskNumber: task_number, plan },
+            `Branch hygiene failure: ${branchCheck.error}`
+          );
+          return { tool_use_id: call.id, content: `Error: Branch hygiene failure: ${branchCheck.error}`, is_error: true };
         }
 
         //NOTE(self): GATE 1 — Verify Claude Code actually produced git changes

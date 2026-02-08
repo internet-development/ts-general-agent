@@ -15,7 +15,7 @@ import { ui, type ScheduledTimers } from '@modules/ui.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
-import { executeTools, setResponseThreadContext } from '@modules/executor.js';
+import { executeTools, setResponseThreadContext, registerOnPRMerged } from '@modules/executor.js';
 import type { ToolCall } from '@modules/tools.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
@@ -133,7 +133,7 @@ import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeer
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
-import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess } from '@local-tools/self-task-verify.js';
+import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess, verifyBranch } from '@local-tools/self-task-verify.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
 import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
 import { parsePlan, fetchFreshPlan, getClaimableTasks, freshUpdateTaskInPlan } from '@local-tools/self-plan-parse.js';
@@ -381,6 +381,9 @@ export class AgentScheduler {
       .map(([name, ms]) => `${name}: ${(ms / 1000).toFixed(1)}s`)
       .join(', ');
     ui.system('Timer jitter', `${agentName} → ${intervalSummary}`);
+
+    //NOTE(self): Register post-merge callback so executor can trigger early plan checks
+    registerOnPRMerged(() => this.requestEarlyPlanCheck());
 
     //NOTE(self): Start the loops
     this.startSessionRefreshLoop();
@@ -2321,6 +2324,20 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     }, getTimerJitter(this.appConfig.agent.name, 'plan-awareness', this.config.planAwarenessInterval));
   }
 
+  //NOTE(self): Request an early plan awareness check (e.g., after merging a PR)
+  //NOTE(self): Runs on next tick if idle — doesn't interrupt current work
+  public requestEarlyPlanCheck(): void {
+    if (this.shutdownRequested) return;
+    logger.info('Early plan awareness check requested');
+    setTimeout(async () => {
+      if (this.state.currentMode !== 'idle') {
+        logger.debug('Skipping early plan check — not idle');
+        return;
+      }
+      await this.planAwarenessCheck();
+    }, 5_000); //NOTE(self): 5s delay — let GitHub propagate merge state
+  }
+
   //NOTE(self): Detect and recover tasks stuck in in_progress/claimed for > 30 minutes
   //NOTE(self): Resets them to pending so they can be reclaimed on next poll cycle
   private async recoverStuckTasks(): Promise<void> {
@@ -2918,6 +2935,17 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             executionResult.error || 'Unknown error'
           );
         }
+        return;
+      }
+
+      //NOTE(self): PRE-GATE — Verify Claude Code didn't switch branches or merge other branches
+      const branchCheck = await verifyBranch(workspaceResult.path, branchName);
+      if (!branchCheck.success) {
+        ui.stopSpinner('Branch contaminated', false);
+        await reportTaskFailed(
+          { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+          `Branch hygiene failure: ${branchCheck.error}`
+        );
         return;
       }
 

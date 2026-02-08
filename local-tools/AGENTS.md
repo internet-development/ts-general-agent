@@ -148,7 +148,7 @@ All local-tool files use a **flat structure** with semantic prefixes:
 |-------|---------|
 | `task-claim` | Claim tasks via GitHub assignee API (first-writer-wins protocol) |
 | `task-execute` | Execute claimed tasks via Claude Code. Also exports `createBranch` (feature branch creation), `createPullRequest` (PR via GitHub REST API with PAT), and `requestReviewersForPR` (discover + request reviewers via peer registry or collaborators API fallback) |
-| `task-verify` | Four-gate quality check: verify git changes exist, run tests if present, push to remote, verify push success |
+| `task-verify` | PRE-GATE + four-gate quality check: `verifyBranch()` confirms Claude Code stayed on the correct feature branch, then verify git changes exist, run tests if present, push to remote, verify push success |
 | `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes, enabling the scheduler to announce on Bluesky |
 
 ### Workspace Management (`self-workspace-*`)

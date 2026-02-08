@@ -904,16 +904,28 @@ The review uses the same GitHub response mode pattern (jitter, thread refresh, p
 
 Multiple SOULs can claim and execute different tasks on the same plan issue simultaneously. GitHub issue assignees are additive — when SOUL1 claims Task 1 and SOUL2 claims Task 2, both appear as assignees on the plan issue. Each SOUL works on its own feature branch (`task-<N>-<slug>`), so there are no merge conflicts. Task-level safety is enforced by the plan body itself: `task.assignee` check prevents two SOULs from claiming the same task, and `freshUpdateTaskInPlan()` uses atomic read-modify-write to avoid clobbering concurrent plan body updates. When a SOUL completes its task, it removes itself as assignee; the other SOULs remain assigned to their in-progress tasks.
 
+### Post-Merge Early Re-Poll
+
+When a SOUL merges a PR via `github_merge_pr`, the executor triggers `requestEarlyPlanCheck()` via a callback registered at scheduler startup (`registerOnPRMerged()`). This fires a plan awareness check 5 seconds after merge instead of waiting up to 3 minutes. The callback pattern avoids circular imports between `executor.ts` and `scheduler.ts`.
+
+This is essential for multi-task plans where later tasks depend on earlier ones. Without early re-poll, a SOUL that merges a PR would sit idle for up to 3 minutes before discovering the next unblocked task.
+
 ### Fair Task Distribution
 
 After completing a task, a SOUL returns to idle and waits for the next poll cycle (3 min). This gives other SOULs a chance to claim tasks rather than one SOUL grabbing everything.
 
 ### Task Verification Gates
 
-Before a task is marked complete, it must pass **four gates** (implemented in `self-task-verify.ts`):
+Before a task is marked complete, it must pass a **pre-gate check** and **four gates** (implemented in `self-task-verify.ts`):
 
 ```
 Claude Code execution
+       │
+       ▼
+PRE-GATE: verifyBranch()
+  - Still on the expected feature branch?
+  - Claude Code didn't switch to main or another branch?
+  - If FAIL → reportTaskFailed("Branch hygiene failure")
        │
        ▼
 GATE 1: verifyGitChanges()
@@ -938,10 +950,14 @@ GATE 4: verifyPushSuccess()
   - If FAIL → reportTaskFailed("branch not on remote")
        │
        ▼
-createPullRequest() → reportTaskComplete()
+createPullRequest() → requestReviewersForPR() → reportTaskComplete()
 ```
 
 No task reaches "complete" unless ALL gates pass. Each gate failure produces a specific error message on the plan issue.
+
+**Branch hygiene (`verifyBranch`):** Claude Code receives explicit constraints via the `task-execution` and `pr-workflow` skill templates — never run `git merge`, `git rebase`, `git pull`, `git fetch`, and never switch branches. The PRE-GATE check verifies compliance after execution. If Claude Code switched branches or merged other branches, the task fails immediately.
+
+**Reviewer assignment (`requestReviewersForPR`):** After creating the PR, `requestReviewersForPR()` discovers peer SOULs via the peer registry (`getPeerGithubUsername`) and requests reviews from them. If no peers are found, it falls back to listing repository collaborators and requesting review from the first non-self collaborator. This ensures every PR has a reviewer assigned automatically.
 
 **Dual enforcement:** Gates AND plan completion handling are applied in both code paths that execute tasks:
 1. `scheduler.ts:executeClaimedTask()` — the scheduler's autonomous plan-polling path
@@ -982,8 +998,8 @@ Proceed.
 | `create_memo`         | Create a GitHub issue as a coordination memo (auto-adds "memo" label)  |
 | `github_create_issue` | Create a GitHub issue with full control over labels — for standalone issues, follow-ups, or ideas inspired by conversations |
 | `github_update_issue` | Update issue body, state, labels, assignees                            |
-| `github_create_pr`    | Create a pull request to propose changes or fix issues                 |
-| `github_merge_pr`     | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced) |
+| `github_create_pr`    | Create a pull request to propose changes or fix issues. Auto-requests reviewers from peer SOULs via `requestReviewersForPR()`. |
+| `github_merge_pr`     | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced). Triggers `requestEarlyPlanCheck()` via callback so the merging SOUL (or peers) pick up newly unblocked tasks within 5 seconds instead of waiting up to 3 minutes. Also deletes the merged feature branch. |
 | `github_review_pr`    | Approve, request changes, or comment on a PR                           |
 | `plan_create`         | Create a structured plan issue                                         |
 | `plan_claim_task`     | Claim a task via assignee API                                          |
@@ -1440,6 +1456,9 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 16 | **[Adversarial]** SOUL-as-issue-author peer symmetry | `getEffectivePeers()` includes issue author when they've commented. Round-robin fires symmetrically for SOUL-created issues. | Hard block |
 | 17 | **[Adversarial]** Circular conversation hard-block | Medium/high confidence → `continue` in scheduler loop (notification skipped). Low confidence → advisory text. LLM cannot override medium/high. | Hard block + Advisory |
 | 18 | **[Adversarial]** Clean thread endings | Skill templates prefer likes over messages for exits. `isLowValueClosing` catches verbal goodbyes from other SOULs. Max 1-2 closing messages per thread, not 8. | Hard block + Prompt |
+| 19 | PR reviewer auto-assignment | `github_create_pr` in executor.ts calls `requestReviewersForPR()` after PR creation. Discovers peers via registry, falls back to repo collaborators. | Code |
+| 20 | Post-merge work pickup | `github_merge_pr` triggers `requestEarlyPlanCheck()` via `registerOnPRMerged()` callback. Plan awareness fires in 5s, not 3min. | Code |
+| 21 | **[Adversarial]** Branch contamination prevention | `verifyBranch()` PRE-GATE checks Claude Code stayed on feature branch. Skill templates (`task-execution`, `pr-workflow`) explicitly prohibit `git merge/rebase/pull/fetch` and branch switching. | Code + Prompt |
 
 **Enforcement types:**
 - **Hard block** — Code prevents LLM from seeing the notification entirely. Cannot be bypassed. Used for multi-agent feedback loops.

@@ -193,6 +193,30 @@ export async function runTestsIfPresent(workspacePath: string): Promise<TestResu
   });
 }
 
+//NOTE(self): Verify we're still on the expected feature branch after Claude Code execution
+//NOTE(self): Claude Code might switch branches (git checkout main) or merge other branches
+export async function verifyBranch(
+  workspacePath: string,
+  expectedBranch: string
+): Promise<{ success: boolean; currentBranch: string; error?: string }> {
+  const result = await runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], workspacePath);
+
+  if (!result.success) {
+    return { success: false, currentBranch: '', error: `Failed to get current branch: ${result.stderr}` };
+  }
+
+  const currentBranch = result.stdout.trim();
+  if (currentBranch !== expectedBranch) {
+    return {
+      success: false,
+      currentBranch,
+      error: `Expected branch '${expectedBranch}' but found '${currentBranch}'. Claude Code may have switched branches during execution.`,
+    };
+  }
+
+  return { success: true, currentBranch };
+}
+
 //NOTE(self): Verify the branch actually exists on the remote after push
 export async function verifyPushSuccess(
   workspacePath: string,
