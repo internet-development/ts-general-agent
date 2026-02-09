@@ -8,7 +8,7 @@ import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage
 import { readSoul, readSelf } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools } from '@modules/executor.js';
-import { ui } from '@modules/ui.js';
+import { ui, getTerminalWidth } from '@modules/ui.js';
 import { buildSystemPrompt } from '@modules/skills.js';
 import { recordSignificantEvent, addInsight } from '@modules/engagement.js';
 import { getScheduler } from '@modules/scheduler.js';
@@ -123,12 +123,17 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
 
     //NOTE(self): Arrow keys and escape sequences (multi-char starting with ESC)
     if (char.length > 1 && char[0] === '\x1b') {
+      const lineWidth = getTerminalWidth() - 4; //NOTE(self): Must match innerWidth in ui.ts redrawInputBox
       if (char === '\x1b[D') { // Left arrow
         if (cursorPos > 0) cursorPos--;
       } else if (char === '\x1b[C') { // Right arrow
         if (cursorPos < inputBuffer.length) cursorPos++;
+      } else if (char === '\x1b[A') { // Up arrow
+        if (cursorPos >= lineWidth) cursorPos -= lineWidth;
+      } else if (char === '\x1b[B') { // Down arrow
+        cursorPos = Math.min(cursorPos + lineWidth, inputBuffer.length);
       }
-      //NOTE(self): All other escape sequences (up/down, etc.) silently ignored
+      //NOTE(self): All other escape sequences silently ignored
       ui.printInputBox(inputBuffer, cursorPos, VERSION);
       return;
     }

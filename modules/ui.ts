@@ -134,6 +134,24 @@ export class TerminalUI {
   private lastHeartbeat: Date = new Date();
   private resizeHandler: (() => void) | null = null;
 
+  //NOTE(self): Strip ANSI escape codes to get visible character count
+  private visibleLength(str: string): number {
+    return str.replace(/\x1b\[[0-9;]*m/g, '').length;
+  }
+
+  //NOTE(self): Wrap text in double-line vertical borders (║ content ║)
+  private addBorder(text: string): string {
+    const width = getTerminalWidth();
+    const innerWidth = width - 2; //NOTE(self): ║ + content(width-2) + ║
+    const visLen = this.visibleLength(text);
+    if (visLen > innerWidth) {
+      //NOTE(self): Content too wide — show left border only, skip right to avoid wrap
+      return `${ANSI.red}${BOX.dVertical}${ANSI.reset}${text}`;
+    }
+    const padding = innerWidth - visLen;
+    return `${ANSI.red}${BOX.dVertical}${ANSI.reset}${text}${' '.repeat(padding)}${ANSI.red}${BOX.dVertical}${ANSI.reset}`;
+  }
+
   //NOTE(self): Write to the output area (scroll region)
   private writeOutput(text: string): void {
     if (this.inputBoxEnabled) {
@@ -143,7 +161,7 @@ export class TerminalUI {
       const scrollBottom = height - this.inputBoxHeight;
       //NOTE(self): Move to bottom of scroll region
       process.stdout.write(CSI.moveTo(scrollBottom, 1));
-      process.stdout.write('\n' + text);
+      process.stdout.write('\n' + this.addBorder(text));
       //NOTE(self): Restore and redraw input box
       this.redrawInputBox();
     } else {
@@ -493,14 +511,14 @@ export class TerminalUI {
 
       for (const timerLine of timerLines) {
         process.stdout.write(CSI.moveTo(currentRow, 1));
-        process.stdout.write(CSI.clearLine + timerLine);
+        process.stdout.write(CSI.clearLine + this.addBorder(timerLine));
         currentRow++;
       }
     } else {
       //NOTE(self): No timers yet, show placeholder lines
       for (let i = 0; i < 4; i++) {
         process.stdout.write(CSI.moveTo(currentRow, 1));
-        process.stdout.write(CSI.clearLine + `  ${ANSI.dim}${SYM.ring} Loading schedule...${ANSI.reset}`);
+        process.stdout.write(CSI.clearLine + this.addBorder(`  ${ANSI.dim}${SYM.ring} Loading schedule...${ANSI.reset}`));
         currentRow++;
       }
     }
