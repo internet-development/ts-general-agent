@@ -125,7 +125,7 @@ export interface ScheduledTimers {
 export class TerminalUI {
   private thinkingMessage = '';
   private inputBoxEnabled = false;
-  private inputBoxHeight = 8; //NOTE(self): 4 timer lines + separator + top border + input line + bottom border
+  private inputBoxHeight = 10; //NOTE(self): 4 timer lines + separator + top border + 3 input lines + bottom border
   private currentVersion = '0.0.0'; //NOTE(self): Fallback, actual version passed from loop.ts
   private currentInputText = '';
   private currentCursorPos = 0;
@@ -541,34 +541,40 @@ export class TerminalUI {
       cursorColIndex = this.currentCursorPos - charsCounted;
     }
 
-    //NOTE(self): Determine which line to display (scroll to show cursor)
+    //NOTE(self): Determine scroll window (keep cursor visible within 3 lines)
+    const VISIBLE_LINES = 3;
     let displayStartLine = 0;
-    if (cursorLineIndex >= 1) {
-      displayStartLine = cursorLineIndex;
+    if (cursorLineIndex >= VISIBLE_LINES) {
+      displayStartLine = cursorLineIndex - (VISIBLE_LINES - 1);
     }
 
-    const line1 = (textLines[displayStartLine] || '').padEnd(innerWidth);
-
     const ver = `v${this.currentVersion}`;
-    const hasOverflow = textLines.length > displayStartLine + 1;
+    const hasOverflow = textLines.length > displayStartLine + VISIBLE_LINES;
     const scrollIndicator = hasOverflow ? ' ...' : '';
     const bottomPadding = Math.max(0, width - ver.length - scrollIndicator.length - 5);
     const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(bottomPadding)}${scrollIndicator} ${ver} ${BOX.horizontal}${BOX.bottomRight}`;
 
-    //NOTE(self): Draw input box
+    //NOTE(self): Draw input box — top border
     process.stdout.write(CSI.moveTo(currentRow, 1));
     process.stdout.write(CSI.clearLine + topLine);
     currentRow++;
 
-    process.stdout.write(CSI.moveTo(currentRow, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.vertical}${ANSI.reset} ${ANSI.white}${line1}${ANSI.reset} ${ANSI.red}${BOX.vertical}${ANSI.reset}`);
-    currentRow++;
+    //NOTE(self): Render 3 input lines
+    for (let i = 0; i < VISIBLE_LINES; i++) {
+      const lineIdx = displayStartLine + i;
+      const lineContent = (textLines[lineIdx] || '').padEnd(innerWidth);
+      process.stdout.write(CSI.moveTo(currentRow, 1));
+      process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.vertical}${ANSI.reset} ${ANSI.white}${lineContent}${ANSI.reset} ${ANSI.red}${BOX.vertical}${ANSI.reset}`);
+      currentRow++;
+    }
 
+    //NOTE(self): Bottom border
     process.stdout.write(CSI.moveTo(currentRow, 1));
     process.stdout.write(CSI.clearLine + `${ANSI.red}${bottomLine}${ANSI.reset}`);
 
-    //NOTE(self): Position cursor in input area (input line is at currentRow - 1)
-    const inputLineRow = currentRow - 1;
+    //NOTE(self): Position cursor on the correct visible row
+    const cursorVisibleRow = cursorLineIndex - displayStartLine;
+    const inputLineRow = (currentRow - VISIBLE_LINES) + cursorVisibleRow;
     const cursorCol = Math.min(cursorColIndex, innerWidth) + 3; //NOTE(self): +3 for "│ " prefix
     process.stdout.write(CSI.moveTo(inputLineRow, Math.max(3, cursorCol)));
   }

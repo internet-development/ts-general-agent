@@ -72,6 +72,7 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
     process.stdin.setRawMode(true);
   }
   process.stdin.resume();
+  process.stdin.setEncoding('utf8');
 
   let shouldExit = false;
   let inputBuffer = '';
@@ -117,8 +118,7 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
   });
 
   //NOTE(self): Key input handling for owner communication
-  process.stdin.on('data', async (key: Buffer) => {
-    const char = key.toString();
+  process.stdin.on('data', async (char: string) => {
 
     //NOTE(self): ESC - clear input or exit
     if (char === '\x1b') {
@@ -137,8 +137,8 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
       return;
     }
 
-    //NOTE(self): Enter - submit input
-    if (char === '\r' || char === '\n') {
+    //NOTE(self): Enter - submit input (only bare Enter, not newlines embedded in paste)
+    if (char.length === 1 && (char === '\r' || char === '\n')) {
       const input = inputBuffer.trim();
       inputBuffer = '';
 
@@ -172,9 +172,14 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
       return;
     }
 
-    //NOTE(self): Regular character - update input box
-    if (char >= ' ' && char <= '~') {
-      inputBuffer += char;
+    //NOTE(self): Regular character or paste - handle both single keypress and multi-char paste
+    for (const ch of char) {
+      //NOTE(self): Skip control characters except tab
+      if (ch < ' ' && ch !== '\t') continue;
+      //NOTE(self): Accept everything printable (including Unicode)
+      inputBuffer += ch;
+    }
+    if (inputBuffer.length > 0) {
       ui.printInputBox(inputBuffer, inputBuffer.length, VERSION);
     }
   });
