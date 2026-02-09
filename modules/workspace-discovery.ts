@@ -16,6 +16,7 @@ import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
+import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
 import { getConfig } from '@modules/config.js';
 import { getConversation } from '@modules/github-engagement.js';
@@ -419,6 +420,21 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
           if (!assignedToUs) continue;
         }
 
+        //NOTE(self): Auto-assign unassigned issues to the issue author
+        if (issue.assignees.length === 0 && issue.user?.login) {
+          const assignResult = await updateIssue({
+            owner: workspace.owner,
+            repo: workspace.repo,
+            issue_number: issue.number,
+            assignees: [issue.user.login],
+          });
+          if (assignResult.success) {
+            logger.info('Auto-assigned unassigned issue to author', { repo: `${workspace.owner}/${workspace.repo}`, number: issue.number, author: issue.user.login });
+          } else {
+            logger.warn('Failed to auto-assign issue to author', { repo: `${workspace.owner}/${workspace.repo}`, number: issue.number, error: assignResult.error });
+          }
+        }
+
         results.push({ workspace, issue });
       }
     } catch (err) {
@@ -789,21 +805,18 @@ export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
           latestReviewByUser.set(review.user.login.toLowerCase(), review.state);
         }
 
-        //NOTE(self): Don't gate on CHANGES_REQUESTED — SOULs self-approve to override rejections.
-        //NOTE(self): Approval count alone determines merge readiness.
+        //NOTE(self): Every requested reviewer must LGTM before merge
+        //NOTE(self): If there are still pending reviewers (requested_reviewers not empty), skip
+        const pendingReviewers = (pr.requested_reviewers || []).length;
         const approvalCount = [...latestReviewByUser.values()].filter(s => s === 'APPROVED').length;
         const rejectCount = [...latestReviewByUser.values()].filter(s => s === 'CHANGES_REQUESTED').length;
+        const totalReviewers = latestReviewByUser.size + pendingReviewers;
 
-        if (approvalCount > 0) {
-          //NOTE(self): Require approvals >= number of assignees on the PR
-          //NOTE(self): If no assignees, require at least 1 approval
-          const assigneeCount = (pr.assignees || []).length;
-          const requiredApprovals = Math.max(assigneeCount, 1);
-          if (approvalCount >= requiredApprovals) {
-            approved.push({ workspace, pr, approvals: approvalCount });
-          }
-        } else if (rejectCount > 0 && approvalCount === 0) {
-          //NOTE(self): PR has only rejections, no approvals — check if stuck for >1 hour
+        if (pendingReviewers === 0 && approvalCount > 0 && approvalCount === latestReviewByUser.size) {
+          //NOTE(self): All reviewers have reviewed and all approved — ready to merge
+          approved.push({ workspace, pr, approvals: approvalCount });
+        } else if (rejectCount > 0 && approvalCount === 0 && pendingReviewers === 0) {
+          //NOTE(self): All reviewers reviewed but only rejections — check if stuck for >1 hour
           const prCreatedAt = new Date(pr.created_at).getTime();
           if (now - prCreatedAt > REJECTED_PR_TIMEOUT_MS) {
             stuckRejected.push({ workspace, pr });
@@ -865,7 +878,66 @@ export async function autoMergeApprovedPR(
     }
   }
 
+  //NOTE(self): Create follow-up issue from reviewer feedback if any reviews had substantive comments
+  await createFollowUpIssueFromReviews(owner, repo, pr);
+
   return { success: true };
+}
+
+//NOTE(self): After merging a PR, check if reviewers left substantive feedback and create a follow-up issue
+async function createFollowUpIssueFromReviews(
+  owner: string,
+  repo: string,
+  pr: GitHubPullRequest
+): Promise<void> {
+  try {
+    const reviewsResult = await listPullRequestReviews({
+      owner,
+      repo,
+      pull_number: pr.number,
+    });
+
+    if (!reviewsResult.success) return;
+
+    //NOTE(self): Collect reviews with substantive body text (not empty, not just "LGTM")
+    const feedbackReviews = reviewsResult.data.filter(review => {
+      if (!review.body || review.body.trim().length === 0) return false;
+      const normalized = review.body.trim().toLowerCase();
+      if (normalized === 'lgtm' || normalized === 'lgtm!' || normalized === 'looks good') return false;
+      return true;
+    });
+
+    if (feedbackReviews.length === 0) return;
+
+    //NOTE(self): Build the follow-up issue body from all reviewer feedback
+    const feedbackSections = feedbackReviews.map(review =>
+      `### Feedback from @${review.user.login}\n> ${review.body!.trim().split('\n').join('\n> ')}`
+    );
+
+    const issueBody = [
+      `PR #${pr.number} (\`${pr.title}\`) has been merged. Reviewers left feedback that may warrant follow-up work.`,
+      '',
+      ...feedbackSections,
+      '',
+      `---`,
+      `*Auto-created from reviewer feedback on #${pr.number}.*`,
+    ].join('\n');
+
+    const issueResult = await createIssue({
+      owner,
+      repo,
+      title: `Follow-up: reviewer feedback from #${pr.number}`,
+      body: issueBody,
+    });
+
+    if (issueResult.success) {
+      logger.info('Created follow-up issue from reviewer feedback', { owner, repo, prNumber: pr.number, issueNumber: issueResult.data.number });
+    } else {
+      logger.warn('Failed to create follow-up issue from reviewer feedback', { owner, repo, prNumber: pr.number, error: issueResult.error });
+    }
+  } catch (err) {
+    logger.warn('Error creating follow-up issue from reviews (non-fatal)', { owner, repo, prNumber: pr.number, error: String(err) });
+  }
 }
 
 //NOTE(self): Handle merge conflict recovery — close conflicting PR, delete branch, reset task to pending

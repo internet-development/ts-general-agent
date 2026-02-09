@@ -5,7 +5,7 @@
     "node": ">=18"
   },
   "license": "MIT",
-  "version": "8.0.12",
+  "version": "8.0.13",
   "type": "module",
   "scripts": {
     "agent": "tsx index.ts",
