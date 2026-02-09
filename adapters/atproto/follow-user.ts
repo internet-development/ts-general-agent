@@ -36,8 +36,9 @@ export async function followUser(
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to follow user' };
+      let errorMsg = `Failed to follow user: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

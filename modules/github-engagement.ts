@@ -3,7 +3,7 @@
 //NOTE(self): seenAt timestamp for restart recovery
 //NOTE(self): Conversation state tracking to know when to stop
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 import { isWatchingWorkspace } from '@modules/workspace-discovery.js';
@@ -91,7 +91,9 @@ function saveState(): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(GITHUB_ENGAGEMENT_PATH, JSON.stringify(engagementState, null, 2));
+    const tmpPath = GITHUB_ENGAGEMENT_PATH + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(engagementState, null, 2));
+    renameSync(tmpPath, GITHUB_ENGAGEMENT_PATH);
   } catch (err) {
     logger.error('Failed to save GitHub engagement state', { error: String(err) });
   }

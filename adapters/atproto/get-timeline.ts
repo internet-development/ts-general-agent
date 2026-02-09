@@ -30,8 +30,9 @@ export async function getTimeline(
     const response = await fetch(url, { headers: getAuthHeaders() });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to get timeline' };
+      let errorMsg = `Failed to get timeline: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();
@@ -64,8 +65,9 @@ export async function getAuthorFeed(
     const response = await fetch(url, { headers });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to get author feed' };
+      let errorMsg = `Failed to get author feed: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

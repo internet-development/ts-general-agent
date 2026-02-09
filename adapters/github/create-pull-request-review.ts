@@ -65,21 +65,19 @@ export async function createPullRequestReview(
     );
 
     if (!response.ok) {
-      const error = await response.json();
+      let errorMsg = `Failed to create PR review: ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMsg = error.message || errorMsg;
+      } catch { /* non-JSON response (e.g. HTML 502) */ }
       //NOTE(self): Provide helpful error messages for common cases
       if (response.status === 422) {
-        return {
-          success: false,
-          error: error.message || 'Cannot review: PR may be merged, closed, or you may be the author'
-        };
+        return { success: false, error: errorMsg || 'Cannot review: PR may be merged, closed, or you may be the author' };
       }
       if (response.status === 403) {
-        return {
-          success: false,
-          error: 'Forbidden: You may not have permission to review this PR'
-        };
+        return { success: false, error: 'Forbidden: You may not have permission to review this PR' };
       }
-      return { success: false, error: error.message || 'Failed to create PR review' };
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

@@ -37,8 +37,9 @@ export async function repost(
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to repost' };
+      let errorMsg = `Failed to repost: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();
@@ -71,8 +72,9 @@ export async function unrepost(repostUri: string): Promise<AtprotoResult<void>> 
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to unrepost' };
+      let errorMsg = `Failed to unrepost: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     return { success: true, data: undefined };

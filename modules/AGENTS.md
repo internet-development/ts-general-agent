@@ -85,6 +85,8 @@ Ask these questions:
 | `skills.ts` | Skills framework (loads `skills/*/SKILL.md`, interpolation, prompt assembly) | Logger |
 | `peer-awareness.ts` | Dynamic peer SOUL discovery from plans, workspaces, threads | Config, Memory |
 | `strings.ts` | Shared string utilities: `isEmpty`, `createSlug`, `truncateGraphemes`, `PORTABLE_MAX_GRAPHEMES` (300) | `@atproto/common-web` |
+| `announcement.ts` | Announcement guard shared by scheduler + executor for dual enforcement (`announceIfWorthy`) | Logger |
+| `voice-phrases.ts` | Load/regenerate `voice-phrases.json` for personality-consistent phrasing (`getFulfillmentPhrase`, `getTaskClaimPhrase`, `getGitHubPhrase`) | Memory, Logger |
 
 ### State Management (Keep in Modules)
 
@@ -98,7 +100,7 @@ Ask these questions:
 | `post-log.ts` | Post logging (core parts) | Infrastructure for attribution local-tools |
 | `self-extract.ts` | SELF.md parsing | Foundational identity infrastructure |
 | `action-queue.ts` | Persistent queue for outbound actions (replies) with retry/backoff | Ensures follow-through when rate limits defer actions |
-| `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list | Multi-SOUL collaboration infrastructure |
+| `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list, three-tier auto-close (handled 24h, stale memo 3d, stale other 7d), `pollWorkspacesForApprovedPRs()` + `autoMergeApprovedPR()` for auto-merging approved PRs | Multi-SOUL collaboration infrastructure |
 | `commitment-queue.ts` | Track pending commitments with JSONL persistence, dedup, stale cleanup | Ensures follow-through on promises made in replies |
 | `commitment-extract.ts` | LLM-based extraction of action commitments from Bluesky replies | Feeds commitment queue from response mode |
 | `commitment-fulfill.ts` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) | Executes promised actions autonomously |
@@ -214,7 +216,9 @@ scheduler.ts
 │   ├── workspace-discovery (poll plans, PRs, open issues)
 │   ├── task-claim → task-execute → task-verify → task-report
 │   ├── on planComplete → announceIfWorthy (modules/announcement.ts — shared by scheduler + executor)
-│   └── PR review (one per cycle)
+│   ├── PR review (one per cycle)
+│   ├── closeHandledWorkspaceIssues (24h: agent responded, no follow-up)
+│   └── cleanupStaleWorkspaceIssues (3d memos, 7d others)
 └── commitment fulfillment loop (15s)
     ├── commitment-queue (pending commitments)
     └── commitment-fulfill (dispatch by type)

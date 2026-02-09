@@ -26,8 +26,9 @@ export async function unfollowUser(followUri: string): Promise<AtprotoResult<voi
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to unfollow user' };
+      let errorMsg = `Failed to unfollow user: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     return { success: true, data: undefined };

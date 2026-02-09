@@ -2,7 +2,7 @@
 //NOTE(self): Poll watched workspaces for plan issues, claimable tasks, and reviewable PRs
 //NOTE(self): Workspaces are discovered via Bluesky threads (not hardcoded)
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 import { listIssues } from '@adapters/github/list-issues.js';
@@ -15,6 +15,8 @@ import { deleteBranch } from '@adapters/github/delete-branch.js';
 import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
+import { createIssueComment } from '@adapters/github/create-comment-issue.js';
+import { getIssueThread } from '@adapters/github/get-issue-thread.js';
 import { getConfig } from '@modules/config.js';
 import { getConversation } from '@modules/github-engagement.js';
 
@@ -110,7 +112,9 @@ function saveState(): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(WATCHED_WORKSPACES_PATH, JSON.stringify(discoveryState, null, 2));
+    const tmpPath = WATCHED_WORKSPACES_PATH + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(discoveryState, null, 2));
+    renameSync(tmpPath, WATCHED_WORKSPACES_PATH);
   } catch (err) {
     logger.error('Failed to save workspace discovery state', { error: String(err) });
   }
@@ -382,13 +386,15 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
 
   for (const workspace of workspaces) {
     try {
+      //NOTE(self): Fetch up to 30 issues — workspaces with active SOULs can have 15-20+ open issues
+      //NOTE(self): per_page: 10 was too low and missed older issues entirely
       const issuesResult = await listIssues({
         owner: workspace.owner,
         repo: workspace.repo,
         state: 'open',
         sort: 'created',
         direction: 'desc',
-        per_page: 10,
+        per_page: 30,
       });
 
       if (!issuesResult.success) {
@@ -557,11 +563,13 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
   return results;
 }
 
-//NOTE(self): Stale issue threshold — 7 days of no activity
+//NOTE(self): Stale thresholds — memos are coordination artifacts and should be cleaned up faster
 const STALE_ISSUE_DAYS = 7;
+const STALE_MEMO_DAYS = 3;
 
 //NOTE(self): Find and close stale open issues in watched workspaces
-//NOTE(self): Stale = open, no activity for 7+ days, not a plan issue, not a PR
+//NOTE(self): Stale = open, no activity for threshold days, not a plan issue, not a PR
+//NOTE(self): Memo-labeled issues use a shorter threshold (3 days) — they're coordination artifacts
 //NOTE(self): SOULs should keep workspaces clean — open issues that linger are noise
 export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; found: number }> {
   const state = loadState();
@@ -573,6 +581,7 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
 
   const now = Date.now();
   const staleThresholdMs = STALE_ISSUE_DAYS * 24 * 60 * 60 * 1000;
+  const staleMemoThresholdMs = STALE_MEMO_DAYS * 24 * 60 * 60 * 1000;
 
   for (const workspace of workspaces) {
     try {
@@ -582,7 +591,7 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
         state: 'open',
         sort: 'updated',
         direction: 'asc', //NOTE(self): Oldest-updated first — most likely to be stale
-        per_page: 20,
+        per_page: 30,
       });
 
       if (!issuesResult.success) continue;
@@ -595,10 +604,15 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
         const hasPlanLabel = issue.labels.some(l => l.name.toLowerCase() === 'plan');
         if (hasPlanLabel) continue;
 
-        //NOTE(self): Check if stale (no activity for threshold days)
+        //NOTE(self): Memos use a shorter stale threshold (3 days vs 7 days)
+        //NOTE(self): They're coordination artifacts — once read and discussed, they should be closed
+        const isMemo = issue.labels.some(l => l.name.toLowerCase() === 'memo');
+        const threshold = isMemo ? staleMemoThresholdMs : staleThresholdMs;
+
+        //NOTE(self): Check if stale (no activity for threshold)
         const lastActivity = new Date(issue.updated_at).getTime();
         const staleDuration = now - lastActivity;
-        if (staleDuration < staleThresholdMs) continue;
+        if (staleDuration < threshold) continue;
 
         found++;
         const staleDays = Math.floor(staleDuration / (24 * 60 * 60 * 1000));
@@ -623,6 +637,96 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
       }
     } catch (err) {
       logger.error('Error cleaning up stale workspace issues', {
+        workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+        error: String(err),
+      });
+    }
+  }
+
+  return { closed, found };
+}
+
+//NOTE(self): Close workspace issues that a SOUL has already handled but left open
+//NOTE(self): This fixes the "one-shot trap" — after a SOUL comments on a workspace issue,
+//NOTE(self): the consecutive reply check prevents re-engagement, so the issue stays open forever.
+//NOTE(self): This function auto-closes issues where:
+//NOTE(self):   1. Agent's comment is the most recent (we responded, no one followed up)
+//NOTE(self):   2. Last activity was > 24 hours ago (gave others time to respond)
+//NOTE(self):   3. Not a plan issue (plans have their own lifecycle)
+//NOTE(self):   4. Not a PR
+const HANDLED_ISSUE_HOURS = 24;
+
+export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; found: number }> {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  let found = 0;
+  let closed = 0;
+
+  if (workspaces.length === 0) return { closed, found };
+
+  const config = getConfig();
+  const agentUsername = config.github.username.toLowerCase();
+  const now = Date.now();
+  const thresholdMs = HANDLED_ISSUE_HOURS * 60 * 60 * 1000;
+
+  for (const workspace of workspaces) {
+    try {
+      const issuesResult = await listIssues({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        state: 'open',
+        sort: 'updated',
+        direction: 'asc',
+        per_page: 30,
+      });
+
+      if (!issuesResult.success) continue;
+
+      for (const issue of issuesResult.data) {
+        if (issue.pull_request) continue;
+        const hasPlanLabel = issue.labels.some(l => l.name.toLowerCase() === 'plan');
+        if (hasPlanLabel) continue;
+
+        //NOTE(self): Check if enough time has passed since last activity
+        const lastActivity = new Date(issue.updated_at).getTime();
+        if (now - lastActivity < thresholdMs) continue;
+
+        //NOTE(self): Fetch the thread to check if agent's comment is most recent
+        const threadResult = await getIssueThread(
+          { owner: workspace.owner, repo: workspace.repo, issue_number: issue.number },
+          agentUsername
+        );
+        if (!threadResult.success) continue;
+
+        const { comments, agentHasCommented } = threadResult.data;
+        if (!agentHasCommented) continue;
+
+        //NOTE(self): Check if agent's comment is the most recent
+        const lastComment = comments[comments.length - 1];
+        if (!lastComment || lastComment.user.login.toLowerCase() !== agentUsername) continue;
+
+        found++;
+
+        //NOTE(self): Auto-close — the SOUL responded and no one followed up
+        const closeResult = await updateIssue({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          issue_number: issue.number,
+          state: 'closed',
+        });
+
+        if (closeResult.success) {
+          closed++;
+          logger.info('Auto-closed handled workspace issue', {
+            workspace: getWorkspaceKey(workspace.owner, workspace.repo),
+            issue: issue.number,
+            title: issue.title,
+            hoursIdle: Math.floor((now - lastActivity) / (60 * 60 * 1000)),
+          });
+        }
+      }
+    } catch (err) {
+      logger.error('Error closing handled workspace issues', {
         workspace: getWorkspaceKey(workspace.owner, workspace.repo),
         error: String(err),
       });

@@ -48,21 +48,19 @@ export async function requestPullRequestReviewers(
     );
 
     if (!response.ok) {
-      const error = await response.json();
+      let errorMsg = `Failed to request reviewers: ${response.status}`;
+      try {
+        const error = await response.json();
+        errorMsg = error.message || errorMsg;
+      } catch { /* non-JSON response (e.g. HTML 502) */ }
       //NOTE(self): 422 = user is PR author, not a collaborator, or otherwise ineligible
       if (response.status === 422) {
-        return {
-          success: false,
-          error: error.message || 'Cannot request reviewers: users may be the PR author or lack access'
-        };
+        return { success: false, error: errorMsg || 'Cannot request reviewers: users may be the PR author or lack access' };
       }
       if (response.status === 403) {
-        return {
-          success: false,
-          error: 'Forbidden: insufficient permissions to request reviewers'
-        };
+        return { success: false, error: 'Forbidden: insufficient permissions to request reviewers' };
       }
-      return { success: false, error: error.message || 'Failed to request reviewers' };
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

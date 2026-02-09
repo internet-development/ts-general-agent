@@ -125,6 +125,7 @@ import {
   autoMergeApprovedPR,
   pollWorkspacesForOpenIssues,
   cleanupStaleWorkspaceIssues,
+  closeHandledWorkspaceIssues,
   threadHasWorkspaceContext,
   getWatchedWorkspaces,
   getWorkspaceDiscoveryStats,
@@ -559,6 +560,9 @@ export class AgentScheduler {
       const needsResponse = prioritized.filter((pn) => {
         const n = pn.notification;
         if (!['reply', 'mention', 'quote'].includes(n.reason)) return false;
+
+        //NOTE(self): Never respond to own notifications — prevents self-reply loops
+        if (agentDid && n.author.did === agentDid) return false;
 
         //NOTE(self): seenAt filter for restart recovery - skip old notifications we've already processed
         if (seenAt) {
@@ -1609,26 +1613,32 @@ export class AgentScheduler {
     const checkAndExpress = async () => {
       if (this.shutdownRequested) return;
 
-      //NOTE(self): Check if it's time to express
-      if (shouldExpress() && !this.isQuietHours()) {
-        if (this.state.currentMode === 'idle') {
-          await this.expressionCycle();
+      try {
+        //NOTE(self): Check if it's time to express
+        if (shouldExpress() && !this.isQuietHours()) {
+          if (this.state.currentMode === 'idle') {
+            await this.expressionCycle();
+          }
         }
-      }
 
-      //NOTE(self): Schedule next check
-      const schedule = loadExpressionSchedule();
-      let nextCheckMs = 60_000; //NOTE(self): Default: check every minute
+        //NOTE(self): Schedule next check
+        const schedule = loadExpressionSchedule();
+        let nextCheckMs = 60_000; //NOTE(self): Default: check every minute
 
-      if (schedule.nextExpression) {
-        const timeUntilNext = new Date(schedule.nextExpression).getTime() - Date.now();
-        if (timeUntilNext > 0) {
-          //NOTE(self): Check a bit before scheduled time
-          nextCheckMs = Math.min(timeUntilNext + 1000, 5 * 60_000);
+        if (schedule.nextExpression) {
+          const timeUntilNext = new Date(schedule.nextExpression).getTime() - Date.now();
+          if (timeUntilNext > 0) {
+            //NOTE(self): Check a bit before scheduled time
+            nextCheckMs = Math.min(timeUntilNext + 1000, 5 * 60_000);
+          }
         }
-      }
 
-      this.expressionTimer = setTimeout(checkAndExpress, getTimerJitter(this.appConfig.agent.name, 'expression-check', nextCheckMs));
+        this.expressionTimer = setTimeout(checkAndExpress, getTimerJitter(this.appConfig.agent.name, 'expression-check', nextCheckMs));
+      } catch (error) {
+        //NOTE(self): CRITICAL: always reschedule to prevent permanent chain breakage
+        logger.error('Expression check failed', { error: String(error) });
+        this.expressionTimer = setTimeout(checkAndExpress, 60_000);
+      }
     };
 
     //NOTE(self): Start checking
@@ -1868,37 +1878,43 @@ Revise and post again.`;
     const checkAndReflect = async () => {
       if (this.shutdownRequested) return;
 
-      const timeSinceReflection = Date.now() - this.state.lastReflection;
-      const shouldReflectNow = timeSinceReflection >= this.config.reflectionInterval;
+      try {
+        const timeSinceReflection = Date.now() - this.state.lastReflection;
+        const shouldReflectNow = timeSinceReflection >= this.config.reflectionInterval;
 
-      if (shouldReflectNow && this.state.currentMode === 'idle') {
-        await this.reflectionCycle();
-      }
-
-      //NOTE(self): Check for self-improvement opportunity (friction-driven)
-      //NOTE(self): Gated on 48h burn-in to prove stability before modifying own code
-      const uptimeMs = Date.now() - this.startedAt;
-      if (uptimeMs < AgentScheduler.IMPROVEMENT_BURN_IN_MS) {
-        logger.debug('Self-improvement gated — burn-in period active', {
-          uptimeHours: Math.round(uptimeMs / (60 * 60 * 1000)),
-          requiredHours: 48,
-        });
-      } else if (shouldAttemptImprovement(this.config.improvementMinHours)) {
-        if (this.state.currentMode === 'idle') {
-          await this.improvementCycle();
+        if (shouldReflectNow && this.state.currentMode === 'idle') {
+          await this.reflectionCycle();
         }
-      }
 
-      //NOTE(self): Check for aspirational growth opportunity (inspiration-driven)
-      //NOTE(self): Same 48h burn-in gate as friction-driven improvement
-      if (uptimeMs >= AgentScheduler.IMPROVEMENT_BURN_IN_MS && shouldAttemptGrowth(this.config.improvementMinHours)) {
-        if (this.state.currentMode === 'idle') {
-          await this.growthCycle();
+        //NOTE(self): Check for self-improvement opportunity (friction-driven)
+        //NOTE(self): Gated on 48h burn-in to prove stability before modifying own code
+        const uptimeMs = Date.now() - this.startedAt;
+        if (uptimeMs < AgentScheduler.IMPROVEMENT_BURN_IN_MS) {
+          logger.debug('Self-improvement gated — burn-in period active', {
+            uptimeHours: Math.round(uptimeMs / (60 * 60 * 1000)),
+            requiredHours: 48,
+          });
+        } else if (shouldAttemptImprovement(this.config.improvementMinHours)) {
+          if (this.state.currentMode === 'idle') {
+            await this.improvementCycle();
+          }
         }
-      }
 
-      //NOTE(self): Schedule next check (every 30 minutes)
-      this.reflectionTimer = setTimeout(checkAndReflect, getTimerJitter(this.appConfig.agent.name, 'reflection-check', 30 * 60 * 1000));
+        //NOTE(self): Check for aspirational growth opportunity (inspiration-driven)
+        //NOTE(self): Same 48h burn-in gate as friction-driven improvement
+        if (uptimeMs >= AgentScheduler.IMPROVEMENT_BURN_IN_MS && shouldAttemptGrowth(this.config.improvementMinHours)) {
+          if (this.state.currentMode === 'idle') {
+            await this.growthCycle();
+          }
+        }
+
+        //NOTE(self): Schedule next check (every 30 minutes)
+        this.reflectionTimer = setTimeout(checkAndReflect, getTimerJitter(this.appConfig.agent.name, 'reflection-check', 30 * 60 * 1000));
+      } catch (error) {
+        //NOTE(self): CRITICAL: always reschedule to prevent permanent chain breakage
+        logger.error('Reflection check failed', { error: String(error) });
+        this.reflectionTimer = setTimeout(checkAndReflect, 30 * 60 * 1000);
+      }
     };
 
     //NOTE(self): Start checking
@@ -2450,29 +2466,38 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
                 });
 
                 //NOTE(self): Reset task to pending with no assignee
-                await freshUpdateTaskInPlan(
+                const updateResult = await freshUpdateTaskInPlan(
                   workspace.owner,
                   workspace.repo,
                   issue.number,
                   task.number,
                   { status: 'pending', assignee: null }
                 );
+                if (!updateResult.success) {
+                  logger.warn('Failed to reset stuck task in plan', { taskKey, error: updateResult.error });
+                }
 
                 //NOTE(self): Remove assignee from the plan issue itself
-                await github.removeIssueAssignee({
+                const removeResult = await github.removeIssueAssignee({
                   owner: workspace.owner,
                   repo: workspace.repo,
                   issue_number: issue.number,
                   assignees: [task.assignee],
                 });
+                if (!removeResult.success) {
+                  logger.warn('Failed to remove assignee for stuck task', { taskKey, error: removeResult.error });
+                }
 
                 //NOTE(self): Post a comment explaining the timeout
-                await github.createIssueComment({
+                const commentResult = await github.createIssueComment({
                   owner: workspace.owner,
                   repo: workspace.repo,
                   issue_number: issue.number,
                   body: `**Task ${task.number} timed out** — was \`${task.status}\` assigned to @${task.assignee} for over 30 minutes with no completion. Reset to \`pending\` for retry.`,
                 });
+                if (!commentResult.success) {
+                  logger.warn('Failed to post stuck task comment', { taskKey, error: commentResult.error });
+                }
 
                 //NOTE(self): Increment retry count, clear firstSeen so it can be re-tracked if claimed again
                 this.stuckTaskTracker.set(taskKey, { firstSeen: 0, retryCount: tracked.retryCount + 1 });
@@ -2495,6 +2520,32 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           workspace: `${workspace.owner}/${workspace.repo}`,
           error: String(error),
         });
+      }
+    }
+
+    //NOTE(self): Prune stuckTaskTracker to prevent unbounded growth
+    //NOTE(self): Remove entries with firstSeen=0 (resolved) and retryCount that have exhausted retries
+    //NOTE(self): Also remove entries for task keys no longer in any active plan
+    if (this.stuckTaskTracker.size > 100) {
+      const activeKeys = new Set<string>();
+      for (const workspace of workspaces) {
+        try {
+          const issuesResult = await github.listIssues({ owner: workspace.owner, repo: workspace.repo, state: 'open', labels: ['plan'], per_page: 30 });
+          if (issuesResult.success) {
+            for (const issue of issuesResult.data) {
+              const plan = parsePlan(issue.body || '', issue.title);
+              if (!plan) continue;
+              for (const task of plan.tasks) {
+                activeKeys.add(`${workspace.owner}/${workspace.repo}#${issue.number}/task-${task.number}`);
+              }
+            }
+          }
+        } catch { /* best effort */ }
+      }
+      for (const [key, entry] of this.stuckTaskTracker) {
+        if (!activeKeys.has(key) && entry.firstSeen === 0) {
+          this.stuckTaskTracker.delete(key);
+        }
       }
     }
   }
@@ -2960,6 +3011,17 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           if (this.state.pendingGitHubConversations.length > 0) {
             await this.triggerGitHubResponseMode();
           }
+        }
+      }
+
+      //NOTE(self): Close workspace issues that the agent already handled (one-shot trap fix)
+      //NOTE(self): After a SOUL responds to a workspace issue, the consecutive reply check
+      //NOTE(self): prevents re-engagement — so the issue stays open forever. This auto-closes
+      //NOTE(self): issues where the agent's comment is the most recent and no one followed up (24h).
+      if (this.state.currentMode === 'idle') {
+        const handled = await closeHandledWorkspaceIssues();
+        if (handled.closed > 0) {
+          summaryParts.push(`${handled.closed} handled issue${handled.closed === 1 ? '' : 's'} closed`);
         }
       }
 

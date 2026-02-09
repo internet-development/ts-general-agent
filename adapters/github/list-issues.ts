@@ -35,8 +35,9 @@ export async function listIssues(
     const response = await fetch(url, { headers });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to list issues' };
+      let errorMsg = `Failed to list issues: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response (e.g. HTML 502) */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

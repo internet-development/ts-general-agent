@@ -37,8 +37,9 @@ export async function likePost(
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to like post' };
+      let errorMsg = `Failed to like post: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();
@@ -71,8 +72,9 @@ export async function unlikePost(likeUri: string): Promise<AtprotoResult<void>> 
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to unlike post' };
+      let errorMsg = `Failed to unlike post: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     return { success: true, data: undefined };

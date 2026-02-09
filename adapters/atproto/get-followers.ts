@@ -30,8 +30,9 @@ export async function getFollowers(
     const response = await fetch(url, { headers });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to get followers' };
+      let errorMsg = `Failed to get followers: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

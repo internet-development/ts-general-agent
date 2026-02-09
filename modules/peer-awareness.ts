@@ -4,7 +4,7 @@
 //NOTE(self): Registry persists at .memory/discovered_peers.json
 //NOTE(self): Peers can be identified by GitHub username, Bluesky handle, or both
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 
@@ -67,7 +67,9 @@ function saveState(): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(DISCOVERED_PEERS_PATH, JSON.stringify(registryState, null, 2));
+    const tmpPath = DISCOVERED_PEERS_PATH + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(registryState, null, 2));
+    renameSync(tmpPath, DISCOVERED_PEERS_PATH);
   } catch (err) {
     logger.error('Failed to save peer registry', { error: String(err) });
   }

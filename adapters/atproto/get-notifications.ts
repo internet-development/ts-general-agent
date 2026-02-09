@@ -31,8 +31,9 @@ export async function getNotifications(
     const response = await fetch(url, { headers: getAuthHeaders() });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to get notifications' };
+      let errorMsg = `Failed to get notifications: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();
@@ -66,8 +67,9 @@ export async function updateSeenNotifications(): Promise<AtprotoResult<void>> {
     );
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to update seen notifications' };
+      let errorMsg = `Failed to update seen notifications: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     return { success: true, data: undefined };

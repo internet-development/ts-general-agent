@@ -4,7 +4,7 @@
 //NOTE(self): seenAt handled by engagement.ts, this focuses on thread-level tracking
 //NOTE(self): Social mechanics (thresholds) are read from SELF.md - I can adjust them as I learn
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 import { getSocialMechanics, PROJECT_SOCIAL_MECHANICS, type SocialMechanics } from '@modules/self-extract.js';
@@ -101,7 +101,9 @@ function saveState(): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(BLUESKY_CONVERSATIONS_PATH, JSON.stringify(conversationState, null, 2));
+    const tmpPath = BLUESKY_CONVERSATIONS_PATH + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(conversationState, null, 2));
+    renameSync(tmpPath, BLUESKY_CONVERSATIONS_PATH);
   } catch (err) {
     logger.error('Failed to save Bluesky conversation state', { error: String(err) });
   }

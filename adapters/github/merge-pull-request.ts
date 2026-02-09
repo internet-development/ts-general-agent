@@ -41,8 +41,9 @@ export async function mergePullRequest(
     );
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to merge pull request' };
+      let errorMsg = `Failed to merge pull request: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response (e.g. HTML 502) */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

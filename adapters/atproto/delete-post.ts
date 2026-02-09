@@ -26,8 +26,9 @@ export async function deletePost(postUri: string): Promise<AtprotoResult<void>> 
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to delete post' };
+      let errorMsg = `Failed to delete post: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     return { success: true, data: undefined };

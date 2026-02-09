@@ -110,6 +110,12 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
+  //NOTE(self): Catch unhandled promise rejections to prevent silent crashes
+  //NOTE(self): async setInterval/setTimeout callbacks can produce these if their try-catch misses
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection', { reason: String(reason) });
+  });
+
   //NOTE(self): Key input handling for owner communication
   process.stdin.on('data', async (key: Buffer) => {
     const char = key.toString();

@@ -132,6 +132,7 @@ export class TerminalUI {
   private availableForMessage = true; //NOTE(self): Track if agent can be interrupted
   private timers: ScheduledTimers | null = null;
   private lastHeartbeat: Date = new Date();
+  private resizeHandler: (() => void) | null = null;
 
   //NOTE(self): Write to the output area (scroll region)
   private writeOutput(text: string): void {
@@ -451,15 +452,19 @@ export class TerminalUI {
     //NOTE(self): Draw the input box at the bottom
     this.redrawInputBox();
 
-    //NOTE(self): Handle terminal resize
-    process.stdout.on('resize', () => {
+    //NOTE(self): Handle terminal resize — remove old handler to prevent listener leak
+    if (this.resizeHandler) {
+      process.stdout.removeListener('resize', this.resizeHandler);
+    }
+    this.resizeHandler = () => {
       if (this.inputBoxEnabled) {
         const newHeight = getTerminalHeight();
         const newScrollBottom = newHeight - this.inputBoxHeight;
         process.stdout.write(CSI.setScrollRegion(1, newScrollBottom));
         this.redrawInputBox();
       }
-    });
+    };
+    process.stdout.on('resize', this.resizeHandler);
   }
 
   //NOTE(self): Redraw the input box at fixed bottom position (full width)

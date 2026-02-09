@@ -86,7 +86,14 @@ function loadQueue(): Commitment[] {
   try {
     const content = fs.readFileSync(QUEUE_FILE, 'utf-8');
     const lines = content.trim().split('\n').filter(Boolean);
-    queueCache = lines.map((line) => JSON.parse(line) as Commitment);
+    queueCache = [];
+    for (const line of lines) {
+      try {
+        queueCache.push(JSON.parse(line) as Commitment);
+      } catch {
+        logger.warn('Skipping corrupted commitment queue line', { line: line.slice(0, 100) });
+      }
+    }
 
     //NOTE(self): Clean up old completed/abandoned commitments on load (keep 7 days for debugging)
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;

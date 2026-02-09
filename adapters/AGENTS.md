@@ -56,9 +56,9 @@ Adapters are **low-level API wrappers** for external services. They form the bou
 
 | Adapter | Service | Key Files |
 |---------|---------|-----------|
-| `atproto/` | Bluesky/ATProto | `authenticate.ts`, `create-post.ts`, `get-timeline.ts`, `get-notifications.ts`, `get-post-thread.ts`, `get-profile.ts`, `get-followers.ts`, `get-follows.ts`, `follow-user.ts`, `unfollow-user.ts`, `like-post.ts`, `repost.ts`, `upload-blob.ts` |
-| `github/` | GitHub API | `authenticate.ts`, `create-issue.ts`, `create-comment-issue.ts`, `create-comment-pull-request.ts`, `create-pull-request.ts`, `create-pull-request-review.ts`, `create-reaction.ts`, `create-repository-from-template.ts`, `clone-repository.ts`, `merge-pull-request.ts`, `list-issues.ts`, `list-pull-requests.ts`, `list-pull-request-reviews.ts`, `list-org-repos.ts`, `get-notifications.ts`, `get-issue-thread.ts`, `get-repository.ts`, `get-user.ts`, `follow-user.ts`, `star-repository.ts`, `parse-url.ts`, `add-issue-assignee.ts`, `remove-issue-assignee.ts`, `update-issue.ts` |
-| `arena/` | Are.na | `fetch-channel.ts`, `types.ts` |
+| `atproto/` | Bluesky/ATProto | `authenticate.ts`, `create-post.ts`, `get-timeline.ts`, `get-notifications.ts`, `get-post-thread.ts`, `get-profile.ts`, `get-followers.ts`, `get-follows.ts`, `follow-user.ts`, `unfollow-user.ts`, `like-post.ts`, `repost.ts`, `delete-post.ts`, `upload-blob.ts` |
+| `github/` | GitHub API | `authenticate.ts`, `create-issue.ts`, `create-comment-issue.ts`, `create-comment-pull-request.ts`, `create-pull-request.ts`, `create-pull-request-review.ts`, `create-reaction.ts`, `create-repository-from-template.ts`, `clone-repository.ts`, `merge-pull-request.ts`, `list-issues.ts`, `list-pull-requests.ts`, `list-pull-request-reviews.ts`, `list-org-repos.ts`, `list-repository-collaborators.ts`, `get-notifications.ts`, `get-issue-thread.ts`, `get-repository.ts`, `get-user.ts`, `follow-user.ts`, `star-repository.ts`, `parse-url.ts`, `add-issue-assignee.ts`, `remove-issue-assignee.ts`, `update-issue.ts`, `delete-branch.ts`, `request-pull-request-reviewers.ts` |
+| `arena/` | Are.na | `fetch-channel.ts`, `search-channels.ts`, `types.ts` |
 
 ## Design Principles
 
@@ -139,7 +139,24 @@ Adapters should be tested with:
 
 ## Error Handling
 
-Adapters catch and normalize errors:
+Adapters catch and normalize errors. **IMPORTANT**: All error-path `response.json()` calls must be wrapped in try-catch because external APIs (GitHub, Bluesky) can return non-JSON responses (HTML) on 502/503 errors:
+
+```typescript
+// CORRECT — safe JSON parsing on error path
+if (!response.ok) {
+  let errorMsg = `Failed to ...: ${response.status}`;
+  try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON (HTML 502) */ }
+  return { success: false, error: errorMsg };
+}
+
+// WRONG — crashes on HTML 502/503 responses
+if (!response.ok) {
+  const error = await response.json();  // THROWS on non-JSON
+  return { success: false, error: error.message || '...' };
+}
+```
+
+All GitHub and ATProto adapter files follow the safe pattern. The outer try-catch also catches unexpected failures:
 
 ```typescript
 export async function getProfile(actor: string): Promise<ApiResult<Profile>> {

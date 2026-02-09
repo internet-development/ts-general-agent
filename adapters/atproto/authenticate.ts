@@ -16,8 +16,9 @@ export async function authenticate(
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Authentication failed' };
+      let errorMsg = `Authentication failed: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();
@@ -49,8 +50,9 @@ export async function refreshSession(): Promise<AtprotoResult<AtprotoSession>> {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Session refresh failed' };
+      let errorMsg = `Session refresh failed: ${response.status}`;
+      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
+      return { success: false, error: errorMsg };
     }
 
     const data = await response.json();

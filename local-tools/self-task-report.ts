@@ -222,8 +222,14 @@ async function handlePlanComplete(
   }
 
   //NOTE(self): Update labels to complete and close the issue
-  await updatePlanStatus(owner, repo, issueNumber, 'complete');
-  await closePlan(owner, repo, issueNumber);
+  const statusResult = await updatePlanStatus(owner, repo, issueNumber, 'complete');
+  if (!statusResult.success) {
+    logger.warn('Failed to update plan status to complete', { owner, repo, issueNumber, error: statusResult.error });
+  }
+  const closeResult = await closePlan(owner, repo, issueNumber);
+  if (!closeResult.success) {
+    logger.warn('Failed to close completed plan', { owner, repo, issueNumber, error: closeResult.error });
+  }
 }
 
 //NOTE(self): Report task failed (unrecoverable error)

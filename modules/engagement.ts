@@ -4,7 +4,7 @@
 //NOTE(self): Replied URIs and relationships persist to .memory/ so I remember across restarts.
 
 import type { AtprotoNotification } from '@adapters/atproto/types.js';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 
@@ -122,10 +122,12 @@ function saveRelationshipsToDisk(relationships: Record<string, RelationshipRecor
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(RELATIONSHIPS_PATH, JSON.stringify({
+    const tmpPath = RELATIONSHIPS_PATH + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify({
       relationships,
       lastUpdated: new Date().toISOString()
     }, null, 2));
+    renameSync(tmpPath, RELATIONSHIPS_PATH);
   } catch (err) {
     logger.error('Failed to save relationships', { error: String(err) });
   }

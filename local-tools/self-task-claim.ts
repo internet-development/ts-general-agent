@@ -121,10 +121,13 @@ export async function releaseTaskClaim(params: ClaimTaskParams): Promise<{ succe
   }
 
   //NOTE(self): Update the plan body (fresh read to avoid clobbering)
-  await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
+  const planUpdateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'pending',
     assignee: null,
   });
+  if (!planUpdateResult.success) {
+    logger.warn('Failed to update plan body on task release', { owner, repo, issueNumber, taskNumber, error: planUpdateResult.error });
+  }
 
   //NOTE(self): Post a comment
   const releaseCommentResult = await createIssueComment({
