@@ -1,6 +1,4 @@
 import type { AtprotoSession, AtprotoResult } from '@adapters/atproto/types.js';
-import { blueskyFetch } from './rate-limit.js';
-
 const BSKY_SERVICE = 'https://bsky.social';
 
 let currentSession: AtprotoSession | null = null;
@@ -10,7 +8,7 @@ export async function authenticate(
   password: string
 ): Promise<AtprotoResult<AtprotoSession>> {
   try {
-    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.server.createSession`, {
+    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.server.createSession`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier, password }),
@@ -42,7 +40,7 @@ export async function refreshSession(): Promise<AtprotoResult<AtprotoSession>> {
   }
 
   try {
-    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.server.refreshSession`, {
+    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.server.refreshSession`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -1,7 +1,5 @@
 import type { GitHubAuth } from '@adapters/github/types.js';
 import { logger } from '@modules/logger.js';
-import { githubFetch } from './rate-limit.js';
-
 const GITHUB_API = 'https://api.github.com';
 
 let currentAuth: GitHubAuth | null = null;
@@ -34,7 +32,7 @@ export async function verifyAuth(): Promise<boolean> {
   if (!currentAuth) return false;
 
   try {
-    const response = await githubFetch(`${GITHUB_API}/user`, {
+    const response = await fetch(`${GITHUB_API}/user`, {
       headers: getAuthHeaders(),
     });
     return response.ok;

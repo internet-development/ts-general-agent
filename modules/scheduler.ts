@@ -537,7 +537,7 @@ export class AgentScheduler {
       const notifResult = await atproto.getNotifications({ limit: 10 });
       if (!notifResult.success) {
         logger.debug('Awareness check failed', { error: notifResult.error });
-        ui.stopSpinner('Bluesky check failed', false);
+        ui.stopSpinner(`Bluesky check failed: ${notifResult.error}`, false);
         return;
       }
 
@@ -755,7 +755,7 @@ export class AgentScheduler {
 
       if (!notifResult.success) {
         logger.debug('GitHub awareness check failed', { error: notifResult.error });
-        ui.stopSpinner('GitHub check failed', false);
+        ui.stopSpinner(`GitHub check failed: ${notifResult.error}`, false);
         return;
       }
 
