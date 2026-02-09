@@ -1,5 +1,6 @@
 import { getSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -22,7 +23,7 @@ export async function repost(
   }
 
   try {
-    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.createRecord`, {
+    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.createRecord`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({
@@ -61,7 +62,7 @@ export async function unrepost(repostUri: string): Promise<AtprotoResult<void>> 
       return { success: false, error: 'Invalid repost URI' };
     }
 
-    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.deleteRecord`, {
+    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.deleteRecord`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({

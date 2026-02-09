@@ -11,7 +11,9 @@
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';
-import { ui, type ScheduledTimers } from '@modules/ui.js';
+import { ui, type ScheduledTimers, type RateLimitBudget } from '@modules/ui.js';
+import { getGitHubRateLimitStatus } from '@adapters/github/rate-limit.js';
+import { getBlueskyRateLimitStatus } from '@adapters/atproto/rate-limit.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
@@ -731,6 +733,13 @@ export class AgentScheduler {
 
   private async githubAwarenessCheck(): Promise<void> {
     if (this.state.currentMode !== 'idle') return;
+
+    //NOTE(self): Budget gate — skip cycle if GitHub API quota is low
+    const ghBudget = getGitHubRateLimitStatus();
+    if (ghBudget.remaining < 200) {
+      logger.warn('GitHub rate limit low, skipping GitHub awareness cycle', { remaining: ghBudget.remaining });
+      return;
+    }
 
     this.state.lastGitHubAwarenessCheck = Date.now();
     ui.startSpinner('Checking GitHub notifications');
@@ -2785,6 +2794,13 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
   private async planAwarenessCheck(): Promise<void> {
     if (this.state.currentMode !== 'idle') return;
 
+    //NOTE(self): Budget gate — skip cycle if GitHub API quota is low
+    const ghBudget = getGitHubRateLimitStatus();
+    if (ghBudget.remaining < 200) {
+      logger.warn('GitHub rate limit low, skipping plan awareness cycle', { remaining: ghBudget.remaining });
+      return;
+    }
+
     this.state.lastPlanAwarenessCheck = Date.now();
 
     try {
@@ -4155,6 +4171,10 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     const updateTimers = () => {
       if (!this.state.isRunning) return;
       ui.updateTimers(this.getScheduledTimers());
+      ui.updateBudgets({
+        github: getGitHubRateLimitStatus(),
+        bluesky: getBlueskyRateLimitStatus(),
+      });
       setTimeout(updateTimers, 1000);
     };
     updateTimers();

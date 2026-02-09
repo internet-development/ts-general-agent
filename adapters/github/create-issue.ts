@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubIssue, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -26,7 +27,7 @@ export async function createIssue(
     : [auth.username];
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues`,
       {
         method: 'POST',

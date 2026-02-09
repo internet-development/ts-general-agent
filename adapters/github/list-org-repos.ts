@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubRepository, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -29,7 +30,7 @@ export async function listOrgRepos(
     if (params.page) searchParams.set('page', String(params.page));
 
     const url = `${GITHUB_API}/orgs/${params.org}/repos?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await githubFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to list org repos: ${response.status}`;
@@ -81,7 +82,7 @@ export async function listUserOrgs(
       : `${GITHUB_API}/user/orgs`;
 
     const url = `${endpoint}?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await githubFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to list orgs: ${response.status}`;

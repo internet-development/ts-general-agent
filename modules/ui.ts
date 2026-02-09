@@ -121,16 +121,23 @@ export interface ScheduledTimers {
   improvement: { nextAt: Date | null; description: string };
 }
 
+//NOTE(self): Rate limit budget information for display
+export interface RateLimitBudget {
+  github: { remaining: number; limit: number; resetAt: Date };
+  bluesky: { remaining: number; limit: number; resetAt: Date };
+}
+
 //NOTE(self): Terminal Ui with anchored input box
 export class TerminalUI {
   private thinkingMessage = '';
   private inputBoxEnabled = false;
-  private inputBoxHeight = 10; //NOTE(self): 4 timer lines + separator + top border + 3 input lines + bottom border
+  private inputBoxHeight = 11; //NOTE(self): 4 timer lines + 1 budget line + separator + top border + 3 input lines + bottom border
   private currentVersion = '0.0.0'; //NOTE(self): Fallback, actual version passed from loop.ts
   private currentInputText = '';
   private currentCursorPos = 0;
   private availableForMessage = true; //NOTE(self): Track if agent can be interrupted
   private timers: ScheduledTimers | null = null;
+  private budgets: RateLimitBudget | null = null;
   private lastHeartbeat: Date = new Date();
   private resizeHandler: (() => void) | null = null;
 
@@ -271,6 +278,35 @@ export class TerminalUI {
     if (this.inputBoxEnabled) {
       this.redrawInputBox();
     }
+  }
+
+  //NOTE(self): Update rate limit budgets display
+  updateBudgets(budgets: RateLimitBudget): void {
+    this.budgets = budgets;
+    if (this.inputBoxEnabled) {
+      this.redrawInputBox();
+    }
+  }
+
+  //NOTE(self): Format budget line for display
+  private formatBudgetLine(): string {
+    if (!this.budgets) {
+      return `  ${ANSI.dim}${SYM.ring} API Budget${ANSI.reset}     ${ANSI.gray}--${ANSI.reset}`;
+    }
+
+    const gh = this.budgets.github;
+    const bs = this.budgets.bluesky;
+
+    const ghPct = gh.limit > 0 ? gh.remaining / gh.limit : 1;
+    const bsPct = bs.limit > 0 ? bs.remaining / bs.limit : 1;
+
+    const ghColor = ghPct > 0.5 ? ANSI.green : ghPct > 0.1 ? ANSI.yellow : ANSI.red;
+    const bsColor = bsPct > 0.5 ? ANSI.green : bsPct > 0.1 ? ANSI.yellow : ANSI.red;
+
+    const ghReset = this.formatTimeRemaining(gh.resetAt);
+    const bsReset = this.formatTimeRemaining(bs.resetAt);
+
+    return `  ${ANSI.dim}${SYM.ring}${ANSI.reset} ${ANSI.white}${'API Budget'.padEnd(14)}${ANSI.reset}${ghColor}GH: ${gh.remaining}/${gh.limit}${ANSI.reset} ${ANSI.dim}(${ghReset})${ANSI.reset}    ${bsColor}BS: ${bs.remaining}/${bs.limit}${ANSI.reset} ${ANSI.dim}(${bsReset})${ANSI.reset}`;
   }
 
   //NOTE(self): Format time remaining in human-readable form
@@ -529,6 +565,11 @@ export class TerminalUI {
         currentRow++;
       }
     }
+
+    //NOTE(self): Budget line (API rate limits)
+    process.stdout.write(CSI.moveTo(currentRow, 1));
+    process.stdout.write(CSI.clearLine + this.addBorder(this.formatBudgetLine()));
+    currentRow++;
 
     //NOTE(self): Separator line — matches header's double-border style
     process.stdout.write(CSI.moveTo(currentRow, 1));

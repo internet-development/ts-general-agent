@@ -4,6 +4,7 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubResult } from '@adapters/github/types.js';
 import { logger } from '@modules/logger.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -55,7 +56,7 @@ export async function getNotifications(
     searchParams.set('per_page', String(params.per_page || 20));
 
     const url = `${GITHUB_API}/notifications?${searchParams}`;
-    const response = await fetch(url, {
+    const response = await githubFetch(url, {
       headers: getAuthHeaders(),
     });
 
@@ -81,7 +82,7 @@ export async function markNotificationRead(
   }
 
   try {
-    const response = await fetch(`${GITHUB_API}/notifications/threads/${threadId}`, {
+    const response = await githubFetch(`${GITHUB_API}/notifications/threads/${threadId}`, {
       method: 'PATCH',
       headers: getAuthHeaders(),
     });
@@ -108,7 +109,7 @@ export async function markAllNotificationsRead(
 
   try {
     const body = lastReadAt ? JSON.stringify({ last_read_at: lastReadAt }) : '{}';
-    const response = await fetch(`${GITHUB_API}/notifications`, {
+    const response = await githubFetch(`${GITHUB_API}/notifications`, {
       method: 'PUT',
       headers: getAuthHeaders(),
       body,

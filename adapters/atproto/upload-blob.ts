@@ -1,6 +1,7 @@
 import { getSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
 import { logger } from '@modules/logger.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -32,7 +33,7 @@ export async function uploadBlob(
     //NOTE(self): Use type assertion since Node.js Buffers always use ArrayBuffer
     const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
 
-    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.uploadBlob`, {
+    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.uploadBlob`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${session.accessJwt}`,

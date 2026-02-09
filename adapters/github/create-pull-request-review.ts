@@ -3,6 +3,7 @@
 
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubResult, GitHubPullRequestReview } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -55,7 +56,7 @@ export async function createPullRequestReview(
       requestBody.commit_id = params.commit_id;
     }
 
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/pulls/${params.pull_number}/reviews`,
       {
         method: 'POST',

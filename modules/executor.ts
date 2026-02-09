@@ -20,6 +20,7 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 
 import * as atproto from '@adapters/atproto/index.js';
 import * as github from '@adapters/github/index.js';
+import { githubFetch } from '@adapters/github/rate-limit.js';
 import * as arena from '@adapters/arena/index.js';
 import { graphemeLen } from '@atproto/common-web';
 import { isEmpty, truncateGraphemes, PORTABLE_MAX_GRAPHEMES } from '@modules/strings.js';
@@ -636,7 +637,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           const config = getConfig();
           const agentUsername = config.github.username.toLowerCase();
           try {
-            const prCheckResponse = await fetch(
+            const prCheckResponse = await githubFetch(
               `https://api.github.com/repos/${owner}/${repo}/pulls/${pull_number}`,
               { headers: github.getAuthHeaders() }
             );
@@ -660,7 +661,7 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           //NOTE(self): Delete the feature branch after successful merge (cleanup)
           try {
             //NOTE(self): Fetch the PR to get its head ref for branch deletion
-            const prResponse = await fetch(
+            const prResponse = await githubFetch(
               `https://api.github.com/repos/${owner}/${repo}/pulls/${pull_number}`,
               { headers: github.getAuthHeaders() }
             );

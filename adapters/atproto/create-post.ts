@@ -1,6 +1,7 @@
 import { getSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
 import type { BlobRef } from '@adapters/atproto/upload-blob.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -109,7 +110,7 @@ function detectHashtags(text: string): { tag: string; start: number; end: number
 //NOTE(self): Resolve a Bluesky handle to its DID for mention facets
 async function resolveHandleToDid(handle: string): Promise<string | null> {
   try {
-    const response = await fetch(
+    const response = await blueskyFetch(
       `${BSKY_SERVICE}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`
     );
     if (!response.ok) return null;
@@ -161,7 +162,7 @@ function parseBskyPostUrl(url: string): { handle: string; rkey: string } | null 
 async function resolvePostUrl(handle: string, rkey: string): Promise<{ uri: string; cid: string } | null> {
   try {
     //NOTE(self): First resolve handle to DID
-    const resolveResponse = await fetch(
+    const resolveResponse = await blueskyFetch(
       `${BSKY_SERVICE}/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`
     );
 
@@ -170,7 +171,7 @@ async function resolvePostUrl(handle: string, rkey: string): Promise<{ uri: stri
     const { did } = await resolveResponse.json();
 
     //NOTE(self): Then get the post record
-    const postResponse = await fetch(
+    const postResponse = await blueskyFetch(
       `${BSKY_SERVICE}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=app.bsky.feed.post&rkey=${encodeURIComponent(rkey)}`
     );
 
@@ -329,7 +330,7 @@ export async function createPost(
       };
     }
 
-    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.createRecord`, {
+    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.createRecord`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({

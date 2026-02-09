@@ -1,5 +1,6 @@
 import { getAuthHeaders, getSession } from '@adapters/atproto/authenticate.js';
 import type { AtprotoFeedItem, AtprotoResult } from '@adapters/atproto/types.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -27,7 +28,7 @@ export async function getTimeline(
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
     const url = `${BSKY_SERVICE}/xrpc/app.bsky.feed.getTimeline?${searchParams}`;
-    const response = await fetch(url, { headers: getAuthHeaders() });
+    const response = await blueskyFetch(url, { headers: getAuthHeaders() });
 
     if (!response.ok) {
       let errorMsg = `Failed to get timeline: ${response.status}`;
@@ -62,7 +63,7 @@ export async function getAuthorFeed(
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
     const url = `${BSKY_SERVICE}/xrpc/app.bsky.feed.getAuthorFeed?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await blueskyFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to get author feed: ${response.status}`;

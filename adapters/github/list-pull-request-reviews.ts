@@ -3,6 +3,7 @@
 
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubPullRequestReview, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -26,7 +27,7 @@ export async function listPullRequestReviews(
     if (params.per_page) searchParams.set('per_page', String(params.per_page));
 
     const url = `${GITHUB_API}/repos/${params.owner}/${params.repo}/pulls/${params.pull_number}/reviews?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await githubFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to list pull request reviews: ${response.status}`;

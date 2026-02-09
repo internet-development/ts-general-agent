@@ -1,5 +1,6 @@
 import { getAuthHeaders, getSession } from '@adapters/atproto/authenticate.js';
 import type { AtprotoNotification, AtprotoResult } from '@adapters/atproto/types.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -28,7 +29,7 @@ export async function getNotifications(
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
     const url = `${BSKY_SERVICE}/xrpc/app.bsky.notification.listNotifications?${searchParams}`;
-    const response = await fetch(url, { headers: getAuthHeaders() });
+    const response = await blueskyFetch(url, { headers: getAuthHeaders() });
 
     if (!response.ok) {
       let errorMsg = `Failed to get notifications: ${response.status}`;
@@ -57,7 +58,7 @@ export async function updateSeenNotifications(): Promise<AtprotoResult<void>> {
   }
 
   try {
-    const response = await fetch(
+    const response = await blueskyFetch(
       `${BSKY_SERVICE}/xrpc/app.bsky.notification.updateSeen`,
       {
         method: 'POST',

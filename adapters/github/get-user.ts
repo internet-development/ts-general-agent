@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubUser, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -10,7 +11,7 @@ export async function getUser(username: string): Promise<GitHubResult<GitHubUser
     : { 'Accept': 'application/vnd.github.v3+json' };
 
   try {
-    const response = await fetch(`${GITHUB_API}/users/${username}`, { headers });
+    const response = await githubFetch(`${GITHUB_API}/users/${username}`, { headers });
 
     if (!response.ok) {
       const error = await response.json();
@@ -31,7 +32,7 @@ export async function getAuthenticatedUser(): Promise<GitHubResult<GitHubUser>> 
   }
 
   try {
-    const response = await fetch(`${GITHUB_API}/user`, {
+    const response = await githubFetch(`${GITHUB_API}/user`, {
       headers: getAuthHeaders(),
     });
 

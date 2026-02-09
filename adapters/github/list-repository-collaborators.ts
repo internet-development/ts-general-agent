@@ -3,6 +3,7 @@
 
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -33,7 +34,7 @@ export async function listRepositoryCollaborators(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${owner}/${repo}/collaborators`,
       {
         method: 'GET',

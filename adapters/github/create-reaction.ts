@@ -1,6 +1,7 @@
 //NOTE(self): Create reactions on GitHub issues and comments
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -18,7 +19,7 @@ export async function createIssueReaction(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${owner}/${repo}/issues/${issue_number}/reactions`,
       {
         method: 'POST',
@@ -56,7 +57,7 @@ export async function createIssueCommentReaction(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${owner}/${repo}/issues/comments/${comment_id}/reactions`,
       {
         method: 'POST',

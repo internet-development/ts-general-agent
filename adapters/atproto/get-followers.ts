@@ -1,5 +1,6 @@
 import { getAuthHeaders, getSession } from '@adapters/atproto/authenticate.js';
 import type { AtprotoFollower, AtprotoResult } from '@adapters/atproto/types.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -27,7 +28,7 @@ export async function getFollowers(
     if (params.cursor) searchParams.set('cursor', params.cursor);
 
     const url = `${BSKY_SERVICE}/xrpc/app.bsky.graph.getFollowers?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await blueskyFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to get followers: ${response.status}`;

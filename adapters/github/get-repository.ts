@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubRepository, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -13,7 +14,7 @@ export async function getRepository(
     : { 'Accept': 'application/vnd.github.v3+json' };
 
   try {
-    const response = await fetch(`${GITHUB_API}/repos/${owner}/${repo}`, {
+    const response = await githubFetch(`${GITHUB_API}/repos/${owner}/${repo}`, {
       headers,
     });
 

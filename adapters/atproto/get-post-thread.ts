@@ -1,6 +1,7 @@
 import { getAuthHeaders, getSession } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
 import { logger } from '@modules/logger.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -57,7 +58,7 @@ export async function getPostThread(
     searchParams.set('parentHeight', String(parentHeight));
 
     const url = `${BSKY_SERVICE}/xrpc/app.bsky.feed.getPostThread?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await blueskyFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to get post thread: ${response.status}`;

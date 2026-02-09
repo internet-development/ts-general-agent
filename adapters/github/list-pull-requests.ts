@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubPullRequest, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -34,7 +35,7 @@ export async function listPullRequests(
     if (params.page) searchParams.set('page', String(params.page));
 
     const url = `${GITHUB_API}/repos/${params.owner}/${params.repo}/pulls?${searchParams}`;
-    const response = await fetch(url, { headers });
+    const response = await githubFetch(url, { headers });
 
     if (!response.ok) {
       let errorMsg = `Failed to list pull requests: ${response.status}`;

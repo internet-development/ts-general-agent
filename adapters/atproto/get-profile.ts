@@ -1,5 +1,6 @@
 import { getAuthHeaders, getSession } from '@adapters/atproto/authenticate.js';
 import type { AtprotoProfile, AtprotoResult } from '@adapters/atproto/types.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -10,7 +11,7 @@ export async function getProfile(
   const headers = session ? getAuthHeaders() : { 'Content-Type': 'application/json' };
 
   try {
-    const response = await fetch(
+    const response = await blueskyFetch(
       `${BSKY_SERVICE}/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(actor)}`,
       { headers }
     );

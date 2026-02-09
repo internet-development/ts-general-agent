@@ -4,6 +4,7 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubIssue, GitHubComment, GitHubResult } from '@adapters/github/types.js';
 import { logger } from '@modules/logger.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -41,10 +42,10 @@ export async function getIssueThread(
   try {
     //NOTE(self): Fetch issue and comments in parallel
     const [issueResponse, commentsResponse] = await Promise.all([
-      fetch(`${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}`, {
+      githubFetch(`${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}`, {
         headers: getAuthHeaders(),
       }),
-      fetch(`${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/comments?per_page=100`, {
+      githubFetch(`${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/comments?per_page=100`, {
         headers: getAuthHeaders(),
       }),
     ]);
@@ -66,7 +67,7 @@ export async function getIssueThread(
     if (comments.length === 100) {
       let nextUrl = parseLinkNext(commentsResponse.headers.get('link'));
       while (nextUrl) {
-        const pageResponse = await fetch(nextUrl, { headers: getAuthHeaders() });
+        const pageResponse = await githubFetch(nextUrl, { headers: getAuthHeaders() });
         if (!pageResponse.ok) break;
         const pageComments: GitHubComment[] = await pageResponse.json();
         comments = comments.concat(pageComments);

@@ -1,5 +1,6 @@
 import { getSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 import type { AtprotoResult } from '@adapters/atproto/types.js';
+import { blueskyFetch } from './rate-limit.js';
 
 const BSKY_SERVICE = 'https://bsky.social';
 
@@ -15,7 +16,7 @@ export async function deletePost(postUri: string): Promise<AtprotoResult<void>> 
       return { success: false, error: 'Invalid post URI' };
     }
 
-    const response = await fetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.deleteRecord`, {
+    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.deleteRecord`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({

@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -27,7 +28,7 @@ export async function mergePullRequest(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/pulls/${params.pull_number}/merge`,
       {
         method: 'PUT',

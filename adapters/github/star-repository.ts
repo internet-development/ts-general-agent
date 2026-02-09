@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -13,7 +14,7 @@ export async function starRepository(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/user/starred/${owner}/${repo}`,
       {
         method: 'PUT',
@@ -42,7 +43,7 @@ export async function unstarRepository(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/user/starred/${owner}/${repo}`,
       {
         method: 'DELETE',

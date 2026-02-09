@@ -1,5 +1,6 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubComment, GitHubResult } from '@adapters/github/types.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -19,7 +20,7 @@ export async function createIssueComment(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/comments`,
       {
         method: 'POST',

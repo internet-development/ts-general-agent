@@ -6,6 +6,7 @@
 import { getAuthHeaders, getAuth } from '@adapters/github/authenticate.js';
 import type { GitHubIssue, GitHubResult } from '@adapters/github/types.js';
 import { logger } from '@modules/logger.js';
+import { githubFetch } from './rate-limit.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -32,7 +33,7 @@ export async function addIssueAssignee(
   }
 
   try {
-    const response = await fetch(
+    const response = await githubFetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/assignees`,
       {
         method: 'POST',
@@ -69,7 +70,7 @@ export async function claimTask(
 
   try {
     //NOTE(self): POST to add ourselves as assignee
-    const claimResponse = await fetch(
+    const claimResponse = await githubFetch(
       `${GITHUB_API}/repos/${params.owner}/${params.repo}/issues/${params.issue_number}/assignees`,
       {
         method: 'POST',
