@@ -780,9 +780,8 @@ export async function pollWorkspacesForApprovedPRs(): Promise<{ workspace: Watch
           latestReviewByUser.set(review.user.login.toLowerCase(), review.state);
         }
 
-        const hasChangesRequested = [...latestReviewByUser.values()].some(s => s === 'CHANGES_REQUESTED');
-        if (hasChangesRequested) continue;
-
+        //NOTE(self): Don't gate on CHANGES_REQUESTED — SOULs self-approve to override rejections.
+        //NOTE(self): Approval count alone determines merge readiness.
         const approvalCount = [...latestReviewByUser.values()].filter(s => s === 'APPROVED').length;
         if (approvalCount === 0) continue;
 
