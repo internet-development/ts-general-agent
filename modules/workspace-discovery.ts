@@ -13,7 +13,7 @@ import { updateIssue } from '@adapters/github/update-issue.js';
 import { mergePullRequest } from '@adapters/github/merge-pull-request.js';
 import { deleteBranch } from '@adapters/github/delete-branch.js';
 import type { GitHubPullRequest } from '@adapters/github/types.js';
-import { parsePlan, getClaimableTasks, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
+import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
@@ -822,6 +822,18 @@ export async function autoMergeApprovedPR(
   });
 
   if (!mergeResult.success) {
+    const isConflict = mergeResult.error?.includes('not mergeable') ||
+                       mergeResult.error?.includes('405');
+    if (isConflict) {
+      logger.warn('Auto-merge failed due to merge conflict, attempting recovery', { owner, repo, number: pr.number });
+      const recovery = await handleMergeConflictPR(owner, repo, pr);
+      if (recovery.success) {
+        logger.info('Merge conflict recovery succeeded, task reset to pending', { owner, repo, number: pr.number, taskNumber: recovery.taskNumber });
+      } else {
+        logger.warn('Merge conflict recovery failed', { owner, repo, number: pr.number, error: recovery.error });
+      }
+      return { success: false, error: 'merge_conflict_retry' };
+    }
     logger.warn('Auto-merge failed', { owner, repo, number: pr.number, error: mergeResult.error });
     return { success: false, error: mergeResult.error };
   }
@@ -838,4 +850,94 @@ export async function autoMergeApprovedPR(
   }
 
   return { success: true };
+}
+
+//NOTE(self): Handle merge conflict recovery — close conflicting PR, delete branch, reset task to pending
+export async function handleMergeConflictPR(
+  owner: string,
+  repo: string,
+  pr: GitHubPullRequest
+): Promise<{ success: boolean; taskNumber?: number; error?: string }> {
+  const headRef = pr.head?.ref || '';
+  const taskMatch = headRef.match(/^task-(\d+)-/);
+  const taskNumber = taskMatch ? parseInt(taskMatch[1], 10) : null;
+
+  // Step 1: Close the PR
+  const closeResult = await updateIssue({
+    owner,
+    repo,
+    issue_number: pr.number,
+    state: 'closed',
+  });
+  if (!closeResult.success) {
+    logger.warn('Failed to close conflicting PR', { owner, repo, number: pr.number, error: closeResult.error });
+    return { success: false, error: `Failed to close PR: ${closeResult.error}` };
+  }
+  logger.info('Closed conflicting PR', { owner, repo, number: pr.number });
+
+  // Step 2: Comment on the PR explaining why
+  const commentResult = await createIssueComment({
+    owner,
+    repo,
+    issue_number: pr.number,
+    body: `This PR was closed automatically due to merge conflicts. ${taskNumber ? `Task ${taskNumber} has been reset to pending and will be re-executed from a fresh branch.` : 'The branch will be deleted.'}`,
+  });
+  if (!commentResult.success) {
+    logger.warn('Failed to comment on conflicting PR', { owner, repo, number: pr.number, error: commentResult.error });
+  }
+
+  // Step 3: Delete the branch
+  if (headRef && headRef !== 'main' && headRef !== 'master') {
+    const deleteResult = await deleteBranch(owner, repo, headRef);
+    if (deleteResult.success) {
+      logger.info('Deleted conflicting branch', { branch: headRef, number: pr.number });
+    } else {
+      logger.warn('Failed to delete conflicting branch (non-fatal)', { branch: headRef, error: deleteResult.error });
+    }
+  }
+
+  // Step 4: Reset task to pending in the plan
+  if (taskNumber === null) {
+    logger.warn('Could not extract task number from branch name, skipping plan reset', { branch: headRef });
+    return { success: true, error: 'no_task_number' };
+  }
+
+  // Find the plan issue in the same repo
+  const issuesResult = await listIssues({
+    owner,
+    repo,
+    state: 'open',
+    labels: ['plan'],
+    per_page: 5,
+  });
+  if (!issuesResult.success || issuesResult.data.length === 0) {
+    logger.warn('Could not find plan issue for task reset', { owner, repo, taskNumber });
+    return { success: true, taskNumber, error: 'no_plan_issue_found' };
+  }
+
+  const planIssue = issuesResult.data[0];
+
+  // Reset the task to pending with no assignee
+  const resetResult = await freshUpdateTaskInPlan(owner, repo, planIssue.number, taskNumber, {
+    status: 'pending',
+    assignee: null,
+  });
+  if (!resetResult.success) {
+    logger.warn('Failed to reset task in plan', { owner, repo, planIssue: planIssue.number, taskNumber, error: resetResult.error });
+    return { success: false, taskNumber, error: `Failed to reset task: ${resetResult.error}` };
+  }
+  logger.info('Reset task to pending after merge conflict', { owner, repo, planIssue: planIssue.number, taskNumber });
+
+  // Comment on the plan issue
+  const planCommentResult = await createIssueComment({
+    owner,
+    repo,
+    issue_number: planIssue.number,
+    body: `Task ${taskNumber} PR #${pr.number} had merge conflicts and was closed. Task has been reset to pending for re-execution.`,
+  });
+  if (!planCommentResult.success) {
+    logger.warn('Failed to comment on plan issue about retry', { owner, repo, planIssue: planIssue.number, error: planCommentResult.error });
+  }
+
+  return { success: true, taskNumber };
 }
