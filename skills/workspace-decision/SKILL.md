@@ -57,3 +57,23 @@ When engaging in conversations about collaborative development:
 - New GitHub issues or expanded asks on Bluesky reopen the project naturally — it's never permanently closed while there's work to do.
 - The pipeline is: issues → branches → PRs → reviews → merges. Keep it moving until nothing remains open.
 - After each iteration, re-read `LIL-INTDEV-AGENTS.md` and `SCENARIOS.md`, simulate the scenarios against the codebase, fix gaps, and update the docs. This is the quality loop.
+
+## Plan Synthesis
+
+When reviewing open issues to synthesize a plan:
+
+**Roll everything up:**
+- Every open issue must be accounted for in the plan
+- Actionable issues (bugs, features, implementation) become tasks
+- Memos and decisions become context in the plan's Context section
+- Reference issues by number: "See #N for details"
+
+**Task design:**
+- Tasks should be concrete, executable units of work
+- Include file paths and acceptance criteria
+- Order tasks by dependencies (foundational work first)
+- Always include LIL-INTDEV-AGENTS.md and SCENARIOS.md update tasks
+
+**After plan creation:**
+- All rolled-up issues will be automatically closed with a link to the plan
+- The plan becomes the single source of truth for remaining work

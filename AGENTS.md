@@ -788,9 +788,30 @@ Beyond plan-labeled issues, SOULs discover ALL open issues in watched workspaces
 - `pollWorkspacesForOpenIssues()` runs every 3 minutes alongside plan polling
 - Fetches up to **30 issues** per workspace (active workspaces can have 15-20+ open issues)
 - Finds issues without the `plan` label (feature requests, bugs, asks filed by anyone)
-- Filters out PRs (GitHub API returns them as issues), plan issues (handled separately), issues assigned to others
+- Filters out PRs (GitHub API returns them as issues) and plan issues (handled separately)
+- Auto-assigns unassigned issues to their author (Scenario 14: every issue has an assignee)
+- All non-plan, non-PR workspace issues are visible to all SOULs regardless of assignee — workspace issues are collective responsibility
 - Queues them for GitHub response mode with `isWorkspaceIssue: true` — SOULs engage proactively even without @mentions
 - `analyzeConversation()` with `isWorkspaceIssue: true` bypasses the "not mentioned" gate — workspace issues are our responsibility
+
+### Plan Synthesis (Auto-Create Plans From Open Issues)
+
+When a watched workspace has open issues but no active plan (all plans closed/complete), the plan awareness loop auto-synthesizes a new plan:
+
+1. `getWorkspacesNeedingPlanSynthesis()` finds workspaces with zero open plan issues AND synthesis cooldown expired (1 hour)
+2. Fetches all open non-plan, non-PR issues (up to 30)
+3. **Race guard**: re-checks for open plan issues before proceeding (another SOUL may have created one)
+4. Formats issue context (number, title, labels, body preview) and sends to LLM
+5. LLM reviews issues and calls `plan_create` to create a coordinated plan
+6. After plan creation: `closeRolledUpIssues()` closes all source issues with "Rolled into plan #N — closing." comment
+7. If workspace has a Bluesky thread context, announces the new plan
+8. One workspace per cycle (fair distribution)
+
+**Key behavior:**
+- Cooldown prevents tight retry loops (1 hour between attempts per workspace)
+- If LLM doesn't create a plan, timestamp still updates (avoids repeated attempts)
+- Closed issues link to the plan — plan becomes the single source of truth
+- Next poll cycle discovers the new plan and SOULs start claiming tasks
 
 ### Workspace Issue Auto-Close (Three Tiers)
 
@@ -916,7 +937,7 @@ pending → claimed → in_progress → completed
 
 After checking for claimable tasks (and only if still idle), the plan awareness loop proactively discovers open PRs in watched workspaces:
 
-1. For each workspace, fetch up to 10 open PRs (sorted by last updated)
+1. For each workspace, fetch up to 30 open PRs (sorted by last updated)
 2. Skip draft PRs and the agent's own PRs
 3. **Smart skip:** If conversation is `concluded`, compare `concludedAt` with `pr.updated_at`. Only skip if PR hasn't been updated since conclusion. If PR has new commits → re-review it.
 4. **API check:** Call `listPullRequestReviews()` — skip if agent already has a review
@@ -1474,7 +1495,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 7 | Self-reflection on change over time | Reflection cycle includes temporal context (days running, experience count). SELF.md stores learnings across cycles. Deep-reflection skill prompts change awareness. | Code + Prompt |
 | 8 | Self-improvement (implementing missing features) | Friction detection → self-improvement-decision skill → Claude Code execution → reloadSkills(). Also aspirational growth for proactive evolution. | Code |
 | 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. Fatal errors restore terminal state (raw mode, input box, status bar) before exit. | Code |
-| 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in BOTH code paths (scheduler + executor). Both paths pass full test results (testsRun, testsPassed) in completion reports. Three-tier workspace issue auto-close keeps workspaces clean: Tier 1 (immediate on graceful_exit), Tier 2 (24h handled auto-close), Tier 3 (3-7 day stale cleanup). | Code + Prompt |
+| 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in ALL THREE code paths: (1) `handlePlanComplete()` in self-task-report.ts (merge-gated path — dominant), (2) executor.ts `plan_execute_task` handler, (3) scheduler.ts `executeClaimedTask`. Both PR paths pass full test results (testsRun, testsPassed) in completion reports. Three-tier workspace issue auto-close keeps workspaces clean: Tier 1 (immediate on graceful_exit), Tier 2 (24h handled auto-close), Tier 3 (3-7 day stale cleanup). | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
 | 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. **Discussion vs. work awareness:** github-response skill teaches SOULs to distinguish discussions (share ideas) from work mandates (ship code). **No self-introduction:** username already visible on GitHub comments. | Code + Prompt |
 | 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages (including verbose closings via `isLowValueClosing`), conversation conclusion heuristics (max replies, max depth, disengagement, circular detection with hard-block for medium/high confidence), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses (always applied), session + API deduplication prevents double replies. **Effective peers** (v5.5.2, updated v8.1): `getEffectivePeers()` derives peers from thread on foreign repos — includes issue author when they've commented (SOUL-as-issue-author fix). **Round-robin hard stop:** if only effective peers replied since last comment (issue author hasn't re-engaged), `shouldRespond: false`. **Saturation cap:** 3+ comments → only respond if issue author @mentions. Jitter + thread refresh always applied regardless of registered peer count. **All enforced in `analyzeConversation()` at all call sites.** | Hard block + Code + Prompt |

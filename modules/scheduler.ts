@@ -130,6 +130,9 @@ import {
   threadHasWorkspaceContext,
   getWatchedWorkspaces,
   getWorkspaceDiscoveryStats,
+  getWorkspacesNeedingPlanSynthesis,
+  updateWorkspaceSynthesisTimestamp,
+  closeRolledUpIssues,
   type DiscoveredPlan,
   type DiscoveredIssue,
   type ReviewablePR,
@@ -2839,6 +2842,16 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         });
       }
 
+      //NOTE(self): If no open plans exist, check if we should synthesize a plan from open issues
+      //NOTE(self): This handles the case where a plan completes but open issues remain (feature requests, memos, follow-ups)
+      if (planSummary.plansFound === 0 && this.state.currentMode === 'idle') {
+        const synthesized = await this.synthesizePlanForWorkspaces();
+        if (synthesized) {
+          ui.stopSpinner('Plan synthesized — open issues rolled up and closed');
+          return;  //NOTE(self): Next poll will find the plan and start claiming tasks
+        }
+      }
+
       //NOTE(self): Attempt to claim and execute ONE task (if any claimable)
       //NOTE(self): Fair distribution: only claim one task per poll cycle
       for (const discovered of discoveredPlans) {
@@ -3105,6 +3118,240 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       logger.error('Plan awareness check error', { error: String(error) });
       ui.stopSpinner('Workspace check error', false);
     }
+  }
+
+  //NOTE(self): Synthesize a plan from open issues in workspaces that have no active plan
+  //NOTE(self): This handles the case where a plan completes but open issues remain
+  //NOTE(self): (feature requests, memos, follow-ups) — the SOUL creates a new coordinated plan
+  private async synthesizePlanForWorkspaces(): Promise<boolean> {
+    const eligibleWorkspaces = getWorkspacesNeedingPlanSynthesis();
+    if (eligibleWorkspaces.length === 0) return false;
+
+    const config = this.appConfig;
+
+    //NOTE(self): Process one workspace per cycle (fair distribution)
+    for (const workspace of eligibleWorkspaces) {
+      try {
+        //NOTE(self): Fetch open non-plan issues
+        const issuesResult = await github.listIssues({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          state: 'open',
+          sort: 'created',
+          direction: 'desc',
+          per_page: 30,
+        });
+
+        if (!issuesResult.success) {
+          logger.warn('Failed to fetch issues for plan synthesis', {
+            workspace: `${workspace.owner}/${workspace.repo}`,
+            error: issuesResult.error,
+          });
+          continue;
+        }
+
+        //NOTE(self): Filter out plan-labeled issues and PRs
+        const openIssues = issuesResult.data.filter(issue => {
+          if (issue.pull_request) return false;
+          const hasPlanLabel = issue.labels.some((l: any) => l.name.toLowerCase() === 'plan');
+          if (hasPlanLabel) return false;
+          return true;
+        });
+
+        if (openIssues.length === 0) {
+          //NOTE(self): No issues to synthesize from — update timestamp so we don't check again for 1 hour
+          updateWorkspaceSynthesisTimestamp(workspace.owner, workspace.repo);
+          logger.debug('No open issues to synthesize plan from', { workspace: `${workspace.owner}/${workspace.repo}` });
+          continue;
+        }
+
+        //NOTE(self): Race guard — re-check for open plan issues in case another SOUL just created one
+        const planCheckResult = await github.listIssues({
+          owner: workspace.owner,
+          repo: workspace.repo,
+          state: 'open',
+          labels: ['plan'],
+          per_page: 5,
+        });
+
+        if (planCheckResult.success && planCheckResult.data.length > 0) {
+          logger.info('Plan appeared during synthesis check (another SOUL created it), skipping', {
+            workspace: `${workspace.owner}/${workspace.repo}`,
+            planCount: planCheckResult.data.length,
+          });
+          updateWorkspaceSynthesisTimestamp(workspace.owner, workspace.repo);
+          continue;
+        }
+
+        //NOTE(self): Build context for the LLM — format each issue
+        const issueContext = openIssues.map(issue => {
+          const labels = issue.labels.map((l: any) => l.name).join(', ');
+          const bodyPreview = issue.body ? issue.body.substring(0, 500) : '(no body)';
+          return `#${issue.number}: ${issue.title}\nLabels: ${labels || 'none'}\nBody: ${bodyPreview}`;
+        }).join('\n\n---\n\n');
+
+        //NOTE(self): Build system prompt for plan synthesis
+        const soul = readSoul(config.paths.soul);
+        const selfContent = readSelf(config.paths.selfmd);
+
+        //NOTE(self): Build workspace section
+        const ghWorkspaceState = `Active workspace: \`${workspace.owner}/${workspace.repo}\` exists. This workspace has ${openIssues.length} open issues but no active plan.`;
+        const ghWorkspaceSection = renderSkillSection('AGENT-WORKSPACE-DECISION', 'Workspace Context', { workspaceState: ghWorkspaceState });
+
+        const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-GITHUB-RESPONSE', {
+          peerSection: '',
+          workspaceSection: ghWorkspaceSection ? '\n' + ghWorkspaceSection + '\n' : '',
+          owner: workspace.owner,
+          repo: workspace.repo,
+          number: '0',
+          githubUsername: config.github.username,
+        });
+
+        //NOTE(self): Build user message asking the LLM to create a plan
+        const userMessage = `# Plan Synthesis — Workspace Has Open Issues But No Active Plan
+
+**Workspace:** \`${workspace.owner}/${workspace.repo}\`
+**Open Issues:** ${openIssues.length}
+
+This workspace has open issues but no active plan. Review these issues and create a plan that rolls them all up into coordinated tasks using \`plan_create\`.
+
+## Plan Synthesis Guidelines
+
+- Every open issue must be accounted for in the plan
+- Actionable issues (bugs, features, implementation) become tasks
+- Memos and decisions become context in the plan's Context section
+- Reference issues by number: "See #N for details"
+- Tasks should be concrete, executable units of work
+- Include file paths and acceptance criteria where possible
+- Order tasks by dependencies (foundational work first)
+- Always include LIL-INTDEV-AGENTS.md and SCENARIOS.md update tasks
+
+After plan creation, all these issues will be automatically closed with a link to the new plan.
+
+## Open Issues
+
+${issueContext}
+
+---
+
+Create a plan using \`plan_create\` that synthesizes all of the above issues into a coordinated set of tasks.`;
+
+        const messages: Message[] = [{ role: 'user', content: userMessage }];
+
+        ui.startSpinner(`Synthesizing plan for ${workspace.owner}/${workspace.repo} (${openIssues.length} open issues)`);
+
+        let response = await chatWithTools({
+          system: systemPrompt,
+          messages,
+          tools: AGENT_TOOLS,
+        });
+
+        //NOTE(self): Track whether plan_create was called and its result
+        let planCreated = false;
+        let planIssueNumber: number | null = null;
+
+        //NOTE(self): Execute tool calls in a loop — must be `while` not `if`
+        while (response.toolCalls.length > 0) {
+          const results = await executeTools(response.toolCalls);
+
+          //NOTE(self): Check for plan_create result
+          for (let i = 0; i < response.toolCalls.length; i++) {
+            const tc = response.toolCalls[i];
+            const result = results[i];
+
+            if (tc.name === 'plan_create' && !result.is_error) {
+              try {
+                const parsed = JSON.parse(result.content);
+                if (parsed.issueNumber) {
+                  planCreated = true;
+                  planIssueNumber = parsed.issueNumber;
+                  logger.info('Plan synthesized from open issues', {
+                    workspace: `${workspace.owner}/${workspace.repo}`,
+                    planIssueNumber,
+                    openIssueCount: openIssues.length,
+                  });
+                }
+              } catch {
+                //NOTE(self): Not JSON, continue
+              }
+            }
+          }
+
+          //NOTE(self): Continue conversation if needed
+          messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+          messages.push(createToolResultMessage(results));
+
+          response = await chatWithTools({
+            system: systemPrompt,
+            messages,
+            tools: AGENT_TOOLS,
+          });
+        }
+
+        //NOTE(self): Update synthesis timestamp regardless of outcome
+        updateWorkspaceSynthesisTimestamp(workspace.owner, workspace.repo);
+
+        //NOTE(self): After plan creation — close all rolled-up issues with a comment linking to the plan
+        if (planCreated && planIssueNumber !== null) {
+          const issueNumbers = openIssues.map(i => i.number);
+          const closeResult = await closeRolledUpIssues(workspace.owner, workspace.repo, issueNumbers, planIssueNumber);
+          logger.info('Closed rolled-up issues after plan synthesis', {
+            workspace: `${workspace.owner}/${workspace.repo}`,
+            planIssueNumber,
+            closedCount: closeResult.closed,
+            totalIssues: issueNumbers.length,
+          });
+
+          //NOTE(self): Announce on Bluesky if workspace has a thread context
+          if (workspace.discoveredInThread) {
+            try {
+              const threadResult = await getPostThread(workspace.discoveredInThread, 0, 0);
+              if (threadResult.success && threadResult.data) {
+                const parentPost = threadResult.data.thread.post;
+                const announceToolCall: ToolCall = {
+                  id: `synth-announce-${Date.now()}`,
+                  name: 'bluesky_reply',
+                  input: {
+                    text: `Synthesized a new plan from ${openIssues.length} open issues: https://github.com/${workspace.owner}/${workspace.repo}/issues/${planIssueNumber}`,
+                    post_uri: parentPost.uri,
+                    post_cid: parentPost.cid,
+                  },
+                };
+                const announceResults = await executeTools([announceToolCall]);
+                if (announceResults[0] && !announceResults[0].is_error) {
+                  logger.info('Announced plan synthesis on Bluesky', { planIssueNumber, threadUri: workspace.discoveredInThread });
+                } else {
+                  logger.debug('Synthesis announcement failed (non-fatal)', { error: announceResults[0]?.content });
+                }
+              }
+            } catch (announceError) {
+              logger.debug('Synthesis announcement error (non-fatal)', { error: String(announceError) });
+            }
+          }
+
+          return true;
+        }
+
+        //NOTE(self): LLM didn't create a plan — log and continue to next workspace
+        logger.info('Plan synthesis LLM did not create a plan', {
+          workspace: `${workspace.owner}/${workspace.repo}`,
+          openIssueCount: openIssues.length,
+        });
+
+      } catch (err) {
+        logger.error('Error during plan synthesis', {
+          workspace: `${workspace.owner}/${workspace.repo}`,
+          error: String(err),
+        });
+        //NOTE(self): Update timestamp even on error to avoid tight retry loops
+        updateWorkspaceSynthesisTimestamp(workspace.owner, workspace.repo);
+      }
+
+      //NOTE(self): Only attempt one workspace per cycle
+      break;
+    }
+
+    return false;
   }
 
   //NOTE(self): Execute a claimed task via Claude Code
@@ -3485,8 +3732,11 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
         tools: AGENT_TOOLS,
       });
 
-      //NOTE(self): Execute any tool calls
-      if (response.toolCalls.length > 0) {
+      //NOTE(self): Execute tool calls in a loop — must be `while` not `if`
+      //NOTE(self): The LLM may need multiple rounds (e.g., Round 1: review with APPROVE,
+      //NOTE(self): Round 2: merge with github_merge_pr). Using `if` caps at 2 rounds and
+      //NOTE(self): silently drops Round 2 tool calls. Same fix as v8.1.0 for triggerGitHubResponseMode.
+      while (response.toolCalls.length > 0) {
         const results = await executeTools(response.toolCalls);
 
         //NOTE(self): Track results
@@ -3548,7 +3798,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           }
         }
 
-        //NOTE(self): Continue conversation if needed
+        //NOTE(self): Continue conversation with tool results
         messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
         messages.push(createToolResultMessage(results));
 

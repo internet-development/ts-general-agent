@@ -190,6 +190,19 @@ export async function handlePlanComplete(
     logger.warn('Failed to post plan completion comment', { error: completionResult.error });
   }
 
+  //NOTE(self): Post quality loop review checklist (Scenario 10 enforcement)
+  //NOTE(self): Must stay in sync with executor.ts plan_execute_task handler (lines 2332-2345)
+  const qualityLoopResult = await createIssueComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body: `## Quality Loop — Iteration Complete\n\nAll tasks in this plan are now complete. Before closing, the quality loop requires:\n\n- [ ] Re-read \`LIL-INTDEV-AGENTS.md\` and ensure it reflects the current architecture\n- [ ] Re-read \`SCENARIOS.md\` and simulate each scenario against the codebase\n- [ ] Fix any gaps found during simulation\n- [ ] Update both docs to reflect the current state\n\nIf everything checks out, this iteration is done. If gaps are found, file new issues to address them.`,
+  });
+
+  if (!qualityLoopResult.success) {
+    logger.warn('Failed to post quality loop comment (non-fatal)', { error: qualityLoopResult.error });
+  }
+
   //NOTE(self): Update labels to complete and close the issue
   const statusResult = await updatePlanStatus(owner, repo, issueNumber, 'complete');
   if (!statusResult.success) {

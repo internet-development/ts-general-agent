@@ -39,6 +39,8 @@ export interface WatchedWorkspace {
   lastPolled: string | null;
   //NOTE(self): Active plan issue numbers
   activePlanIssues: number[];
+  //NOTE(self): When we last attempted to synthesize a plan from open issues
+  lastPlanSynthesisAttempt?: string;
 }
 
 //NOTE(self): A discovered plan with claimable tasks
@@ -269,12 +271,13 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   for (const workspace of workspaces) {
     try {
       //NOTE(self): Fetch open issues with 'plan' label
+      //NOTE(self): per_page: 30 to match other polling functions — active workspaces can have many plans
       const issuesResult = await listIssues({
         owner: workspace.owner,
         repo: workspace.repo,
         state: 'open',
         labels: ['plan'],
-        per_page: 10,
+        per_page: 30,
       });
 
       if (!issuesResult.success) {
@@ -416,13 +419,8 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
         //NOTE(self): Filter out PRs (GitHub API returns them as issues too)
         if (issue.pull_request) continue;
 
-        //NOTE(self): Filter out issues assigned to someone else
-        if (issue.assignees.length > 0) {
-          const assignedToUs = issue.assignees.some(a => a.login.toLowerCase() === agentUsername);
-          if (!assignedToUs) continue;
-        }
-
-        //NOTE(self): Auto-assign unassigned issues to the issue author
+        //NOTE(self): Auto-assign unassigned issues to the issue author (Scenario 14: every issue has an assignee)
+        //NOTE(self): This ensures clean issue management — no orphaned unassigned issues
         if (issue.assignees.length === 0 && issue.user?.login) {
           const assignResult = await updateIssue({
             owner: workspace.owner,
@@ -437,6 +435,10 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
           }
         }
 
+        //NOTE(self): All open non-plan, non-PR workspace issues are visible to all SOULs
+        //NOTE(self): Don't filter by assignee — workspace issues are our collective responsibility
+        //NOTE(self): The downstream analyzeConversation with isWorkspaceIssue handles engagement
+        //NOTE(self): decisions (round-robin, saturation, consecutive reply prevention)
         results.push({ workspace, issue });
       }
     } catch (err) {
@@ -780,13 +782,15 @@ export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
 
   for (const workspace of workspaces) {
     try {
+      //NOTE(self): Fetch up to 30 open PRs — active workspaces can have many concurrent PRs
+      //NOTE(self): per_page: 10 was too low and missed PRs beyond page 1 (same fix as v8.0.7 for open issues)
       const prsResult = await listPullRequests({
         owner: workspace.owner,
         repo: workspace.repo,
         state: 'open',
         sort: 'updated',
         direction: 'desc',
-        per_page: 10,
+        per_page: 30,
       });
 
       if (!prsResult.success) continue;
@@ -1107,4 +1111,85 @@ export async function handleMergeConflictPR(
   }
 
   return { success: true, taskNumber };
+}
+
+//NOTE(self): Plan Synthesis — detect workspaces that need a new plan synthesized from open issues
+//NOTE(self): Cooldown: 1 hour between synthesis attempts per workspace
+const PLAN_SYNTHESIS_COOLDOWN_MS = 60 * 60 * 1000;
+
+//NOTE(self): Update the synthesis timestamp for a workspace (called after synthesis attempt)
+export function updateWorkspaceSynthesisTimestamp(owner: string, repo: string): void {
+  const state = loadState();
+  const key = getWorkspaceKey(owner, repo);
+  if (state.workspaces[key]) {
+    state.workspaces[key].lastPlanSynthesisAttempt = new Date().toISOString();
+    saveState();
+  }
+}
+
+//NOTE(self): Get workspaces that need plan synthesis — no open plans AND cooldown expired
+export function getWorkspacesNeedingPlanSynthesis(): WatchedWorkspace[] {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  const now = Date.now();
+
+  return workspaces.filter(ws => {
+    //NOTE(self): Must have zero active plan issues (set by pollWorkspacesForPlans)
+    if (ws.activePlanIssues.length > 0) return false;
+
+    //NOTE(self): Must have been polled at least once (otherwise we don't know the plan state)
+    if (!ws.lastPolled) return false;
+
+    //NOTE(self): Cooldown check — skip if last attempt was within 1 hour
+    if (ws.lastPlanSynthesisAttempt) {
+      const lastAttempt = new Date(ws.lastPlanSynthesisAttempt).getTime();
+      if (now - lastAttempt < PLAN_SYNTHESIS_COOLDOWN_MS) return false;
+    }
+
+    return true;
+  });
+}
+
+//NOTE(self): Close issues that were rolled up into a synthesized plan
+//NOTE(self): Posts a linking comment and closes each issue
+export async function closeRolledUpIssues(
+  owner: string,
+  repo: string,
+  issueNumbers: number[],
+  planIssueNumber: number
+): Promise<{ closed: number }> {
+  let closed = 0;
+
+  for (const issueNumber of issueNumbers) {
+    try {
+      //NOTE(self): Post comment linking to the plan
+      const commentResult = await createIssueComment({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body: `Rolled into plan #${planIssueNumber} — closing.`,
+      });
+      if (!commentResult.success) {
+        logger.warn('Failed to comment on rolled-up issue', { owner, repo, issueNumber, error: commentResult.error });
+      }
+
+      //NOTE(self): Close the issue
+      const closeResult = await updateIssue({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        state: 'closed',
+      });
+      if (closeResult.success) {
+        closed++;
+        logger.info('Closed rolled-up issue', { owner, repo, issueNumber, planIssueNumber });
+      } else {
+        logger.warn('Failed to close rolled-up issue', { owner, repo, issueNumber, error: closeResult.error });
+      }
+    } catch (err) {
+      logger.error('Error closing rolled-up issue', { owner, repo, issueNumber, error: String(err) });
+    }
+  }
+
+  return { closed };
 }

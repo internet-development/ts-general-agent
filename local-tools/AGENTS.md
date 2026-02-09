@@ -149,7 +149,7 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | `task-claim` | Claim tasks via GitHub assignee API (first-writer-wins protocol). `releaseTaskClaim` checks `freshUpdateTaskInPlan` result to detect plan update failures |
 | `task-execute` | Execute claimed tasks via Claude Code. Also exports `createBranch`, `createPullRequest`, `requestReviewersForPR`, and `recoverOrphanedBranch` (find pushed branches without PRs for blocked/pending tasks and create PRs for them) |
 | `task-verify` | PRE-GATE + four-gate quality check: `verifyBranch()` confirms Claude Code stayed on the correct feature branch, then verify git changes exist, run tests if present, push to remote, verify push success |
-| `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes. `handlePlanComplete` checks `updatePlanStatus` and `closePlan` results for silent failures |
+| `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes. `handlePlanComplete` posts quality loop review checklist (Scenario 10), checks `updatePlanStatus` and `closePlan` results for silent failures |
 
 ### Workspace Management (`self-workspace-*`)
 | Local Tool | Purpose |
