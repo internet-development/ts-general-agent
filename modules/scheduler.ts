@@ -123,6 +123,7 @@ import {
   pollWorkspacesForReviewablePRs,
   pollWorkspacesForApprovedPRs,
   autoMergeApprovedPR,
+  handleMergeConflictPR,
   pollWorkspacesForOpenIssues,
   cleanupStaleWorkspaceIssues,
   closeHandledWorkspaceIssues,
@@ -2951,10 +2952,11 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Auto-merge approved PRs in workspaces
-      //NOTE(self): Any SOUL can merge — if it has >= 1 approval and no changes requested, merge it
+      //NOTE(self): Any SOUL can merge — if it has >= 1 approval, merge it
+      //NOTE(self): Also recover stuck rejected PRs (only rejections, no approvals, >1 hour old)
       let autoMergedCount = 0;
       if (this.state.currentMode === 'idle') {
-        const approvedPRs = await pollWorkspacesForApprovedPRs();
+        const { approved: approvedPRs, stuckRejected } = await pollWorkspacesForApprovedPRs();
         for (const { workspace: ws, pr, approvals } of approvedPRs) {
           const mergeResult = await autoMergeApprovedPR(ws.owner, ws.repo, pr);
           if (mergeResult.success) {
@@ -2967,6 +2969,18 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             });
             //NOTE(self): Signal post-merge so plan awareness picks up newly unblocked tasks
             this.requestEarlyPlanCheck();
+          }
+        }
+
+        //NOTE(self): Recover PRs stuck with only rejections — close, delete branch, reset task
+        for (const { workspace: ws, pr } of stuckRejected) {
+          logger.info('Recovering stuck rejected PR', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, title: pr.title });
+          const recovery = await handleMergeConflictPR(ws.owner, ws.repo, pr);
+          if (recovery.success) {
+            logger.info('Stuck rejected PR recovered, task reset to pending', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, taskNumber: recovery.taskNumber });
+            this.requestEarlyPlanCheck();
+          } else {
+            logger.warn('Stuck rejected PR recovery failed', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, error: recovery.error });
           }
         }
       }

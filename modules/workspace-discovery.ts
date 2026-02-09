@@ -737,16 +737,25 @@ export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; f
 }
 
 //NOTE(self): Find approved PRs in watched workspaces that can be auto-merged
-//NOTE(self): A PR is auto-mergeable when it has >= 1 APPROVED review and no CHANGES_REQUESTED
-export async function pollWorkspacesForApprovedPRs(): Promise<{ workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[]> {
+//NOTE(self): Also detects PRs stuck with only rejections (no approvals) for >1 hour
+const REJECTED_PR_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+
+export interface PollPRsResult {
+  approved: { workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[];
+  stuckRejected: { workspace: WatchedWorkspace; pr: GitHubPullRequest }[];
+}
+
+export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
   const state = loadState();
   const workspaces = Object.values(state.workspaces);
-  const results: { workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[] = [];
+  const approved: PollPRsResult['approved'] = [];
+  const stuckRejected: PollPRsResult['stuckRejected'] = [];
 
-  if (workspaces.length === 0) return [];
+  if (workspaces.length === 0) return { approved, stuckRejected };
 
   const config = getConfig();
   const agentUsername = config.github.username.toLowerCase();
+  const now = Date.now();
 
   for (const workspace of workspaces) {
     try {
@@ -783,15 +792,23 @@ export async function pollWorkspacesForApprovedPRs(): Promise<{ workspace: Watch
         //NOTE(self): Don't gate on CHANGES_REQUESTED — SOULs self-approve to override rejections.
         //NOTE(self): Approval count alone determines merge readiness.
         const approvalCount = [...latestReviewByUser.values()].filter(s => s === 'APPROVED').length;
-        if (approvalCount === 0) continue;
+        const rejectCount = [...latestReviewByUser.values()].filter(s => s === 'CHANGES_REQUESTED').length;
 
-        //NOTE(self): Require approvals >= number of assignees on the PR
-        //NOTE(self): If no assignees, require at least 1 approval
-        const assigneeCount = (pr.assignees || []).length;
-        const requiredApprovals = Math.max(assigneeCount, 1);
-        if (approvalCount < requiredApprovals) continue;
-
-        results.push({ workspace, pr, approvals: approvalCount });
+        if (approvalCount > 0) {
+          //NOTE(self): Require approvals >= number of assignees on the PR
+          //NOTE(self): If no assignees, require at least 1 approval
+          const assigneeCount = (pr.assignees || []).length;
+          const requiredApprovals = Math.max(assigneeCount, 1);
+          if (approvalCount >= requiredApprovals) {
+            approved.push({ workspace, pr, approvals: approvalCount });
+          }
+        } else if (rejectCount > 0 && approvalCount === 0) {
+          //NOTE(self): PR has only rejections, no approvals — check if stuck for >1 hour
+          const prCreatedAt = new Date(pr.created_at).getTime();
+          if (now - prCreatedAt > REJECTED_PR_TIMEOUT_MS) {
+            stuckRejected.push({ workspace, pr });
+          }
+        }
       }
     } catch (err) {
       logger.error('Error polling workspace for approved PRs', {
@@ -801,7 +818,7 @@ export async function pollWorkspacesForApprovedPRs(): Promise<{ workspace: Watch
     }
   }
 
-  return results;
+  return { approved, stuckRejected };
 }
 
 //NOTE(self): Auto-merge an approved PR — squash merge, then delete the feature branch
