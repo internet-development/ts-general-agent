@@ -140,12 +140,12 @@ export class TerminalUI {
   }
 
   //NOTE(self): Wrap text in double-line vertical borders (║ content ║)
+  //NOTE(self): Long lines will overflow past the right border — that's acceptable
   private addBorder(text: string): string {
     const width = getTerminalWidth();
     const innerWidth = width - 2; //NOTE(self): ║ + content(width-2) + ║
     const visLen = this.visibleLength(text);
     if (visLen > innerWidth) {
-      //NOTE(self): Content too wide — show left border only, skip right to avoid wrap
       return `${ANSI.red}${BOX.dVertical}${ANSI.reset}${text}`;
     }
     const padding = innerWidth - visLen;
@@ -468,6 +468,13 @@ export class TerminalUI {
     this.inputBoxEnabled = true;
 
     //NOTE(self): Draw the input box at the bottom
+    this.redrawInputBox();
+
+    //NOTE(self): Draw top border of output frame (╔═══╗) into scroll region
+    const width = getTerminalWidth();
+    process.stdout.write(ANSI.saveCursor);
+    process.stdout.write(CSI.moveTo(scrollBottom, 1));
+    process.stdout.write('\n' + `${ANSI.red}${BOX.dTopLeft}${BOX.dHorizontal.repeat(width - 2)}${BOX.dTopRight}${ANSI.reset}`);
     this.redrawInputBox();
 
     //NOTE(self): Handle terminal resize — remove old handler to prevent listener leak
