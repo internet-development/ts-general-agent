@@ -31,7 +31,8 @@ export interface TaskCompletionReport {
   testsPassed?: boolean;
 }
 
-//NOTE(self): Report task completion
+//NOTE(self): Report that a task's PR has been created (task stays in_progress until PR is merged)
+//NOTE(self): Task completion happens in autoMergeApprovedPR() after the PR is actually merged
 export async function reportTaskComplete(
   params: ReportTaskParams,
   report: TaskCompletionReport
@@ -40,7 +41,7 @@ export async function reportTaskComplete(
   const config = getConfig();
   const myUsername = config.github.username;
 
-  logger.info('Reporting task completion', { taskNumber, owner, repo, issueNumber });
+  logger.info('Reporting task PR created (awaiting merge)', { taskNumber, owner, repo, issueNumber });
 
   //NOTE(self): Find the task
   const task = plan.tasks.find(t => t.number === taskNumber);
@@ -48,18 +49,10 @@ export async function reportTaskComplete(
     return { success: false, error: `Task ${taskNumber} not found` };
   }
 
-  //NOTE(self): Update plan body with completed status (fresh read to avoid clobbering)
-  const updateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
-    status: 'completed',
-    assignee: myUsername,
-  });
+  //NOTE(self): Do NOT mark task as completed — it stays in_progress until PR is merged
+  //NOTE(self): The task was already set to in_progress by markTaskInProgress()
 
-  if (!updateResult.success) {
-    logger.error('Failed to update plan body', { error: updateResult.error });
-    return { success: false, error: updateResult.error };
-  }
-
-  //NOTE(self): Build completion comment
+  //NOTE(self): Build PR created comment
   const filesSection = report.filesChanged?.length
     ? `\n\n**Files changed:**\n${report.filesChanged.map(f => `- \`${f}\``).join('\n')}`
     : '';
@@ -81,37 +74,13 @@ export async function reportTaskComplete(
   });
 
   if (!commentResult.success) {
-    logger.warn('Failed to post completion comment', { error: commentResult.error });
+    logger.warn('Failed to post PR created comment', { error: commentResult.error });
   }
 
-  //NOTE(self): Always use live data — other SOULs may have completed tasks since we started
-  const freshResult = await fetchFreshPlan(owner, repo, issueNumber);
-  const livePlan = freshResult.success && freshResult.plan ? freshResult.plan : plan;
+  //NOTE(self): Do NOT check plan completion here — that happens when PRs merge
+  //NOTE(self): Do NOT remove assignee — SOUL still owns the task until PR merges
 
-  //NOTE(self): Check if all tasks are complete
-  const allComplete = livePlan.tasks.every(t =>
-    t.number === taskNumber ? true : t.status === 'completed'
-  );
-
-  let planComplete = false;
-  if (allComplete) {
-    await handlePlanComplete(owner, repo, issueNumber);
-    planComplete = true;
-  }
-
-  //NOTE(self): Remove assignee (task is done, we're free for next task)
-  const removeResult = await removeIssueAssignee({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    assignees: [myUsername],
-  });
-
-  if (!removeResult.success) {
-    logger.warn('Failed to remove assignee after completion', { error: removeResult.error });
-  }
-
-  return { success: true, planComplete };
+  return { success: true, planComplete: false };
 }
 
 //NOTE(self): Report task progress (for long-running tasks)
@@ -201,8 +170,8 @@ export async function reportTaskBlocked(
   return { success: true };
 }
 
-//NOTE(self): Handle plan completion
-async function handlePlanComplete(
+//NOTE(self): Handle plan completion — exported so autoMergeApprovedPR can call it after merge
+export async function handlePlanComplete(
   owner: string,
   repo: string,
   issueNumber: number

@@ -46,7 +46,20 @@ The {{OWNER}} can chat in the terminal and give any instructions it wants to any
 
 # 10
 
-@soul1 @soul2 and @soul3 have created an LIL-INTDEV-AGENTS.md in their own `www-lil-intdev-*`, and created a SCENARIOS.md, and basically go through this loop over and over again till the project is complete at a world class design and softare level. The output of this should be in pull requests that are made, reviewed, accepted with "LGTM" and then merged in, and the {{OWNER}} should be able to look in and see this
+@soul1 @soul2 and @soul3 have created an LIL-INTDEV-AGENTS.md in their own `www-lil-intdev-*`, and created a SCENARIOS.md, and basically go through this loop over and over again till the project is complete at a world class design and software level. The output of this should be in pull requests that are made, reviewed, accepted with "LGTM" and then merged in, and the {{OWNER}} should be able to look in and see this.
+
+**Critical: tasks are only complete when their PR is merged.** Creating a PR is not completion — the task stays `in_progress` until `autoMergeApprovedPR()` successfully merges it. Plans only close when every task's PR has been merged. This prevents the project from being marked "done" while unmerged PRs sit open.
+
+**The merge-gated lifecycle:**
+```
+pending → claimed → in_progress → PR created (still in_progress) → reviewed → merged → completed
+```
+
+**PR recovery ensures the pipeline never halts:**
+- Merge conflicts: close PR, delete branch, reset task to pending, SOUL re-executes from fresh main
+- Rejected PRs (>1hr with only rejections, no approvals): same recovery — close, reset, retry
+- Unreviewed PRs (>2hr with zero reviews): same recovery — close, reset, retry
+- Reviewer feedback becomes follow-up issues after merge
 
 ```
 Complete understanding of LIL-INTDEV-AGENTS.md
@@ -97,6 +110,15 @@ No one observing @soul1, @soul2, and @soul3 think the SOULS are being spammy onl
 # 14
 
 @soul1, @soul2, and @soul3 make a Github Repository and start working on work and a few branches get made and pushed to Github.com, but they don't get made into Pull Requests. We don't want to have any stale branches that aren't merged in so we want any of the Souls that are observing the Repository to open up Pull requests, and either get them approved or rejected (and deleted). Of course the {{SOULS}} can keep working on a PR and resubmit but it keeps the work going till the project is done.
+
+**PR lifecycle guarantees — no PR sits forever:**
+- Every reviewer must LGTM before merge. Reviews are a formality — always approve unless there's an obvious regression (deleted tests, broken imports).
+- If a reviewer rejected a PR, the reviewer comes back and approves it. Feedback is valid but doesn't block shipping.
+- Reviewer feedback is preserved as a follow-up issue after the PR merges.
+- PRs with only rejections and no approvals for >1 hour: closed, branch deleted, task reset to pending for retry.
+- PRs with zero reviews for >2 hours: closed, branch deleted, task reset to pending for retry.
+- PRs with merge conflicts on merge attempt: closed, branch deleted, task reset to pending for retry from fresh main.
+- Every issue has an assignee — unassigned issues are auto-assigned to their author.
 
 ---
 
@@ -206,14 +228,17 @@ An observer reads a Bluesky thread between @soul1, @soul2, and @soul3. The threa
 - `github_merge_pr` handler in executor.ts triggers `onPRMergedCallback` after successful merge
 - The callback calls `requestEarlyPlanCheck()` on the scheduler
 - Plan awareness check fires within 5 seconds of merge
+- `autoMergeApprovedPR()` calls `completeTaskAfterMerge()` which marks the task `completed` and checks if the plan is done
 - If the scheduler is idle, it discovers and claims the next task
 
 **What MUST NOT happen:**
 - The SOUL merges a PR and sits idle for up to 3 minutes before discovering the next task
 - The early re-poll fires when the scheduler is already busy (guarded by idle check)
+- A task is marked `completed` before its PR is merged (tasks stay `in_progress` until merge)
+- A plan closes while open PRs still exist for its tasks
 - Circular imports between executor.ts and scheduler.ts (solved by callback registration pattern)
 
-**Enforcement:** Code (`registerOnPRMerged` callback pattern, `requestEarlyPlanCheck` with 5s delay).
+**Enforcement:** Code (`registerOnPRMerged` callback pattern, `requestEarlyPlanCheck` with 5s delay, `completeTaskAfterMerge` for merge-gated completion).
 
 # 21
 

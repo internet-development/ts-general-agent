@@ -100,7 +100,7 @@ Ask these questions:
 | `post-log.ts` | Post logging (core parts) | Infrastructure for attribution local-tools |
 | `self-extract.ts` | SELF.md parsing | Foundational identity infrastructure |
 | `action-queue.ts` | Persistent queue for outbound actions (replies) with retry/backoff | Ensures follow-through when rate limits defer actions |
-| `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list, three-tier auto-close (handled 24h, stale memo 3d, stale other 7d), `pollWorkspacesForApprovedPRs()` + `autoMergeApprovedPR()` for auto-merging approved PRs | Multi-SOUL collaboration infrastructure |
+| `workspace-discovery.ts` | Poll workspaces for plan issues, manage watch list, three-tier auto-close (handled 24h, stale memo 3d, stale other 7d), `pollWorkspacesForApprovedPRs()` + `autoMergeApprovedPR()` for auto-merging approved PRs. **Merge-gated task completion:** tasks stay `in_progress` until PR merges — `completeTaskAfterMerge()` marks `completed` and checks plan closure. **PR recovery:** `handleMergeConflictPR()` closes conflicting/rejected/unreviewed PRs, deletes branch, resets task to `pending`. **Follow-up issues:** `createFollowUpIssueFromReviews()` creates issues from reviewer feedback after merge. **Auto-assignment:** `pollWorkspacesForOpenIssues()` assigns unassigned issues to their author. | Multi-SOUL collaboration infrastructure |
 | `commitment-queue.ts` | Track pending commitments with JSONL persistence, dedup, stale cleanup | Ensures follow-through on promises made in replies |
 | `commitment-extract.ts` | LLM-based extraction of action commitments from Bluesky replies | Feeds commitment queue from response mode |
 | `commitment-fulfill.ts` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) | Executes promised actions autonomously |
@@ -214,9 +214,14 @@ scheduler.ts
 │   └── improvement local-tool (execute via Claude Code)
 ├── plan awareness loop (3m)
 │   ├── workspace-discovery (poll plans, PRs, open issues)
-│   ├── task-claim → task-execute → task-verify → task-report
-│   ├── on planComplete → announceIfWorthy (modules/announcement.ts — shared by scheduler + executor)
+│   ├── task-claim → task-execute → task-verify → PR created (task stays in_progress)
+│   ├── PR review: all requested reviewers must LGTM before merge
+│   ├── auto-merge approved PRs → completeTaskAfterMerge → on allComplete → handlePlanComplete + announceIfWorthy
+│   ├── recover stuck PRs: rejected >1h, unreviewed >2h, merge conflicts → close PR, reset task to pending
+│   ├── stuck task recovery: in_progress >30m with NO open PR → reset to pending
+│   ├── follow-up issues from reviewer feedback after merge
 │   ├── PR review (one per cycle)
+│   ├── auto-assign unassigned workspace issues to author
 │   ├── closeHandledWorkspaceIssues (24h: agent responded, no follow-up)
 │   └── cleanupStaleWorkspaceIssues (3d memos, 7d others)
 └── commitment fulfillment loop (15s)

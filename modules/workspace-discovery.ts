@@ -13,7 +13,9 @@ import { updateIssue } from '@adapters/github/update-issue.js';
 import { mergePullRequest } from '@adapters/github/merge-pull-request.js';
 import { deleteBranch } from '@adapters/github/delete-branch.js';
 import type { GitHubPullRequest } from '@adapters/github/types.js';
-import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
+import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, fetchFreshPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
+import { handlePlanComplete } from '@local-tools/self-task-report.js';
+import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
 import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { createIssue } from '@adapters/github/create-issue.js';
@@ -753,12 +755,14 @@ export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; f
 }
 
 //NOTE(self): Find approved PRs in watched workspaces that can be auto-merged
-//NOTE(self): Also detects PRs stuck with only rejections (no approvals) for >1 hour
+//NOTE(self): Also detects PRs stuck with only rejections or no reviews at all
 const REJECTED_PR_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+const UNREVIEWED_PR_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 export interface PollPRsResult {
   approved: { workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[];
   stuckRejected: { workspace: WatchedWorkspace; pr: GitHubPullRequest }[];
+  stuckUnreviewed: { workspace: WatchedWorkspace; pr: GitHubPullRequest }[];
 }
 
 export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
@@ -766,8 +770,9 @@ export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
   const workspaces = Object.values(state.workspaces);
   const approved: PollPRsResult['approved'] = [];
   const stuckRejected: PollPRsResult['stuckRejected'] = [];
+  const stuckUnreviewed: PollPRsResult['stuckUnreviewed'] = [];
 
-  if (workspaces.length === 0) return { approved, stuckRejected };
+  if (workspaces.length === 0) return { approved, stuckRejected, stuckUnreviewed };
 
   const config = getConfig();
   const agentUsername = config.github.username.toLowerCase();
@@ -821,6 +826,12 @@ export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
           if (now - prCreatedAt > REJECTED_PR_TIMEOUT_MS) {
             stuckRejected.push({ workspace, pr });
           }
+        } else if (latestReviewByUser.size === 0 && pendingReviewers > 0) {
+          //NOTE(self): No reviews at all, reviewers still pending — check if stuck for >2 hours
+          const prCreatedAt = new Date(pr.created_at).getTime();
+          if (now - prCreatedAt > UNREVIEWED_PR_TIMEOUT_MS) {
+            stuckUnreviewed.push({ workspace, pr });
+          }
         }
       }
     } catch (err) {
@@ -831,7 +842,7 @@ export async function pollWorkspacesForApprovedPRs(): Promise<PollPRsResult> {
     }
   }
 
-  return { approved, stuckRejected };
+  return { approved, stuckRejected, stuckUnreviewed };
 }
 
 //NOTE(self): Auto-merge an approved PR — squash merge, then delete the feature branch
@@ -839,7 +850,7 @@ export async function autoMergeApprovedPR(
   owner: string,
   repo: string,
   pr: GitHubPullRequest
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; planComplete?: boolean }> {
   logger.info('Auto-merging approved PR', { owner, repo, number: pr.number, title: pr.title });
 
   const mergeResult = await mergePullRequest({
@@ -881,7 +892,11 @@ export async function autoMergeApprovedPR(
   //NOTE(self): Create follow-up issue from reviewer feedback if any reviews had substantive comments
   await createFollowUpIssueFromReviews(owner, repo, pr);
 
-  return { success: true };
+  //NOTE(self): Mark task as completed NOW that the PR is actually merged
+  //NOTE(self): This is the single source of truth for task completion — not PR creation
+  const planComplete = await completeTaskAfterMerge(owner, repo, pr);
+
+  return { success: true, planComplete };
 }
 
 //NOTE(self): After merging a PR, check if reviewers left substantive feedback and create a follow-up issue
@@ -937,6 +952,70 @@ async function createFollowUpIssueFromReviews(
     }
   } catch (err) {
     logger.warn('Error creating follow-up issue from reviews (non-fatal)', { owner, repo, prNumber: pr.number, error: String(err) });
+  }
+}
+
+//NOTE(self): After a PR is merged, mark the corresponding task as completed and check plan completion
+//NOTE(self): This is the single source of truth for task completion — tasks stay in_progress until merge
+async function completeTaskAfterMerge(
+  owner: string,
+  repo: string,
+  pr: GitHubPullRequest
+): Promise<boolean> {
+  try {
+    const headRef = pr.head?.ref || '';
+    const taskMatch = headRef.match(/^task-(\d+)-/);
+    if (!taskMatch) return false; // Not a task PR
+
+    const taskNumber = parseInt(taskMatch[1], 10);
+
+    // Find the plan issue
+    const issuesResult = await listIssues({
+      owner,
+      repo,
+      state: 'open',
+      labels: ['plan'],
+      per_page: 5,
+    });
+    if (!issuesResult.success || issuesResult.data.length === 0) return false;
+
+    const planIssue = issuesResult.data[0];
+
+    // Mark task as completed
+    const updateResult = await freshUpdateTaskInPlan(owner, repo, planIssue.number, taskNumber, {
+      status: 'completed',
+      assignee: null,
+    });
+    if (!updateResult.success) {
+      logger.warn('Failed to mark task completed after merge', { owner, repo, taskNumber, error: updateResult.error });
+      return false;
+    }
+    logger.info('Marked task completed after PR merge', { owner, repo, planIssue: planIssue.number, taskNumber, prNumber: pr.number });
+
+    // Release assignee from the plan issue
+    const config = getConfig();
+    await removeIssueAssignee({
+      owner,
+      repo,
+      issue_number: planIssue.number,
+      assignees: [config.github.username],
+    });
+
+    // Check if all tasks in the plan are now completed
+    const freshResult = await fetchFreshPlan(owner, repo, planIssue.number);
+    if (!freshResult.success || !freshResult.plan) return false;
+
+    const allComplete = freshResult.plan.tasks.every(t => t.status === 'completed');
+    if (allComplete) {
+      logger.info('All tasks completed after merge — closing plan', { owner, repo, planIssue: planIssue.number });
+      await handlePlanComplete(owner, repo, planIssue.number);
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    logger.warn('Error in post-merge task completion (non-fatal)', { owner, repo, prNumber: pr.number, error: String(err) });
+    return false;
   }
 }
 

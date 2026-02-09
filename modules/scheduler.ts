@@ -2459,7 +2459,26 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
                 this.stuckTaskTracker.set(taskKey, { firstSeen: now, retryCount: 0 });
                 logger.debug('Tracking potentially stuck task', { taskKey, status: task.status });
               } else if (now - tracked.firstSeen > AgentScheduler.STUCK_TIMEOUT_MS) {
-                //NOTE(self): Stuck for > 30 min — recover it
+                //NOTE(self): Before resetting, check if there's an open PR for this task
+                //NOTE(self): Tasks stay in_progress until their PR merges — don't nuke valid work
+                const taskBranchPrefix = `task-${task.number}-`;
+                const openPRs = await github.listPullRequests({
+                  owner: workspace.owner,
+                  repo: workspace.repo,
+                  state: 'open',
+                  per_page: 30,
+                });
+                const hasOpenPR = openPRs.success && openPRs.data.some(
+                  (pr: any) => pr.head?.ref?.startsWith(taskBranchPrefix)
+                );
+                if (hasOpenPR) {
+                  logger.debug('Task has open PR, not recovering as stuck', { taskKey });
+                  //NOTE(self): Reset firstSeen so we don't keep checking every cycle
+                  this.stuckTaskTracker.set(taskKey, { firstSeen: now, retryCount: tracked.retryCount });
+                  continue;
+                }
+
+                //NOTE(self): Stuck for > 30 min with no open PR — recover it
                 logger.warn('Recovering stuck task (timeout exceeded)', {
                   taskKey,
                   status: task.status,
@@ -2956,7 +2975,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       //NOTE(self): Also recover stuck rejected PRs (only rejections, no approvals, >1 hour old)
       let autoMergedCount = 0;
       if (this.state.currentMode === 'idle') {
-        const { approved: approvedPRs, stuckRejected } = await pollWorkspacesForApprovedPRs();
+        const { approved: approvedPRs, stuckRejected, stuckUnreviewed } = await pollWorkspacesForApprovedPRs();
         for (const { workspace: ws, pr, approvals } of approvedPRs) {
           const mergeResult = await autoMergeApprovedPR(ws.owner, ws.repo, pr);
           if (mergeResult.success) {
@@ -2969,6 +2988,16 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             });
             //NOTE(self): Signal post-merge so plan awareness picks up newly unblocked tasks
             this.requestEarlyPlanCheck();
+
+            //NOTE(self): If the merge completed the entire plan, announce on Bluesky
+            if (mergeResult.planComplete) {
+              const planUrl = `https://github.com/${ws.owner}/${ws.repo}/issues`;
+              await announceIfWorthy(
+                { url: planUrl, title: `Plan complete: all PRs merged in ${ws.owner}/${ws.repo}`, repo: `${ws.owner}/${ws.repo}` },
+                'issue',
+                ws.discoveredInThread
+              );
+            }
           }
         }
 
@@ -2981,6 +3010,18 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             this.requestEarlyPlanCheck();
           } else {
             logger.warn('Stuck rejected PR recovery failed', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, error: recovery.error });
+          }
+        }
+
+        //NOTE(self): Recover PRs never reviewed after 2 hours — close, delete branch, reset task
+        for (const { workspace: ws, pr } of stuckUnreviewed) {
+          logger.info('Recovering unreviewed PR', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, title: pr.title });
+          const recovery = await handleMergeConflictPR(ws.owner, ws.repo, pr);
+          if (recovery.success) {
+            logger.info('Unreviewed PR recovered, task reset to pending', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, taskNumber: recovery.taskNumber });
+            this.requestEarlyPlanCheck();
+          } else {
+            logger.warn('Unreviewed PR recovery failed', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, error: recovery.error });
           }
         }
       }
@@ -3278,72 +3319,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         workspace.discoveredInThread
       );
 
-      //NOTE(self): If the entire plan is now complete, announce on Bluesky
-      //NOTE(self): This closes the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
-      if (completionReport.planComplete) {
-        const planUrl = `https://github.com/${workspace.owner}/${workspace.repo}/issues/${issueNumber}`;
-        await announceIfWorthy(
-          { url: planUrl, title: `Plan complete: ${plan.title}`, repo: `${workspace.owner}/${workspace.repo}` },
-          'issue',
-          workspace.discoveredInThread
-        );
-        recordExperience(
-          'helped_someone',
-          `All tasks complete in plan "${plan.title}" — project delivered!`,
-          { source: 'github', url: planUrl }
-        );
-
-        //NOTE(self): Trigger iterative quality loop (Scenario 10)
-        //NOTE(self): Post a doc review comment, then run automated gap analysis via Claude Code
-        try {
-          await github.createIssueComment({
-            owner: workspace.owner,
-            repo: workspace.repo,
-            issue_number: issueNumber,
-            body: `## Quality Loop — Iteration Complete\n\nAll tasks in this plan are now complete. Running automated quality verification...`,
-          });
-          logger.info('Posted quality loop review comment on completed plan', { issueNumber });
-
-          //NOTE(self): Run automated quality verification via Claude Code
-          //NOTE(self): This reads LIL-INTDEV-AGENTS.md and SCENARIOS.md, simulates scenarios,
-          //NOTE(self): and creates follow-up issues for any gaps found
-          const workreposDir = this.appConfig.paths.workrepos;
-          const workspaceResult = await ensureWorkspace(workspace.owner, workspace.repo, workreposDir);
-          if (workspaceResult.success) {
-            const qualityPrompt = `You are running a quality verification loop for a completed plan.
-
-**Repository:** ${workspace.owner}/${workspace.repo}
-**Plan:** ${plan.title}
-
-**Instructions:**
-1. Read \`LIL-INTDEV-AGENTS.md\` if it exists — verify it reflects the current architecture
-2. Read \`SCENARIOS.md\` if it exists — simulate each scenario against the codebase
-3. For any gaps or issues found, create a GitHub issue using the gh CLI:
-   \`gh issue create --repo ${workspace.owner}/${workspace.repo} --title "Gap: <description>" --body "<details>"\`
-4. If the docs need updating, update them and commit the changes
-5. If everything looks good, report that no gaps were found
-
-**Constraints:**
-- Do NOT create issues for things that are already working
-- Focus on real, observable gaps — not hypothetical improvements
-- Be concise — each issue should have a clear title and actionable description
-- Do NOT modify any application code — only docs and issue creation`;
-
-            try {
-              const qualityResult = await runClaudeCode(qualityPrompt, workspaceResult.path, this.appConfig.paths.memory);
-              if (qualityResult.success) {
-                logger.info('Quality loop verification completed', { workspace: `${workspace.owner}/${workspace.repo}` });
-              } else {
-                logger.warn('Quality loop verification failed (non-fatal)', { error: qualityResult.error });
-              }
-            } catch (qualityError) {
-              logger.warn('Quality loop Claude Code error (non-fatal)', { error: String(qualityError) });
-            }
-          }
-        } catch (docReviewError) {
-          logger.warn('Failed to post quality loop comment (non-fatal)', { error: String(docReviewError) });
-        }
-      }
+      //NOTE(self): Plan completion is now handled in autoMergeApprovedPR() after PR merge
+      //NOTE(self): Tasks stay in_progress until their PR is merged — plan only closes when all PRs merge
 
     } catch (error) {
       ui.stopSpinner('Task execution error', false);
