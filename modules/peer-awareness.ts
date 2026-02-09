@@ -173,10 +173,14 @@ export function getKnownPeers(): DiscoveredPeer[] {
   return Object.values(state.peers);
 }
 
-//NOTE(self): Convenience: just the GitHub usernames
+//NOTE(self): Convenience: just the confirmed GitHub usernames
+//NOTE(self): Filters out Bluesky handles that were temporarily stored as githubUsername
+//NOTE(self): (peers discovered via Bluesky before linkPeerIdentities is called)
 export function getPeerUsernames(): string[] {
   const state = loadState();
-  return Object.values(state.peers).map(p => p.githubUsername);
+  return Object.values(state.peers)
+    .map(p => p.githubUsername)
+    .filter(u => !u.includes('.'));
 }
 
 //NOTE(self): Convenience: just the Bluesky handles (for peers that have one)

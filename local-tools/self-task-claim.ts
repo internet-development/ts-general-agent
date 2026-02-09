@@ -45,9 +45,9 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
     return { success: false, claimed: false, error: `Task ${taskNumber} not found in plan` };
   }
 
-  //NOTE(self): Check if task is claimable
-  if (task.status !== 'pending') {
-    return { success: false, claimed: false, error: `Task ${taskNumber} is not pending (status: ${task.status})` };
+  //NOTE(self): Check if task is claimable — pending or blocked (blocked = failed execution, eligible for retry)
+  if (task.status !== 'pending' && task.status !== 'blocked') {
+    return { success: false, claimed: false, error: `Task ${taskNumber} is not claimable (status: ${task.status})` };
   }
 
   if (task.assignee) {

@@ -134,7 +134,7 @@ import {
   type ReviewablePR,
   type PlanPollResult,
 } from '@modules/workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
@@ -615,7 +615,7 @@ export class AgentScheduler {
             const posterDid = pn.notification.author.did;
             if (posterDid !== this.appConfig.owner.blueskyDid &&
                 posterHandle !== this.appConfig.bluesky.username) {
-              registerPeer(posterHandle, 'workspace', pn.notification.uri, posterHandle);
+              registerPeerByBlueskyHandle(posterHandle, 'workspace', pn.notification.uri);
               logger.debug('Registered Bluesky peer from workspace URL', { posterHandle });
             }
           }
@@ -973,8 +973,9 @@ export class AgentScheduler {
           tools: AGENT_TOOLS,
         });
 
-        //NOTE(self): Execute any tool calls
-        if (response.toolCalls.length > 0) {
+        //NOTE(self): Execute tool calls in a loop — must be while (not if) so Round 2+ tools
+        //NOTE(self): (like github_update_issue to close, graceful_exit) actually get executed
+        while (response.toolCalls.length > 0) {
           const results = await executeTools(response.toolCalls);
 
           //NOTE(self): Track our comment
