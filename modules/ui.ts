@@ -522,24 +522,9 @@ export class TerminalUI {
     const displayText = this.currentInputText || '';
     const textLines = wrapText(displayText, innerWidth);
 
-    //NOTE(self): Calculate cursor position within wrapped lines
-    let cursorLineIndex = 0;
-    let cursorColIndex = this.currentCursorPos;
-    let charsCounted = 0;
-
-    for (let i = 0; i < textLines.length; i++) {
-      const lineLen = textLines[i].length;
-      const effectiveLen = i < textLines.length - 1 ? lineLen + 1 : lineLen;
-
-      if (charsCounted + effectiveLen > this.currentCursorPos) {
-        cursorLineIndex = i;
-        cursorColIndex = this.currentCursorPos - charsCounted;
-        break;
-      }
-      charsCounted += effectiveLen;
-      cursorLineIndex = i + 1;
-      cursorColIndex = this.currentCursorPos - charsCounted;
-    }
+    //NOTE(self): Cursor is always at end of text (no arrow key movement in raw mode)
+    const cursorLineIndex = Math.max(0, textLines.length - 1);
+    const cursorColIndex = textLines.length > 0 ? textLines[cursorLineIndex].length : 0;
 
     //NOTE(self): Determine scroll window (keep cursor visible within 3 lines)
     const VISIBLE_LINES = 3;
