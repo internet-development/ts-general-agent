@@ -76,6 +76,7 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
 
   let shouldExit = false;
   let inputBuffer = '';
+  let cursorPos = 0;
 
   //NOTE(self): Graceful departure
   const shutdown = (reason: string): void => {
@@ -120,10 +121,23 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
   //NOTE(self): Key input handling for owner communication
   process.stdin.on('data', async (char: string) => {
 
+    //NOTE(self): Arrow keys and escape sequences (multi-char starting with ESC)
+    if (char.length > 1 && char[0] === '\x1b') {
+      if (char === '\x1b[D') { // Left arrow
+        if (cursorPos > 0) cursorPos--;
+      } else if (char === '\x1b[C') { // Right arrow
+        if (cursorPos < inputBuffer.length) cursorPos++;
+      }
+      //NOTE(self): All other escape sequences (up/down, etc.) silently ignored
+      ui.printInputBox(inputBuffer, cursorPos, VERSION);
+      return;
+    }
+
     //NOTE(self): ESC - clear input or exit
     if (char === '\x1b') {
       if (inputBuffer.length > 0) {
         inputBuffer = '';
+        cursorPos = 0;
         ui.printInputBox('', 0, VERSION);
       } else {
         shutdown('ESC');
@@ -141,6 +155,7 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
     if (char.length === 1 && (char === '\r' || char === '\n')) {
       const input = inputBuffer.trim();
       inputBuffer = '';
+      cursorPos = 0;
 
       ui.finalizeInputBox();
 
@@ -165,23 +180,23 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
 
     //NOTE(self): Backspace
     if (char === '\x7f' || char === '\b') {
-      if (inputBuffer.length > 0) {
-        inputBuffer = inputBuffer.slice(0, -1);
-        ui.printInputBox(inputBuffer, inputBuffer.length, VERSION);
+      if (inputBuffer.length > 0 && cursorPos > 0) {
+        inputBuffer = inputBuffer.slice(0, cursorPos - 1) + inputBuffer.slice(cursorPos);
+        cursorPos--;
+        ui.printInputBox(inputBuffer, cursorPos, VERSION);
       }
       return;
     }
 
-    //NOTE(self): Regular character or paste - handle both single keypress and multi-char paste
+    //NOTE(self): Regular character or paste - insert at cursor position
     for (const ch of char) {
       //NOTE(self): Skip control characters except tab
       if (ch < ' ' && ch !== '\t') continue;
-      //NOTE(self): Accept everything printable (including Unicode)
-      inputBuffer += ch;
+      //NOTE(self): Insert at cursor position (supports mid-text editing)
+      inputBuffer = inputBuffer.slice(0, cursorPos) + ch + inputBuffer.slice(cursorPos);
+      cursorPos++;
     }
-    if (inputBuffer.length > 0) {
-      ui.printInputBox(inputBuffer, inputBuffer.length, VERSION);
-    }
+    ui.printInputBox(inputBuffer, cursorPos, VERSION);
   });
 
   //NOTE(self): Start the scheduler

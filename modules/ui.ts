@@ -520,11 +520,20 @@ export class TerminalUI {
     const topLine = `${ANSI.red}${BOX.topLeft}${BOX.horizontal}${ANSI.reset} ${statusColor}${statusTag}${ANSI.reset}  ${hotkeys} ${ANSI.red}${BOX.horizontal.repeat(topPadding + 1)}${BOX.topRight}${ANSI.reset}`;
 
     const displayText = this.currentInputText || '';
-    const textLines = wrapText(displayText, innerWidth);
 
-    //NOTE(self): Cursor is always at end of text (no arrow key movement in raw mode)
-    const cursorLineIndex = Math.max(0, textLines.length - 1);
-    const cursorColIndex = textLines.length > 0 ? textLines[cursorLineIndex].length : 0;
+    //NOTE(self): Hard-wrap text for predictable cursor positioning
+    const textLines: string[] = [];
+    if (displayText.length === 0) {
+      textLines.push('');
+    } else {
+      for (let i = 0; i < displayText.length; i += innerWidth) {
+        textLines.push(displayText.slice(i, i + innerWidth));
+      }
+    }
+
+    //NOTE(self): Calculate cursor position (trivial with hard-wrap)
+    const cursorLineIndex = innerWidth > 0 ? Math.floor(this.currentCursorPos / innerWidth) : 0;
+    const cursorColIndex = innerWidth > 0 ? this.currentCursorPos % innerWidth : 0;
 
     //NOTE(self): Determine scroll window (keep cursor visible within 3 lines)
     const VISIBLE_LINES = 3;
