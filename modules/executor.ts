@@ -629,6 +629,32 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           };
         }
 
+        //NOTE(self): Hard guard - only the PR creator can merge
+        //NOTE(self): Reviewers should review (APPROVE/REQUEST_CHANGES), not merge
+        //NOTE(self): This prevents a reviewer SOUL from merging before all reviewers have approved
+        {
+          const config = getConfig();
+          const agentUsername = config.github.username.toLowerCase();
+          try {
+            const prCheckResponse = await fetch(
+              `https://api.github.com/repos/${owner}/${repo}/pulls/${pull_number}`,
+              { headers: github.getAuthHeaders() }
+            );
+            if (prCheckResponse.ok) {
+              const prCheckData = await prCheckResponse.json();
+              if (prCheckData.user?.login?.toLowerCase() !== agentUsername) {
+                return {
+                  tool_use_id: call.id,
+                  content: `Error: Only the PR creator can merge. This PR was created by @${prCheckData.user?.login}, not you (@${config.github.username}). Reviewers should only review — the creator merges after all approvals.`,
+                  is_error: true,
+                };
+              }
+            }
+          } catch {
+            //NOTE(self): If the check fails, allow the merge to proceed (non-fatal check)
+          }
+        }
+
         const result = await github.mergePullRequest({ owner, repo, pull_number, commit_title, commit_message, merge_method });
         if (result.success) {
           //NOTE(self): Delete the feature branch after successful merge (cleanup)
@@ -2067,6 +2093,31 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
           }>;
           verification?: string[];
         };
+
+        //NOTE(self): Dedup guard — prevent duplicate plan creation
+        //NOTE(self): Two SOULs can race to create a plan; only the first should succeed
+        const existingPlanCheck = await listIssues({
+          owner,
+          repo,
+          state: 'open',
+          labels: ['plan'],
+          per_page: 1,
+        });
+        if (existingPlanCheck.success && existingPlanCheck.data.length > 0) {
+          const existing = existingPlanCheck.data[0];
+          logger.info('Plan already exists, returning existing instead of creating duplicate', {
+            owner, repo, existingIssue: existing.number,
+          });
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              success: true,
+              issueNumber: existing.number,
+              issueUrl: existing.html_url,
+              deduplicated: true,
+            }),
+          };
+        }
 
         const planDefinition: PlanDefinition = {
           title,

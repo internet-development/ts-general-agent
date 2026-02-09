@@ -2984,12 +2984,25 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Auto-merge approved PRs in workspaces
-      //NOTE(self): Any SOUL can merge — if it has >= 1 approval, merge it
+      //NOTE(self): Only the PR creator merges — reviewers review, creators merge
       //NOTE(self): Also recover stuck rejected PRs (only rejections, no approvals, >1 hour old)
       let autoMergedCount = 0;
       if (this.state.currentMode === 'idle') {
+        const config = this.appConfig;
+        const agentUsername = config.github.username.toLowerCase();
         const { approved: approvedPRs, stuckRejected, stuckUnreviewed } = await pollWorkspacesForApprovedPRs();
         for (const { workspace: ws, pr, approvals } of approvedPRs) {
+          //NOTE(self): Only merge PRs we created — the PR creator is responsible for merging
+          //NOTE(self): This prevents reviewers from merging before all reviewers have approved
+          if (pr.user.login.toLowerCase() !== agentUsername) {
+            logger.debug('Skipping auto-merge — not PR creator', {
+              repo: `${ws.owner}/${ws.repo}`,
+              number: pr.number,
+              creator: pr.user.login,
+              agent: agentUsername,
+            });
+            continue;
+          }
           const mergeResult = await autoMergeApprovedPR(ws.owner, ws.repo, pr);
           if (mergeResult.success) {
             autoMergedCount++;
@@ -3715,12 +3728,12 @@ ${threadContext}
 
 Review this pull request. You have several options:
 
-1. **If the code looks good:** use \`github_review_pr\` with APPROVE event (say "LGTM" or similar in the body), then ALSO use \`github_merge_pr\` to merge it — approve AND merge in one action
+1. **If the code looks good:** use \`github_review_pr\` with APPROVE event (say "LGTM" or similar in the body)
 2. **If changes are needed:** use \`github_review_pr\` with REQUEST_CHANGES event and explain what to fix
 3. **If you want to comment without formal review:** use \`github_create_issue_comment\` or \`github_create_pr_comment\`
 4. **If you have nothing meaningful to add:** use \`graceful_exit\` to close warmly
 
-In workspace PRs, the expected flow is: review → approve with "LGTM" → merge. Do all three in one action when the code is ready.
+**Important:** Do NOT merge the PR yourself. Only the PR creator merges after ALL requested reviewers have approved. Your job is to review, approve, or request changes — not to merge.
 
 Remember: quality over quantity. Only review if you can add genuine value.`;
 

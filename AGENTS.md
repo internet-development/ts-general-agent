@@ -946,7 +946,11 @@ After checking for claimable tasks (and only if still idle), the plan awareness 
 
 The review uses the same GitHub response mode pattern (jitter, thread refresh, peer awareness, `analyzeConversation` with `isWorkspacePRReview: true`). The agent can APPROVE, REQUEST_CHANGES, COMMENT, or `graceful_exit` if it has nothing to add.
 
-**LGTM + Merge Flow:** For workspace PRs, the expected pattern is approve → LGTM → merge in a single action. When the code looks good, the agent reviews with APPROVE (body: "LGTM") AND merges the PR in the same tool call cycle. This ensures PRs are reviewed, accepted, and merged efficiently — observable as clean PR history for anyone watching the project.
+**Review + Merge Flow:** Reviewers and creators have distinct roles:
+- **Reviewers** only review — APPROVE, REQUEST_CHANGES, or COMMENT. They do NOT merge.
+- **The PR creator** is responsible for merging after ALL requested reviewers have approved.
+- `autoMergeApprovedPR()` only merges PRs where the current agent is the PR creator AND all requested reviewers have approved (zero pending reviewers).
+- This prevents a reviewer from merging before other reviewers have had a chance to review.
 
 ### Parallel Task Execution
 
