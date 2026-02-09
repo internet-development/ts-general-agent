@@ -231,6 +231,7 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 │                                   SCHEDULER                                      │
 ├──────────────────────────────────────────────────────────────────────────────────┤
 │ SESSION REFRESH (15m) — proactive Bluesky token refresh with re-auth fallback    │
+│ VERSION CHECK (5m) — fetch remote package.json, shut down on version mismatch   │
 ├──────────┬──────────┬────────────┬────────────┬──────────────┬──────────────────┤
 │AWARENESS │ GH AWARE │ EXPRESSION │ REFLECTION │ SELF-IMPROVE │ PLAN AWARE       │
 │  45 sec  │  2 min   │  3-4h      │   6h       │   24h        │    3 min         │
@@ -250,6 +251,19 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 - The Bluesky `accessJwt` expires every ~2 hours; this loop proactively refreshes it
 - Two-tier recovery: tries `refreshJwt` first, falls back to full re-authentication with credentials
 - Prevents silent API failures where all Bluesky calls return errors after token expiry
+
+### Loop 0b: Version Check (Proactive)
+
+- **Interval:** 5 minutes
+- **Tokens:** 0 (HTTP fetch only, no LLM)
+- **Purpose:** Ensure the running agent matches the latest published version
+- Fetches `https://raw.githubusercontent.com/internet-development/ts-general-agent/main/package.json`
+- Compares `version` field with the local `package.json` version
+- If versions differ → logs a clear message, stops the scheduler, and exits with code 0
+- The user must update and reboot the agent manually
+- Network errors are non-fatal — logged as warnings, retried next interval
+- Initial check runs 30 seconds after startup, then every 5 minutes with per-SOUL jitter
+- **Design:** Prevents stale agents from running outdated code. When the repo is updated (new version pushed to main), all running agents detect the mismatch within 5 minutes and shut down gracefully.
 
 ### Loop 1: Bluesky Awareness (Fast, Cheap)
 
@@ -843,6 +857,7 @@ The three tiers form a lifecycle: **immediate** (SOUL explicitly closes) → **h
 ```
 All scheduler loops:
   0. Session Refresh (15m) - proactive Bluesky token refresh
+  0b. Version Check (5m) - shut down on remote version mismatch
   1. Bluesky Awareness (45s) - check Bluesky notifications
   1b. GitHub Awareness (2m) - check GitHub notifications
   2. Expression (3-4h) - share thoughts

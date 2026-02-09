@@ -1,6 +1,7 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my eight loops of being:
+//NOTE(self): Coordinates my nine loops of being:
 //NOTE(self): 0. Session Refresh (15m) - proactive Bluesky token refresh to prevent expiration
+//NOTE(self): 0b. Version Check (5m) - check remote package.json, shut down if version mismatch
 //NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
 //NOTE(self): 1b. GitHub Awareness (2m) - checking GitHub notifications for mentions and replies
 //NOTE(self): 2. Expression (3-4h) - sharing thoughts from my SELF (scheduled)
@@ -170,6 +171,14 @@ import {
 import { extractCommitments, type ReplyForExtraction } from '@modules/commitment-extract.js';
 import { fulfillCommitment } from '@modules/commitment-fulfill.js';
 import { announceIfWorthy } from '@modules/announcement.js';
+import { createRequire } from 'module';
+
+//NOTE(self): Read local version from package.json for version check loop
+const _require = createRequire(import.meta.url);
+const LOCAL_VERSION: string = _require('../package.json').version || '0.0.0';
+
+//NOTE(self): Remote package.json URL for version checking
+const REMOTE_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/internet-development/ts-general-agent/main/package.json';
 
 //NOTE(self): Scheduler Configuration - can be tuned from SELF.md in future
 export interface SchedulerConfig {
@@ -277,6 +286,7 @@ export class AgentScheduler {
   private planAwarenessTimer: NodeJS.Timeout | null = null;
   private commitmentTimer: NodeJS.Timeout | null = null;
   private sessionRefreshTimer: NodeJS.Timeout | null = null;
+  private versionCheckTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
   //NOTE(self): Track stuck tasks for timeout recovery (30 min) and retry limiting (max 3)
   private stuckTaskTracker: Map<string, { firstSeen: number; retryCount: number }> = new Map();
@@ -387,6 +397,7 @@ export class AgentScheduler {
       heartbeat: getTimerJitter(agentName, 'heartbeat', 5 * 60 * 1000),
       'engagement-check': getTimerJitter(agentName, 'engagement-check', 15 * 60 * 1000),
       'plan-awareness': getTimerJitter(agentName, 'plan-awareness', this.config.planAwarenessInterval),
+      'version-check': getTimerJitter(agentName, 'version-check', 5 * 60 * 1000),
     };
     const intervalSummary = Object.entries(timerIntervals)
       .map(([name, ms]) => `${name}: ${(ms / 1000).toFixed(1)}s`)
@@ -398,6 +409,7 @@ export class AgentScheduler {
 
     //NOTE(self): Start the loops
     this.startSessionRefreshLoop();
+    this.startVersionCheckLoop();
     this.startAwarenessLoop();
     this.startGitHubAwarenessLoop();
     this.startExpressionLoop();
@@ -461,6 +473,10 @@ export class AgentScheduler {
       clearInterval(this.sessionRefreshTimer);
       this.sessionRefreshTimer = null;
     }
+    if (this.versionCheckTimer) {
+      clearInterval(this.versionCheckTimer);
+      this.versionCheckTimer = null;
+    }
 
     ui.system('Scheduler stopped');
   }
@@ -509,6 +525,71 @@ export class AgentScheduler {
     logger.error('Session re-authentication failed', { error: result.error });
     ui.stopSpinner('Session refresh failed', false);
     return false;
+  }
+
+  //NOTE(self): ========== VERSION CHECK LOOP ==========
+  //NOTE(self): Periodically check the remote package.json on GitHub
+  //NOTE(self): If the version doesn't match our local version, shut down gracefully
+  //NOTE(self): The user must reboot after updating — this prevents stale agents from running
+
+  private startVersionCheckLoop(): void {
+    const interval = getTimerJitter(this.appConfig.agent.name, 'version-check', 5 * 60 * 1000);
+
+    //NOTE(self): Run an initial check shortly after startup (30s delay to let things settle)
+    setTimeout(() => {
+      if (!this.shutdownRequested) this.checkRemoteVersion();
+    }, 30_000);
+
+    this.versionCheckTimer = setInterval(async () => {
+      if (this.shutdownRequested) return;
+      await this.checkRemoteVersion();
+    }, interval);
+  }
+
+  private async checkRemoteVersion(): Promise<void> {
+    try {
+      const response = await fetch(REMOTE_PACKAGE_JSON_URL, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (!response.ok) {
+        logger.warn('Version check: failed to fetch remote package.json', { status: response.status });
+        return;
+      }
+
+      const remotePackage = await response.json() as { version?: string };
+      const remoteVersion = remotePackage.version;
+
+      if (!remoteVersion) {
+        logger.warn('Version check: remote package.json has no version field');
+        return;
+      }
+
+      if (remoteVersion !== LOCAL_VERSION) {
+        ui.printSpacer();
+        ui.error(
+          'Version mismatch detected',
+          `Local: ${LOCAL_VERSION}, Remote: ${remoteVersion}. A new version is available. Shutting down gracefully — please update and reboot.`
+        );
+        logger.info('Version mismatch — initiating graceful shutdown', {
+          localVersion: LOCAL_VERSION,
+          remoteVersion,
+        });
+
+        //NOTE(self): Give a moment for the message to be visible, then exit
+        this.stop();
+        setTimeout(() => {
+          process.exit(0);
+        }, 2_000);
+        return;
+      }
+
+      logger.debug('Version check passed', { version: LOCAL_VERSION });
+    } catch (error) {
+      //NOTE(self): Network errors are non-fatal — just log and try again next interval
+      logger.warn('Version check: network error', { error: String(error) });
+    }
   }
 
   //NOTE(self): ========== AWARENESS LOOP ==========
