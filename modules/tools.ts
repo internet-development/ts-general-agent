@@ -981,6 +981,30 @@ export const AGENT_TOOLS: ToolDefinition[] = [
     },
   },
 
+  //NOTE(self): Web browsing tools
+  {
+    name: 'web_browse_images',
+    description: 'Browse any URL and discover images on the page. Returns a structured list of images with metadata (URL, alt text, dimensions, surrounding context). Use this to explore design sites, portfolios, galleries, or any web page for visual inspiration. Filter out small icons/thumbnails with min_width. Already-posted images are automatically excluded.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to browse for images (any publicly accessible web page)',
+        },
+        min_width: {
+          type: 'number',
+          description: 'Minimum image width in pixels to include (default: 400). Filters out icons, thumbnails, and tracking pixels.',
+        },
+        max_results: {
+          type: 'number',
+          description: 'Maximum number of images to return (default: 12, max: 20)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+
   //NOTE(self): Multi-SOUL Collaboration tools
   {
     name: 'github_update_issue',

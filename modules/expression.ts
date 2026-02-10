@@ -7,6 +7,7 @@
 import { extractFromSelf, randomFrom, type SelfExtract } from '@modules/self-extract.js';
 import { logger } from '@modules/logger.js';
 import { getSkillSection, getSkillSubsection } from '@modules/skills.js';
+import { getRandomDesignSource, getRandomBrowseUrl, type DesignSource } from '@modules/design-catalog.js';
 
 //NOTE(self): Load prompt template from skill by category, with variable interpolation
 function getPromptTemplate(category: string, vars: Record<string, string>): string {
@@ -215,6 +216,19 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
       source: 'relationships',
     };
   },
+
+  //NOTE(self): Visual taste — developing aesthetic sense through observation (Scenario 22)
+  (e) => {
+    //NOTE(self): Pull from explorations or currentFocus entries that mention visual/design themes
+    const visualKeywords = /design|visual|ui|art|illustration|architecture|aesthetic|taste|typograph|interface|palette/i;
+    const visualEntries = [...e.explorations, ...e.currentFocus, ...e.patterns].filter(s => visualKeywords.test(s));
+    const entry = randomFrom(visualEntries);
+    if (!entry) return null;
+    return {
+      prompt: getPromptTemplate('visualTaste', { value: entry }),
+      source: 'visualTaste',
+    };
+  },
 ];
 
 //NOTE(self): Identity with utility - every personal share should have an invitation
@@ -291,6 +305,36 @@ export function generateExpressionPrompt(selfContent?: string): { prompt: string
     prompt: base.prompt + getInvitationSuffixText(),
     source: base.source,
   };
+}
+
+//NOTE(self): Design inspiration prompt generator
+//NOTE(self): ~50% of expression cycles become design inspiration posts
+//NOTE(self): SOUL browses their catalog, picks an image, and shares their thoughts
+//NOTE(self): Higher weight because developing visual taste is a core identity activity (Scenario 22)
+export function generateDesignInspirationPrompt(): { prompt: string; source: string; designSource: DesignSource } | null {
+  //NOTE(self): 50% chance of design inspiration during expression cycle
+  if (Math.random() > 0.50) return null;
+
+  const designSource = getRandomDesignSource();
+
+  if (designSource.type === 'arena') {
+    return {
+      prompt: `Share a design inspiration from your visual catalog. Use arena_post_image with channel_url "${designSource.url}" to post a random image from the "${designSource.name}" collection. Add your own commentary in the text parameter — describe what caught your eye, why it resonates with you, or what design principle it demonstrates. Speak as yourself, sharing genuine aesthetic appreciation with peers.`,
+      source: 'design-inspiration',
+      designSource,
+    };
+  }
+
+  if (designSource.type === 'web') {
+    const browseUrl = getRandomBrowseUrl(designSource);
+    return {
+      prompt: `Share a design inspiration from ${designSource.name}. Browse the page with web_browse_images(url: "${browseUrl}") to discover images. Look through the results and pick the one that resonates most with your aesthetic sensibility — something that catches your eye for its typography, composition, color, or craft. Then download it with curl_fetch and post it with bluesky_post_with_image. Include the source URL in your post text. Speak as yourself, sharing genuine design appreciation with peers.`,
+      source: 'design-inspiration',
+      designSource,
+    };
+  }
+
+  return null;
 }
 
 //NOTE(self): Schedule my next expression

@@ -256,3 +256,25 @@ An observer reads a Bluesky thread between @soul1, @soul2, and @soul3. The threa
 - Branch verification only runs in one code path (must be in BOTH scheduler.ts and executor.ts)
 
 **Enforcement:** Code (`verifyBranch()` PRE-GATE in both code paths) + Prompt (skill templates explicitly prohibit git merge/rebase/pull/fetch/checkout).
+
+# 22
+
+Each SOUL develops a personal visual taste over time by consistently sharing design, UI, and art that they genuinely like. This isn't random curation — it's identity formation through aesthetics. Over weeks, a SOUL's design shares should reveal a recognizable point of view: recurring themes, materials, palettes, or principles they keep returning to.
+
+The {{OWNER}} should be able to look at @soul1's recent image posts and say "oh, @soul1 really likes brutalist typography and dark interfaces" or "@soul2 keeps gravitating toward organic architecture and warm palettes." Each SOUL's taste should be distinct and consistent.
+
+**What MUST happen:**
+- SOULs share design inspiration daily (at least 1 image post per day on average) via expression cycles
+- When sharing, SOULs articulate *why* they chose it — what caught their eye, what principle it demonstrates, why it resonates with their developing taste
+- SOULs use `web_browse_images` to browse design sites, pick a favorite (not random), download with `curl_fetch`, and post with `bluesky_post_with_image`
+- SOULs use `arena_post_image` for Are.na channels, adding their own commentary
+- Over time, SOULs should notice their own patterns (through reflection) and write about their evolving taste in SELF.md
+- The design catalog can grow as SOULs discover new sources they like
+
+**What MUST NOT happen:**
+- SOULs post images without commentary (no "here's a cool thing" without saying why)
+- All SOULs converge on the same aesthetic (they should develop distinct tastes)
+- Design shares feel random or disconnected from the SOUL's identity
+- SOULs stop sharing design inspiration for multiple days
+
+**Enforcement:** Expression cycle probability (design inspiration weighted at ~50% of expression cycles) + SELF.md template seeds visual taste development + expression prompts require commentary.

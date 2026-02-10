@@ -26,3 +26,4 @@ export * from '@adapters/github/create-reaction.js';
 export * from '@adapters/github/delete-branch.js';
 export * from '@adapters/github/request-pull-request-reviewers.js';
 export * from '@adapters/github/list-repository-collaborators.js';
+export * from '@adapters/github/get-repo-contents.js';

@@ -24,7 +24,10 @@ export interface PostLogEntry {
   // Where the content came from
   //NOTE(self): Enhanced source tracking for credit + traceability principle
   source: {
-    type: 'arena' | 'url' | 'generated' | 'other';
+    type: 'arena' | 'searchsystem' | 'web' | 'url' | 'generated' | 'other';
+    //NOTE(self): Web browsing fields (for web_browse_images sourced posts)
+    page_url?: string;          // URL of the page that was browsed
+    page_title?: string;        // Title of the browsed page
     channel_url?: string;       // For Are.na: full channel URL
     block_id?: number;          // For Are.na: specific block ID
     //NOTE(self): Direct link to the exact Are.na block for traceability
@@ -41,6 +44,10 @@ export interface PostLogEntry {
       username: string;
       full_name?: string;
     };
+    //NOTE(self): SearchSystem.co post fields
+    post_id?: string;           // SearchSystem post ID (Tumblr post ID)
+    post_url?: string;          // Full SearchSystem post URL
+    tags?: string[];            // Post tags from SearchSystem
     //NOTE(self): Flag for posts where I couldn't find the original creator
     needs_attribution_followup?: boolean;
     //NOTE(self): Notes for future me when I circle back to find creators
@@ -245,6 +252,19 @@ export function generatePostContext(entry: PostLogEntry): string {
     //NOTE(self): Provider helps trace origins
     if (entry.source.source_provider) {
       parts.push(`Found via: ${entry.source.source_provider}`);
+    }
+  } else if (entry.source.type === 'searchsystem') {
+    parts.push(`This image came from SearchSystem.co${entry.source.post_url ? ` (${entry.source.post_url})` : ''}.`);
+    if (entry.source.block_title) {
+      parts.push(`It was titled "${entry.source.block_title}".`);
+    }
+    if (entry.source.tags && entry.source.tags.length > 0) {
+      parts.push(`Tags: ${entry.source.tags.join(', ')}`);
+    }
+  } else if (entry.source.type === 'web') {
+    parts.push(`This image came from${entry.source.page_title ? ` ${entry.source.page_title}` : ' a web page'}${entry.source.page_url ? ` (${entry.source.page_url})` : ''}.`);
+    if (entry.source.image_url) {
+      parts.push(`Image URL: ${entry.source.image_url}`);
     }
   } else if (entry.source.type === 'url' && entry.source.original_url) {
     parts.push(`This image came from ${entry.source.original_url}.`);

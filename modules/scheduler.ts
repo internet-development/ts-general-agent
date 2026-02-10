@@ -18,7 +18,7 @@ import { getBlueskyRateLimitStatus } from '@adapters/atproto/rate-limit.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
-import { executeTools, setResponseThreadContext, registerOnPRMerged } from '@modules/executor.js';
+import { executeTools, setResponseThreadContext, registerOnPRMerged, recordWebImagePosted } from '@modules/executor.js';
 import type { ToolCall } from '@modules/tools.js';
 import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
@@ -60,6 +60,7 @@ import {
   scheduleNextExpression,
   shouldExpress,
   getPendingPrompt,
+  generateDesignInspirationPrompt,
   recordExpression,
   getExpressionStats,
   updateExpressionEngagement,
@@ -1764,8 +1765,25 @@ export class AgentScheduler {
         blueskyUsername: config.bluesky.username,
       });
 
-      //NOTE(self): Get the prompt derived from SELF.md
-      const { prompt, source } = getPendingPrompt();
+      //NOTE(self): Try design inspiration first (~30% of expression cycles)
+      //NOTE(self): SOULs share images from their design catalog with commentary
+      const designPrompt = generateDesignInspirationPrompt();
+      let prompt: string;
+      let source: string;
+
+      if (designPrompt) {
+        prompt = designPrompt.prompt;
+        source = designPrompt.source;
+        logger.info('Design inspiration expression', {
+          designSource: designPrompt.designSource.name,
+          type: designPrompt.designSource.type,
+        });
+      } else {
+        //NOTE(self): Normal text expression from SELF.md
+        const pending = getPendingPrompt();
+        prompt = pending.prompt;
+        source = pending.source;
+      }
 
       logger.debug('Expression prompt generated', {
         source,
@@ -1889,28 +1907,54 @@ Revise and post again.`;
         }
       }
 
-      //NOTE(self): Execute the post
-      if (response.toolCalls.length > 0) {
+      //NOTE(self): Multi-turn tool execution loop — supports web_browse_images → curl_fetch → bluesky_post_with_image chains
+      //NOTE(self): Same proven pattern as triggerGitHubResponseMode (while loop, max iteration guard)
+      let expressionRound = 0;
+      const maxExpressionRounds = 6;
+      let expressionPosted = false;
+
+      while (response.toolCalls.length > 0 && expressionRound < maxExpressionRounds) {
+        expressionRound++;
         const results = await executeTools(response.toolCalls);
+
+        //NOTE(self): Track web image dedup — if curl_fetch was used to download an image URL
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i];
+          if (tc.name === 'curl_fetch' && !results[i].is_error) {
+            const curlUrl = tc.input?.url as string;
+            if (curlUrl) {
+              recordWebImagePosted(curlUrl, { pageUrl: designPrompt?.designSource?.url });
+            }
+          }
+        }
 
         for (const result of results) {
           if (!result.is_error) {
             try {
               const parsed = JSON.parse(result.content);
-              if (parsed.uri) {
-                //NOTE(self): Record the expression
-                const postText = response.toolCalls.find((tc) => tc.name === 'bluesky_post')?.input
-                  ?.text as string;
+              if (parsed.uri || parsed.bskyUrl) {
+                //NOTE(self): Record the expression — support text posts AND image posts
+                const textPostCall = response.toolCalls.find((tc) => tc.name === 'bluesky_post');
+                const imagePostCall = response.toolCalls.find((tc) =>
+                  tc.name === 'bluesky_post_with_image' ||
+                  tc.name === 'arena_post_image'
+                );
+                const postText = (textPostCall?.input?.text || imagePostCall?.input?.text || parsed.blockTitle || parsed.title || '') as string;
+                const postUri = parsed.uri || '';
                 if (postText) {
-                  recordExpression(postText, parsed.uri);
+                  recordExpression(postText, postUri);
                 }
                 recordSignificantEvent('original_post');
-                addInsight(`Posted about ${source} - how did it feel to express this?`);
-                ui.stopSpinner('Thought shared');
+                const isDesign = !!imagePostCall;
+                addInsight(isDesign
+                  ? `Shared design inspiration about ${source} — what drew you to this?`
+                  : `Posted about ${source} - how did it feel to express this?`);
+                ui.stopSpinner(isDesign ? 'Design inspiration shared' : 'Thought shared');
                 //NOTE(self): Show the posted text so the terminal is detailed (Scenario 11)
                 if (postText) {
                   ui.printResponse(postText);
                 }
+                expressionPosted = true;
               }
             } catch {
               //NOTE(self): Not JSON, continue
@@ -1929,7 +1973,22 @@ Revise and post again.`;
             recordFriction('expression', 'Failed to post expression', result.content);
           }
         }
-      } else {
+
+        //NOTE(self): If we already posted, no need for more rounds
+        if (expressionPosted) break;
+
+        //NOTE(self): Feed results back to LLM for next round (e.g. browse → download → post)
+        messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+        messages.push(createToolResultMessage(results));
+
+        response = await chatWithTools({
+          system: systemPrompt,
+          messages,
+          tools: AGENT_TOOLS,
+        });
+      }
+
+      if (!expressionPosted && expressionRound === 0) {
         ui.stopSpinner('No post generated', false);
         //NOTE(self): Log what the model said instead of posting
         logger.warn('Model did not generate a post', {
@@ -2906,7 +2965,52 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Poll for plans with claimable tasks
-      const { claimablePlans: discoveredPlans, summary: planSummary } = await pollWorkspacesForPlans();
+      const { claimablePlans: discoveredPlans, allPlansByWorkspace, summary: planSummary } = await pollWorkspacesForPlans();
+
+      //NOTE(self): Consolidate duplicate plans — keep only newest per workspace, close older ones
+      for (const [wsKey, wsPlans] of Object.entries(allPlansByWorkspace)) {
+        if (wsPlans.issueNumbers.length <= 1) continue;
+
+        //NOTE(self): Sort descending by issue number — highest = newest (most complete synthesis)
+        const sorted = [...wsPlans.issueNumbers].sort((a, b) => b - a);
+        const newest = sorted[0];
+        const olderPlans = sorted.slice(1);
+
+        for (const olderIssueNumber of olderPlans) {
+          try {
+            const commentResult = await github.createIssueComment({
+              owner: wsPlans.owner,
+              repo: wsPlans.repo,
+              issue_number: olderIssueNumber,
+              body: `Superseded by #${newest} — closing duplicate plan to consolidate work.`,
+            });
+            if (!commentResult.success) {
+              logger.warn('Failed to comment on superseded plan', { issueNumber: olderIssueNumber, error: commentResult.error });
+            }
+            const closeResult = await github.updateIssue({
+              owner: wsPlans.owner,
+              repo: wsPlans.repo,
+              issue_number: olderIssueNumber,
+              state: 'closed',
+              labels: ['plan', 'plan:superseded'],
+            });
+            if (!closeResult.success) {
+              logger.warn('Failed to close superseded plan', { issueNumber: olderIssueNumber, error: closeResult.error });
+            } else {
+              logger.info('Closed duplicate plan — superseded by newer plan', {
+                workspace: wsKey,
+                closedIssue: olderIssueNumber,
+                newestIssue: newest,
+              });
+              //NOTE(self): Remove from discoveredPlans so we don't try to claim tasks from closed plans
+              const idx = discoveredPlans.findIndex(p => p.workspace.owner === wsPlans.owner && p.workspace.repo === wsPlans.repo && p.issueNumber === olderIssueNumber);
+              if (idx !== -1) discoveredPlans.splice(idx, 1);
+            }
+          } catch (err) {
+            logger.warn('Error closing superseded plan', { issueNumber: olderIssueNumber, error: String(err) });
+          }
+        }
+      }
 
       //NOTE(self): Build workspace summary for terminal display
       const summaryParts: string[] = [];
@@ -2951,6 +3055,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       //NOTE(self): Attempt to claim and execute ONE task (if any claimable)
       //NOTE(self): Fair distribution: only claim one task per poll cycle
+      //NOTE(self): Sort plans by ascending claimable task count — prefer plans closer to completion
+      discoveredPlans.sort((a, b) => a.claimableTasks.length - b.claimableTasks.length);
       for (const discovered of discoveredPlans) {
         if (discovered.claimableTasks.length === 0) continue;
 
@@ -3411,6 +3517,42 @@ Create a plan using \`plan_create\` that synthesizes all of the above issues int
             closedCount: closeResult.closed,
             totalIssues: issueNumbers.length,
           });
+
+          //NOTE(self): Close any other open plans in this workspace — the new synthesis supersedes them
+          try {
+            const existingPlansResult = await github.listIssues({
+              owner: workspace.owner,
+              repo: workspace.repo,
+              state: 'open',
+              labels: ['plan'],
+              per_page: 30,
+            });
+            if (existingPlansResult.success) {
+              for (const existingPlan of existingPlansResult.data) {
+                if (existingPlan.number === planIssueNumber) continue;
+                await github.createIssueComment({
+                  owner: workspace.owner,
+                  repo: workspace.repo,
+                  issue_number: existingPlan.number,
+                  body: `Superseded by #${planIssueNumber} — consolidated during plan synthesis.`,
+                });
+                const supersedResult = await github.updateIssue({
+                  owner: workspace.owner,
+                  repo: workspace.repo,
+                  issue_number: existingPlan.number,
+                  state: 'closed',
+                  labels: ['plan', 'plan:superseded'],
+                });
+                if (supersedResult.success) {
+                  logger.info('Closed superseded plan after synthesis', { closedIssue: existingPlan.number, newPlan: planIssueNumber });
+                } else {
+                  logger.warn('Failed to close superseded plan after synthesis', { issueNumber: existingPlan.number, error: supersedResult.error });
+                }
+              }
+            }
+          } catch (consolidateErr) {
+            logger.warn('Error consolidating plans after synthesis (non-fatal)', { error: String(consolidateErr) });
+          }
 
           //NOTE(self): Announce on Bluesky if workspace has a thread context
           if (workspace.discoveredInThread) {

@@ -114,3 +114,9 @@ As {{value}}, what's one thing you want others to understand about how you see t
 You care about connecting with: "{{value}}"
 
 Share something you appreciate about this community or what you'd like to offer them.
+
+### visualTaste
+
+You've been developing your visual taste. You keep noticing: "{{value}}"
+
+Share what you've been drawn to visually — a recurring theme, material, or principle in the design work you've been looking at. What keeps pulling you back?

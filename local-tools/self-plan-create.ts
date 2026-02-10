@@ -3,6 +3,7 @@
 
 import { createIssue } from '@adapters/github/create-issue.js';
 import { updateIssue } from '@adapters/github/update-issue.js';
+import { getRepoContents } from '@adapters/github/get-repo-contents.js';
 import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
 import type { TaskStatus, ParsedTask } from '@local-tools/self-plan-parse.js';
@@ -115,13 +116,14 @@ function hasDocsTasks(tasks: TaskDefinition[]): { hasAgentsMd: boolean; hasScena
 
 //NOTE(self): Auto-inject documentation tasks for workspace repos if missing (Scenario 10)
 //NOTE(self): The workspace-decision skill instructs the LLM to include these, but this is a safety net
-function ensureDocsTasks(plan: PlanDefinition, repo: string): PlanDefinition {
+//NOTE(self): skipAgentsMd/skipScenariosMd are set when files already exist in the repo (avoid re-creating)
+function ensureDocsTasks(plan: PlanDefinition, repo: string, opts?: { skipAgentsMd?: boolean; skipScenariosMd?: boolean }): PlanDefinition {
   if (!repo.startsWith('www-lil-intdev-')) return plan;
 
   const { hasAgentsMd, hasScenariosMd } = hasDocsTasks(plan.tasks);
   const docsToInject: TaskDefinition[] = [];
 
-  if (!hasAgentsMd) {
+  if (!hasAgentsMd && !opts?.skipAgentsMd) {
     docsToInject.push({
       title: 'Create LIL-INTDEV-AGENTS.md',
       estimate: '5-10 min',
@@ -130,9 +132,11 @@ function ensureDocsTasks(plan: PlanDefinition, repo: string): PlanDefinition {
       description: 'Create the workspace documentation file. Model after AGENTS.md in the main repo but scoped to this project. Document architecture, roles, file structure, and constraints. This is written by the SOULs FOR the SOULs.',
     });
     logger.warn('Auto-injected LIL-INTDEV-AGENTS.md task into workspace plan (Scenario 10 enforcement)', { repo });
+  } else if (opts?.skipAgentsMd) {
+    logger.info('Skipping LIL-INTDEV-AGENTS.md injection — file already exists in repo', { repo });
   }
 
-  if (!hasScenariosMd) {
+  if (!hasScenariosMd && !opts?.skipScenariosMd) {
     docsToInject.push({
       title: 'Create SCENARIOS.md',
       estimate: '5-10 min',
@@ -141,6 +145,8 @@ function ensureDocsTasks(plan: PlanDefinition, repo: string): PlanDefinition {
       description: 'Define acceptance criteria as concrete scenarios. Each scenario follows the pattern "A human could do X and see Y." These are used to verify the project actually works and drive the iterative quality loop.',
     });
     logger.warn('Auto-injected SCENARIOS.md task into workspace plan (Scenario 10 enforcement)', { repo });
+  } else if (opts?.skipScenariosMd) {
+    logger.info('Skipping SCENARIOS.md injection — file already exists in repo', { repo });
   }
 
   if (docsToInject.length > 0) {
@@ -154,8 +160,29 @@ function ensureDocsTasks(plan: PlanDefinition, repo: string): PlanDefinition {
 //NOTE(self): Create a new plan issue
 export async function createPlan(params: CreatePlanParams): Promise<CreatePlanResult> {
   const { owner, repo } = params;
+
+  //NOTE(self): Before injecting doc tasks, check if they already exist in the repo
+  //NOTE(self): This prevents re-creating SCENARIOS.md / LIL-INTDEV-AGENTS.md when they're already merged
+  let skipAgentsMd = false;
+  let skipScenariosMd = false;
+  if (repo.startsWith('www-lil-intdev-')) {
+    try {
+      const contentsResult = await getRepoContents(owner, repo, '');
+      if (contentsResult.success && Array.isArray(contentsResult.data)) {
+        const fileNames = contentsResult.data.map(f => f.name);
+        skipAgentsMd = fileNames.includes('LIL-INTDEV-AGENTS.md');
+        skipScenariosMd = fileNames.includes('SCENARIOS.md');
+        if (skipAgentsMd || skipScenariosMd) {
+          logger.info('Doc files already exist in repo, will skip injection', { repo, skipAgentsMd, skipScenariosMd });
+        }
+      }
+    } catch (err) {
+      logger.debug('Failed to check repo contents for doc files (will inject as fallback)', { repo, error: String(err) });
+    }
+  }
+
   //NOTE(self): Auto-inject docs tasks for workspace repos (Scenario 10)
-  const plan = ensureDocsTasks(params.plan, repo);
+  const plan = ensureDocsTasks(params.plan, repo, { skipAgentsMd, skipScenariosMd });
 
   const body = generatePlanMarkdown(plan);
   const title = `[PLAN] ${plan.title}`;

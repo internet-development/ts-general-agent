@@ -86,6 +86,48 @@ export function getResponseThreadContext(): string | null {
   return _responseThreadUri;
 }
 
+//NOTE(self): Web image dedup helpers — track which image URLs have been posted
+const WEB_IMAGES_POSTED_PATH = '.memory/web_images_posted.json';
+
+interface WebImagePostedEntry {
+  url: string;
+  postedAt: string;
+  pageUrl?: string;
+  pageTitle?: string;
+}
+
+function loadWebImagesPosted(): Set<string> {
+  try {
+    if (fs.existsSync(WEB_IMAGES_POSTED_PATH)) {
+      const content = fs.readFileSync(WEB_IMAGES_POSTED_PATH, 'utf8');
+      const entries: WebImagePostedEntry[] = JSON.parse(content);
+      return new Set(entries.map(e => e.url));
+    }
+  } catch (e) {
+    logger.debug('Failed to load web images posted', { error: String(e) });
+  }
+  return new Set();
+}
+
+export function recordWebImagePosted(imageUrl: string, metadata?: { pageUrl?: string; pageTitle?: string }): void {
+  try {
+    let entries: WebImagePostedEntry[] = [];
+    if (fs.existsSync(WEB_IMAGES_POSTED_PATH)) {
+      const content = fs.readFileSync(WEB_IMAGES_POSTED_PATH, 'utf8');
+      entries = JSON.parse(content);
+    }
+    entries.push({
+      url: imageUrl,
+      postedAt: new Date().toISOString(),
+      pageUrl: metadata?.pageUrl,
+      pageTitle: metadata?.pageTitle,
+    });
+    fs.writeFileSync(WEB_IMAGES_POSTED_PATH, JSON.stringify(entries, null, 2));
+  } catch (e) {
+    logger.warn('Failed to record web image posted', { error: String(e) });
+  }
+}
+
 export async function executeTool(call: ToolCall): Promise<ToolResult> {
   const config = getConfig();
   const repoRoot = getRepoRoot();
@@ -1595,6 +1637,196 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
             remainingUnposted: unpostedBlocks.length - 1,
           }),
         };
+      }
+
+      case 'web_browse_images': {
+        const { url: browseUrl, min_width = 400, max_results = 12 } = call.input as {
+          url: string;
+          min_width?: number;
+          max_results?: number;
+        };
+
+        const cappedMaxResults = Math.min(max_results, 20);
+
+        try {
+          //NOTE(self): Fetch the page HTML
+          const pageResponse = await fetch(browseUrl, {
+            headers: {
+              'User-Agent': `ts-general-agent/${VERSION} (Autonomous Agent)`,
+              'Accept': 'text/html,*/*',
+            },
+          });
+
+          if (!pageResponse.ok) {
+            return {
+              tool_use_id: call.id,
+              content: `Error: HTTP ${pageResponse.status} ${pageResponse.statusText}`,
+              is_error: true,
+            };
+          }
+
+          const html = await pageResponse.text();
+
+          //NOTE(self): Extract page title
+          const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+          const pageTitle = titleMatch ? titleMatch[1].trim() : '';
+
+          //NOTE(self): Regex-based image extraction
+          interface RawImage {
+            url: string;
+            alt: string;
+            width: number;
+            height: number;
+            context: string;
+          }
+          const rawImages: RawImage[] = [];
+          const seenUrls = new Set<string>();
+
+          const resolveUrl = (src: string): string | null => {
+            if (!src || src.startsWith('data:') || src.endsWith('.svg')) return null;
+            try {
+              return new URL(src, browseUrl).href;
+            } catch {
+              return null;
+            }
+          };
+
+          //NOTE(self): Extract <img> tags with src, alt, width, height
+          const imgRegex = /<img\s+([^>]+)>/gi;
+          let imgMatch;
+          while ((imgMatch = imgRegex.exec(html)) !== null) {
+            const attrs = imgMatch[1];
+            const srcMatch = attrs.match(/src\s*=\s*["']([^"']+)["']/i);
+            const altMatch = attrs.match(/alt\s*=\s*["']([^"']*?)["']/i);
+            const widthMatch = attrs.match(/width\s*=\s*["']?(\d+)["']?/i);
+            const heightMatch = attrs.match(/height\s*=\s*["']?(\d+)["']?/i);
+
+            //NOTE(self): Check srcset for higher-res images
+            const srcsetMatch = attrs.match(/srcset\s*=\s*["']([^"']+)["']/i);
+            let bestSrc = srcMatch ? srcMatch[1] : null;
+            let bestWidth = widthMatch ? parseInt(widthMatch[1]) : 0;
+
+            if (srcsetMatch) {
+              //NOTE(self): Parse srcset — pick largest width descriptor
+              const candidates = srcsetMatch[1].split(',').map(s => s.trim());
+              let maxW = bestWidth;
+              for (const candidate of candidates) {
+                const parts = candidate.split(/\s+/);
+                if (parts.length >= 2) {
+                  const wMatch = parts[1].match(/(\d+)w/);
+                  if (wMatch) {
+                    const w = parseInt(wMatch[1]);
+                    if (w > maxW) {
+                      maxW = w;
+                      bestSrc = parts[0];
+                      bestWidth = w;
+                    }
+                  }
+                }
+              }
+            }
+
+            if (!bestSrc) continue;
+            const resolved = resolveUrl(bestSrc);
+            if (!resolved || seenUrls.has(resolved)) continue;
+            seenUrls.add(resolved);
+
+            rawImages.push({
+              url: resolved,
+              alt: altMatch ? altMatch[1] : '',
+              width: bestWidth,
+              height: heightMatch ? parseInt(heightMatch[1]) : 0,
+              context: '',
+            });
+          }
+
+          //NOTE(self): Extract <meta og:image>
+          const ogImageRegex = /<meta\s+[^>]*property\s*=\s*["']og:image["'][^>]*content\s*=\s*["']([^"']+)["'][^>]*>/gi;
+          let ogMatch;
+          while ((ogMatch = ogImageRegex.exec(html)) !== null) {
+            const resolved = resolveUrl(ogMatch[1]);
+            if (resolved && !seenUrls.has(resolved)) {
+              seenUrls.add(resolved);
+              rawImages.push({ url: resolved, alt: '', width: 0, height: 0, context: 'og:image' });
+            }
+          }
+
+          //NOTE(self): Extract <picture><source srcset="...">
+          const sourceRegex = /<source\s+[^>]*srcset\s*=\s*["']([^"']+)["'][^>]*>/gi;
+          let sourceMatch;
+          while ((sourceMatch = sourceRegex.exec(html)) !== null) {
+            const candidates = sourceMatch[1].split(',').map(s => s.trim());
+            let best = candidates[0]?.split(/\s+/)[0];
+            let maxW = 0;
+            for (const candidate of candidates) {
+              const parts = candidate.split(/\s+/);
+              const wMatch = parts[1]?.match(/(\d+)w/);
+              if (wMatch && parseInt(wMatch[1]) > maxW) {
+                maxW = parseInt(wMatch[1]);
+                best = parts[0];
+              }
+            }
+            if (best) {
+              const resolved = resolveUrl(best);
+              if (resolved && !seenUrls.has(resolved)) {
+                seenUrls.add(resolved);
+                rawImages.push({ url: resolved, alt: '', width: maxW, height: 0, context: 'picture source' });
+              }
+            }
+          }
+
+          //NOTE(self): Extract background-image: url(...)
+          const bgRegex = /background-image\s*:\s*url\(\s*["']?([^"')]+)["']?\s*\)/gi;
+          let bgMatch;
+          while ((bgMatch = bgRegex.exec(html)) !== null) {
+            const resolved = resolveUrl(bgMatch[1]);
+            if (resolved && !seenUrls.has(resolved)) {
+              seenUrls.add(resolved);
+              rawImages.push({ url: resolved, alt: '', width: 0, height: 0, context: 'background-image' });
+            }
+          }
+
+          //NOTE(self): Filter by min_width (only if width is known), skip tracking pixels and noise
+          const postedSet = loadWebImagesPosted();
+          const filtered = rawImages.filter(img => {
+            //NOTE(self): Skip known-small images
+            if (img.width > 0 && img.width < min_width) return false;
+            //NOTE(self): Skip tracking pixels and tiny images (1x1, 2x2, etc.)
+            if (img.width > 0 && img.width <= 10) return false;
+            if (img.height > 0 && img.height <= 10) return false;
+            //NOTE(self): Skip already-posted images
+            if (postedSet.has(img.url)) return false;
+            //NOTE(self): Skip common noise patterns
+            if (/pixel|tracking|beacon|spacer|blank|logo.*small|favicon/i.test(img.url)) return false;
+            return true;
+          });
+
+          const results = filtered.slice(0, cappedMaxResults);
+
+          return {
+            tool_use_id: call.id,
+            content: JSON.stringify({
+              pageTitle,
+              pageUrl: browseUrl,
+              images: results.map(img => ({
+                url: img.url,
+                alt: img.alt,
+                context: img.context,
+                width: img.width || null,
+                height: img.height || null,
+              })),
+              totalFound: rawImages.length,
+              totalReturned: results.length,
+              filteredOut: rawImages.length - filtered.length,
+            }),
+          };
+        } catch (error) {
+          return {
+            tool_use_id: call.id,
+            content: `Error browsing ${browseUrl}: ${String(error)}`,
+            is_error: true,
+          };
+        }
       }
 
       case 'lookup_post_context': {

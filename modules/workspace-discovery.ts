@@ -55,6 +55,8 @@ export interface DiscoveredPlan {
 //NOTE(self): Summary stats from plan polling — used for terminal display
 export interface PlanPollResult {
   claimablePlans: DiscoveredPlan[];
+  //NOTE(self): All plan issue numbers grouped by workspace key (owner/repo) — used for duplicate plan consolidation
+  allPlansByWorkspace: Record<string, { owner: string; repo: string; issueNumbers: number[] }>;
   summary: {
     plansFound: number;
     totalTasks: number;
@@ -259,11 +261,12 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   const state = loadState();
   const workspaces = Object.values(state.workspaces);
   const claimablePlans: DiscoveredPlan[] = [];
+  const allPlansByWorkspace: Record<string, { owner: string; repo: string; issueNumbers: number[] }> = {};
   const summary = { plansFound: 0, totalTasks: 0, completed: 0, inProgress: 0, claimed: 0, blocked: 0, pending: 0, claimable: 0, pendingBlockedByDeps: 0, pendingHasAssignee: 0 };
 
   if (workspaces.length === 0) {
     logger.debug('No workspaces to poll');
-    return { claimablePlans, summary };
+    return { claimablePlans, allPlansByWorkspace, summary };
   }
 
   logger.info('Polling workspaces for plans', { workspaceCount: workspaces.length });
@@ -347,11 +350,18 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
         }
       }
 
-      //NOTE(self): Update last polled time
-      workspace.lastPolled = new Date().toISOString();
-      workspace.activePlanIssues = issuesResult.data
+      //NOTE(self): Track all plan issue numbers for this workspace (used for duplicate plan consolidation)
+      const workspaceKey = getWorkspaceKey(workspace.owner, workspace.repo);
+      const planIssueNumbers = issuesResult.data
         .filter(i => parsePlan(i.body || '', i.title))
         .map(i => i.number);
+      if (planIssueNumbers.length > 0) {
+        allPlansByWorkspace[workspaceKey] = { owner: workspace.owner, repo: workspace.repo, issueNumbers: planIssueNumbers };
+      }
+
+      //NOTE(self): Update last polled time
+      workspace.lastPolled = new Date().toISOString();
+      workspace.activePlanIssues = planIssueNumbers;
 
     } catch (err) {
       logger.error('Error polling workspace', {
@@ -365,7 +375,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   state.lastFullPoll = new Date().toISOString();
   saveState();
 
-  return { claimablePlans, summary };
+  return { claimablePlans, allPlansByWorkspace, summary };
 }
 
 //NOTE(self): A non-plan issue discovered in a watched workspace

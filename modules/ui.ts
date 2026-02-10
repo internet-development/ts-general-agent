@@ -153,10 +153,10 @@ export class TerminalUI {
     const innerWidth = width - 2; //NOTE(self): ║ + content(width-2) + ║
     const visLen = this.visibleLength(text);
     if (visLen > innerWidth) {
-      return `${ANSI.red}${BOX.dVertical}${ANSI.reset}${text}`;
+      return `${ANSI.white}${BOX.dVertical}${ANSI.reset}${text}`;
     }
     const padding = innerWidth - visLen;
-    return `${ANSI.red}${BOX.dVertical}${ANSI.reset}${text}${' '.repeat(padding)}${ANSI.red}${BOX.dVertical}${ANSI.reset}`;
+    return `${ANSI.white}${BOX.dVertical}${ANSI.reset}${text}${' '.repeat(padding)}${ANSI.white}${BOX.dVertical}${ANSI.reset}`;
   }
 
   //NOTE(self): Write to the output area (scroll region)
@@ -187,15 +187,15 @@ export class TerminalUI {
   }
 
   info(message: string, detail?: string): void {
-    this.log(SYM.ring, ANSI.red, 'info', message, detail);
+    this.log(SYM.ring, ANSI.white, 'info', message, detail);
   }
 
   success(message: string, detail?: string): void {
-    this.log(SYM.check, ANSI.red, 'done', message, detail);
+    this.log(SYM.check, ANSI.white, 'done', message, detail);
   }
 
   warn(message: string, detail?: string): void {
-    this.log(SYM.diamond, ANSI.red, 'warn', message, detail);
+    this.log(SYM.diamond, ANSI.white, 'warn', message, detail);
   }
 
   error(message: string, detail?: string): void {
@@ -203,19 +203,19 @@ export class TerminalUI {
   }
 
   action(message: string, detail?: string): void {
-    this.log(SYM.arrowRight, ANSI.red, 'act', message, detail);
+    this.log(SYM.arrowRight, ANSI.white, 'act', message, detail);
   }
 
   think(message: string, detail?: string): void {
-    this.log(SYM.bullet, ANSI.red, 'think', message, detail);
+    this.log(SYM.bullet, ANSI.white, 'think', message, detail);
   }
 
   social(message: string, detail?: string): void {
-    this.log(SYM.heart, ANSI.red, 'social', message, detail);
+    this.log(SYM.heart, ANSI.white, 'social', message, detail);
   }
 
   memory(message: string, detail?: string): void {
-    this.log(SYM.star, ANSI.red, 'mem', message, detail);
+    this.log(SYM.star, ANSI.white, 'mem', message, detail);
   }
 
   system(message: string, detail?: string): void {
@@ -223,22 +223,22 @@ export class TerminalUI {
   }
 
   reflect(message: string, detail?: string): void {
-    this.log(SYM.diamond, ANSI.red, 'refl', message, detail);
+    this.log(SYM.diamond, ANSI.white, 'refl', message, detail);
   }
 
   contemplate(message: string, detail?: string): void {
-    this.log(SYM.ring, ANSI.red, 'mind', message, detail);
+    this.log(SYM.ring, ANSI.white, 'mind', message, detail);
   }
 
   queue(message: string, detail?: string): void {
-    this.log(SYM.pointer, ANSI.red, 'queue', message, detail);
+    this.log(SYM.pointer, ANSI.white, 'queue', message, detail);
   }
 
   //NOTE(self): Spinner - just prints a message, no animation that interferes
   startSpinner(message: string): void {
     this.thinkingMessage = message;
     const ts = `${ANSI.dim}${timestamp()}${ANSI.reset}`;
-    this.writeOutput(`  ${ts}  ${ANSI.red}${SYM.spinner[0]}${ANSI.reset} ${ANSI.dim}${message}${ANSI.reset}`);
+    this.writeOutput(`  ${ts}  ${ANSI.white}${SYM.spinner[0]}${ANSI.reset} ${ANSI.dim}${message}${ANSI.reset}`);
   }
 
   updateSpinner(message: string): void {
@@ -336,7 +336,7 @@ export class TerminalUI {
   heartbeat(): void {
     this.lastHeartbeat = new Date();
     const ts = `${ANSI.dim}${timestamp()}${ANSI.reset}`;
-    this.writeOutput(`  ${ts}  ${ANSI.red}${SYM.heart}${ANSI.reset} ${ANSI.white}ready${ANSI.reset} ${ANSI.dim}listening for notifications${ANSI.reset}`);
+    this.writeOutput(`  ${ts}  ${ANSI.white}${SYM.heart}${ANSI.reset} ${ANSI.white}ready${ANSI.reset} ${ANSI.dim}listening for notifications${ANSI.reset}`);
   }
 
   //NOTE(self): Format a single timer line for display
@@ -367,20 +367,20 @@ export class TerminalUI {
     const innerWidth = width - 2;
 
     this.writeOutput('');
-    this.writeOutput(`${ANSI.red}${BOX.dTopLeft}${BOX.dHorizontal.repeat(innerWidth)}${BOX.dTopRight}${ANSI.reset}`);
-    this.writeOutput(`${ANSI.red}${BOX.dVertical}${ANSI.reset}${' '.repeat(innerWidth)}${ANSI.red}${BOX.dVertical}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dTopLeft}${BOX.dHorizontal.repeat(innerWidth)}${BOX.dTopRight}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dVertical}${ANSI.reset}${' '.repeat(innerWidth)}${ANSI.white}${BOX.dVertical}${ANSI.reset}`);
 
     const title = `« ${name} »`;
     const padding = Math.floor((innerWidth - title.length) / 2);
-    this.writeOutput(`${ANSI.red}${BOX.dVertical}${ANSI.reset}${' '.repeat(padding)}${ANSI.bold}${ANSI.white}${title}${ANSI.reset}${' '.repeat(innerWidth - padding - title.length)}${ANSI.red}${BOX.dVertical}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dVertical}${ANSI.reset}${' '.repeat(padding)}${ANSI.bold}${ANSI.white}${title}${ANSI.reset}${' '.repeat(innerWidth - padding - title.length)}${ANSI.white}${BOX.dVertical}${ANSI.reset}`);
 
     if (subtitle) {
       const subPadding = Math.floor((innerWidth - subtitle.length) / 2);
-      this.writeOutput(`${ANSI.red}${BOX.dVertical}${ANSI.reset}${' '.repeat(subPadding)}${ANSI.dim}${subtitle}${ANSI.reset}${' '.repeat(innerWidth - subPadding - subtitle.length)}${ANSI.red}${BOX.dVertical}${ANSI.reset}`);
+      this.writeOutput(`${ANSI.white}${BOX.dVertical}${ANSI.reset}${' '.repeat(subPadding)}${ANSI.dim}${subtitle}${ANSI.reset}${' '.repeat(innerWidth - subPadding - subtitle.length)}${ANSI.white}${BOX.dVertical}${ANSI.reset}`);
     }
 
-    this.writeOutput(`${ANSI.red}${BOX.dVertical}${ANSI.reset}${' '.repeat(innerWidth)}${ANSI.red}${BOX.dVertical}${ANSI.reset}`);
-    this.writeOutput(`${ANSI.red}${BOX.dBottomLeft}${BOX.dHorizontal.repeat(innerWidth)}${BOX.dBottomRight}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dVertical}${ANSI.reset}${' '.repeat(innerWidth)}${ANSI.white}${BOX.dVertical}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dBottomLeft}${BOX.dHorizontal.repeat(innerWidth)}${BOX.dBottomRight}${ANSI.reset}`);
     this.writeOutput('');
   }
 
@@ -416,7 +416,7 @@ export class TerminalUI {
   printQueue(items: Array<{ action: string; priority: string }>): void {
     if (items.length === 0) return;
     this.writeOutput('');
-    this.writeOutput(`  ${ANSI.red}${SYM.star} Planned Actions${ANSI.reset}`);
+    this.writeOutput(`  ${ANSI.white}${SYM.star} Planned Actions${ANSI.reset}`);
     for (const item of items.slice(0, 8)) {
       const style = item.priority === 'high' ? ANSI.red : item.priority === 'low' ? ANSI.dim : ANSI.white;
       this.writeOutput(`  ${style}${SYM.pointer} ${item.action}${ANSI.reset}`);
@@ -428,9 +428,9 @@ export class TerminalUI {
 
   printFarewell(): void {
     this.writeOutput('');
-    this.writeOutput(`${ANSI.red}${BOX.dHorizontal.repeat(getTerminalWidth())}${ANSI.reset}`);
-    this.writeOutput(`${ANSI.red} The obstacle becomes the way ${ANSI.reset}`);
-    this.writeOutput(`${ANSI.red}${BOX.dHorizontal.repeat(getTerminalWidth())}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dHorizontal.repeat(getTerminalWidth())}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white} The obstacle becomes the way ${ANSI.reset}`);
+    this.writeOutput(`${ANSI.white}${BOX.dHorizontal.repeat(getTerminalWidth())}${ANSI.reset}`);
     this.writeOutput('');
   }
 
@@ -439,17 +439,17 @@ export class TerminalUI {
     const line = BOX.horizontal.repeat(3);
     const remaining = width - title.length - 8;
     this.writeOutput('');
-    this.writeOutput(`${ANSI.dim}${line}${ANSI.reset}${ANSI.red} ${title} ${ANSI.reset}${ANSI.dim}${BOX.horizontal.repeat(Math.max(0, remaining))}${ANSI.reset}`);
+    this.writeOutput(`${ANSI.dim}${line}${ANSI.reset}${ANSI.white} ${title} ${ANSI.reset}${ANSI.dim}${BOX.horizontal.repeat(Math.max(0, remaining))}${ANSI.reset}`);
     this.writeOutput('');
   }
 
   printToolStart(toolName: string): void {
     const name = toolName.replace(/_/g, ' ');
-    this.writeOutput(`  ${ANSI.dim}${timestamp()}${ANSI.reset}  ${ANSI.red}${SYM.arrowRight}${ANSI.reset} ${ANSI.dim}executing${ANSI.reset} ${ANSI.white}${name}${ANSI.reset}`);
+    this.writeOutput(`  ${ANSI.dim}${timestamp()}${ANSI.reset}  ${ANSI.white}${SYM.arrowRight}${ANSI.reset} ${ANSI.dim}executing${ANSI.reset} ${ANSI.white}${name}${ANSI.reset}`);
   }
 
   printToolResult(toolName: string, success: boolean, detail?: string): void {
-    const icon = success ? `${ANSI.red}${SYM.check}` : `${ANSI.red}${SYM.cross}`;
+    const icon = success ? `${ANSI.white}${SYM.check}` : `${ANSI.red}${SYM.cross}`;
     const name = toolName.replace(/_/g, ' ');
     const det = detail ? `  ${ANSI.dim}${detail}${ANSI.reset}` : '';
     this.writeOutput(`  ${ANSI.dim}${timestamp()}${ANSI.reset}  ${icon}${ANSI.reset} ${ANSI.dim}${name}${ANSI.reset}${det}`);
@@ -510,7 +510,7 @@ export class TerminalUI {
     const width = getTerminalWidth();
     process.stdout.write(ANSI.saveCursor);
     process.stdout.write(CSI.moveTo(scrollBottom, 1));
-    process.stdout.write('\n' + `${ANSI.red}${BOX.dTopLeft}${BOX.dHorizontal.repeat(width - 2)}${BOX.dTopRight}${ANSI.reset}`);
+    process.stdout.write('\n' + `${ANSI.white}${BOX.dTopLeft}${BOX.dHorizontal.repeat(width - 2)}${BOX.dTopRight}${ANSI.reset}`);
     this.redrawInputBox();
 
     //NOTE(self): Handle terminal resize — remove old handler to prevent listener leak
@@ -573,7 +573,7 @@ export class TerminalUI {
 
     //NOTE(self): Separator line — matches header's double-border style
     process.stdout.write(CSI.moveTo(currentRow, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.dBottomLeft}${BOX.dHorizontal.repeat(width - 2)}${BOX.dBottomRight}${ANSI.reset}`);
+    process.stdout.write(CSI.clearLine + `${ANSI.white}${BOX.dBottomLeft}${BOX.dHorizontal.repeat(width - 2)}${BOX.dBottomRight}${ANSI.reset}`);
     currentRow++;
 
     //NOTE(self): Build the input box lines
@@ -583,7 +583,7 @@ export class TerminalUI {
     //NOTE(self): Calculate padding: width - ┌─ (2) - space (1) - statusTag - spaces (2) - hotkeys - space (1) - ─┐ (2)
     const topPadding = Math.max(0, width - statusTag.length - hotkeys.length - 8);
     //NOTE(self): Structure: red(┌─) + space + coloredStatus + reset + spaces + hotkeys + space + red(─...─┐)
-    const topLine = `${ANSI.red}${BOX.topLeft}${BOX.horizontal}${ANSI.reset} ${statusColor}${statusTag}${ANSI.reset}  ${hotkeys} ${ANSI.red}${BOX.horizontal.repeat(topPadding + 1)}${BOX.topRight}${ANSI.reset}`;
+    const topLine = `${ANSI.white}${BOX.topLeft}${BOX.horizontal}${ANSI.reset} ${statusColor}${statusTag}${ANSI.reset}  ${hotkeys} ${ANSI.white}${BOX.horizontal.repeat(topPadding + 1)}${BOX.topRight}${ANSI.reset}`;
 
     const displayText = this.currentInputText || '';
 
@@ -624,13 +624,13 @@ export class TerminalUI {
       const lineIdx = displayStartLine + i;
       const lineContent = (textLines[lineIdx] || '').padEnd(innerWidth);
       process.stdout.write(CSI.moveTo(currentRow, 1));
-      process.stdout.write(CSI.clearLine + `${ANSI.red}${BOX.vertical}${ANSI.reset} ${ANSI.white}${lineContent}${ANSI.reset} ${ANSI.red}${BOX.vertical}${ANSI.reset}`);
+      process.stdout.write(CSI.clearLine + `${ANSI.white}${BOX.vertical}${ANSI.reset} ${ANSI.white}${lineContent}${ANSI.reset} ${ANSI.white}${BOX.vertical}${ANSI.reset}`);
       currentRow++;
     }
 
     //NOTE(self): Bottom border
     process.stdout.write(CSI.moveTo(currentRow, 1));
-    process.stdout.write(CSI.clearLine + `${ANSI.red}${bottomLine}${ANSI.reset}`);
+    process.stdout.write(CSI.clearLine + `${ANSI.white}${bottomLine}${ANSI.reset}`);
 
     //NOTE(self): Position cursor on the correct visible row
     const cursorVisibleRow = cursorLineIndex - displayStartLine;
