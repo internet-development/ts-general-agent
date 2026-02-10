@@ -907,11 +907,10 @@ export class AgentScheduler {
               if (isWatchingWorkspace(owner, repo) && type === 'issue') {
                 const issueTitle = threadResult.data.issue.title;
                 const issueBody = threadResult.data.issue.body || '';
-                const bodyPreview = issueBody.length > 300 ? issueBody.slice(0, 300) + '...' : issueBody;
                 const issueAuthor = threadResult.data.issue.user?.login || 'unknown';
                 recordExperience(
                   'learned_something',
-                  `Issue filed in workspace ${owner}/${repo}#${number} by @${issueAuthor}: "${issueTitle}" — ${bodyPreview}`,
+                  `Workspace issue filed in ${owner}/${repo}#${number} by @${issueAuthor}: "${issueTitle}" — ${issueBody}`,
                   { source: 'github', person: issueAuthor, url }
                 );
               }
@@ -3305,7 +3304,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               });
 
               //NOTE(self): Capture the workspace issue as an experience — what someone asked for
-              const issueBody = issue.body ? (issue.body.length > 300 ? issue.body.slice(0, 300) + '...' : issue.body) : '';
+              //NOTE(self): No truncation — local storage, give reflection the full context
+              const issueBody = issue.body || '';
               const issueDescription = issueBody ? `"${issue.title}" — ${issueBody}` : `"${issue.title}"`;
               recordExperience(
                 'learned_something',
@@ -3553,12 +3553,16 @@ Create a plan using \`plan_create\` that synthesizes all of the above issues int
             if (existingPlansResult.success) {
               for (const existingPlan of existingPlansResult.data) {
                 if (existingPlan.number === planIssueNumber) continue;
-                await github.createIssueComment({
+                //NOTE(self): check comment result to avoid silent failures on superseded plan
+                const commentResult = await github.createIssueComment({
                   owner: workspace.owner,
                   repo: workspace.repo,
                   issue_number: existingPlan.number,
                   body: `Superseded by #${planIssueNumber} — consolidated during plan synthesis.`,
                 });
+                if (!commentResult.success) {
+                  logger.warn('Failed to comment on superseded plan during synthesis', { issueNumber: existingPlan.number, error: commentResult.error });
+                }
                 const supersedResult = await github.updateIssue({
                   owner: workspace.owner,
                   repo: workspace.repo,

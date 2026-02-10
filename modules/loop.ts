@@ -266,17 +266,16 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
     recordSignificantEvent('owner_interaction');
 
     //NOTE(self): Record the owner's message as an experience so reflection can integrate it into SELF.md
-    const ownerMessage = input.length > 500 ? input.slice(0, 500) + '...' : input;
+    //NOTE(self): No truncation — this is our own machine, store the full conversation
     recordExperience(
       'owner_guidance',
-      `Owner said (terminal): "${ownerMessage}"`,
+      `Owner said (terminal): "${input}"`,
       { source: 'terminal' }
     );
 
     //NOTE(self): If the SOUL responded, capture that too — the pair forms the full experience
     if (response.text) {
-      const soulResponse = response.text.length > 500 ? response.text.slice(0, 500) + '...' : response.text;
-      addInsight(`Owner asked: "${ownerMessage}" — I responded: "${soulResponse}"`);
+      addInsight(`Owner asked: "${input}" — I responded: "${response.text}"`);
     }
   } catch (error) {
     ui.stopSpinner('Error processing input', false);

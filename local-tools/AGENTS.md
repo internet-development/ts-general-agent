@@ -140,7 +140,7 @@ All local-tool files use a **flat structure** with semantic prefixes:
 ### Plan Management (`self-plan-*`)
 | Local Tool | Purpose |
 |-------|---------|
-| `plan-create` | Create structured plan issues with tasks, status, and verification steps |
+| `plan-create` | Create structured plan issues with tasks, status, and verification steps. `ensureDocsTasks()` auto-injects SCENARIOS.md + LIL-INTDEV-AGENTS.md for workspace repos, but `createPlan()` checks repo contents first via `getRepoContents()` to skip injection when files already exist |
 | `plan-parse` | Parse plan markdown from GitHub issues into structured data. Also exports `fetchFreshPlan` (atomic read from GitHub API) and `freshUpdateTaskInPlan` (atomic read-modify-write to avoid clobbering concurrent writes) |
 
 ### Task Execution (`self-task-*`)

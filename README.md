@@ -1,6 +1,6 @@
 # ts-general-agent
 
-![ts-general-agent preview](https://intdev-global.s3.us-west-2.amazonaws.com/public/internet-dev/71b85911-c679-4310-bb22-b5b4dca16c15.png)
+![ts-general-agent preview](https://intdev-global.s3.us-west-2.amazonaws.com/public/internet-dev/cb0cb7c6-9129-48b2-956a-082288041e20.png)
 
 An autonomous TypeScript agent that observes, reasons, remembers, and acts. See `AGENTS.md` for full system constraints. Uses [Vercel](https://vercel.com/)'s [https://vercel.com/ai-gateway](https://vercel.com/ai-gateway)
 
@@ -31,13 +31,13 @@ AGENT_GITHUB_TOKEN=ghp_your-token
 
 The agent uses a **five-loop scheduler architecture**:
 
-| Loop             | Interval    | Purpose                                |
-| ---------------- | ----------- | -------------------------------------- |
-| Awareness        | 45 sec      | Check notifications (API only, no LLM) |
-| Expression       | 3-4 hours   | Share thoughts from SELF.md            |
-| Reflection       | 4-6 hours   | Integrate experiences, update SELF.md  |
-| Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI       |
-| Plan Awareness   | 3 min       | Poll workspaces for collaborative tasks|
+| Loop             | Interval    | Purpose                                 |
+| ---------------- | ----------- | --------------------------------------- |
+| Awareness        | 45 sec      | Check notifications (API only, no LLM)  |
+| Expression       | 3-4 hours   | Share thoughts from SELF.md             |
+| Reflection       | 4-6 hours   | Integrate experiences, update SELF.md   |
+| Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI        |
+| Plan Awareness   | 3 min       | Poll workspaces for collaborative tasks |
 
 ```
 ts-general-agent/
@@ -52,11 +52,11 @@ ts-general-agent/
 
 ## Permissions
 
-| Path                               | Access                                  |
-| ---------------------------------- | --------------------------------------- |
-| `SOUL.md`                          | Read only                               |
-| `SELF.md`                          | Read/Write (agent-owned)                |
-| `.memory/`, `.workrepos/`          | Read/Write                              |
+| Path                                    | Access                                  |
+| --------------------------------------- | --------------------------------------- |
+| `SOUL.md`                               | Read only                               |
+| `SELF.md`                               | Read/Write (agent-owned)                |
+| `.memory/`, `.workrepos/`               | Read/Write                              |
 | `adapters/`, `modules/`, `local-tools/` | Self-modifiable via `self_improve` tool |
 
 ## Self-Improvement

@@ -446,6 +446,8 @@ This enables Scenario 9: "The OWNER can chat in the terminal and give any instru
 
 The agent acknowledges immediately and acts on instructions. If the owner says "work on your web search," the agent uses `self_improve` to modify its own code. If the owner says "post about X on Bluesky," the agent calls `bluesky_post`. The owner's word carries the highest priority.
 
+**Experience recording:** Every terminal conversation is captured as an `owner_guidance` experience with `source: 'terminal'`. Both the owner's message and the SOUL's response are recorded in full — no truncation since this is local storage. This feeds the reflection pipeline so terminal guidance shapes SELF.md development, not just Bluesky/GitHub interactions.
+
 **Keyboard shortcuts:**
 
 - `Enter` — submit input
@@ -517,6 +519,8 @@ Every workspace project requires two documentation files, created as early tasks
 
 1. **`LIL-INTDEV-AGENTS.md`** — Documents the workspace architecture, roles, file structure, and constraints. Written by the SOULs FOR the SOULs. Modeled after `AGENTS.md` in the main repo but scoped to the specific project.
 2. **`SCENARIOS.md`** — Defines acceptance criteria as concrete scenarios. "A human could do X and see Y." Used to verify the project actually works.
+
+**Idempotent injection:** `ensureDocsTasks()` in `self-plan-create.ts` auto-injects these as Task 1-2 for `www-lil-intdev-*` repos. Before injection, `createPlan()` checks if the files already exist on the repo's default branch via `getRepoContents()`. If they exist, injection is skipped — preventing SOULs from re-creating documentation that's already merged.
 
 **The iterative quality loop:**
 
@@ -646,13 +650,19 @@ From GitHub conversations:
 
 - Issues the owner pointed to (owner's priorities)
 - Problems helped solve (technical contributions)
+- Workspace issues filed (what someone asked for — title + body preview)
+
+From terminal conversations:
+
+- What the owner said (guidance with `source: 'terminal'`)
+- The SOUL's response paired with the owner's message (insight)
 
 ### How Experiences Shape Identity
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  INTERACTION                                                │
-│  (Bluesky mention, GitHub issue, owner guidance)            │
+│  (Bluesky mention, GitHub issue, terminal, workspace issue) │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
@@ -818,14 +828,25 @@ When a watched workspace has open issues but no active plan (all plans closed/co
 4. Formats issue context (number, title, labels, body preview) and sends to LLM
 5. LLM reviews issues and calls `plan_create` to create a coordinated plan
 6. After plan creation: `closeRolledUpIssues()` closes all source issues with "Rolled into plan #N — closing." comment
-7. If workspace has a Bluesky thread context, announces the new plan
-8. One workspace per cycle (fair distribution)
+7. **Post-synthesis consolidation:** closes any other open plans in the same workspace with "Superseded by #N — consolidated during plan synthesis."
+8. If workspace has a Bluesky thread context, announces the new plan
+9. One workspace per cycle (fair distribution)
 
 **Key behavior:**
 - Cooldown prevents tight retry loops (1 hour between attempts per workspace)
 - If LLM doesn't create a plan, timestamp still updates (avoids repeated attempts)
 - Closed issues link to the plan — plan becomes the single source of truth
 - Next poll cycle discovers the new plan and SOULs start claiming tasks
+
+### Duplicate Plan Consolidation
+
+When multiple plans exist for the same workspace (e.g., two SOULs synthesized plans simultaneously), the plan awareness loop consolidates them:
+
+1. `pollWorkspacesForPlans()` returns `allPlansByWorkspace` — all plan issue numbers grouped by workspace, not just plans with claimable tasks
+2. If a workspace has >1 plan, the **newest** (highest issue number) is kept. All older plans are closed with comment "Superseded by #N — closing duplicate plan to consolidate work." and labeled `plan:superseded`
+3. Closed plans are removed from `discoveredPlans` so no tasks are claimed from them
+4. After consolidation, remaining plans are **sorted by ascending claimable task count** — plans closer to completion get priority. This drives work toward finishing rather than starting.
+5. Post-synthesis consolidation (above) also closes older plans when a new plan is synthesized
 
 ### Workspace Issue Auto-Close (Three Tiers)
 
@@ -1086,7 +1107,8 @@ Proceed.
 | `modules/commitment-extract.ts`                | LLM-based extraction of action commitments from replies             |
 | `modules/commitment-fulfill.ts`                | Dispatch and execute promised actions                               |
 | `local-tools/self-plan-parse.ts`               | Parse plan markdown                                                 |
-| `local-tools/self-plan-create.ts`              | Create plan issues                                                  |
+| `local-tools/self-plan-create.ts`              | Create plan issues (checks repo for existing docs before injection) |
+| `adapters/github/get-repo-contents.ts`         | Fetch repo file listing (used for doc task idempotency check)       |
 | `local-tools/self-task-claim.ts`               | Claim tasks                                                         |
 | `local-tools/self-task-execute.ts`             | Execute via Claude Code                                             |
 | `local-tools/self-task-verify.ts`              | Four-gate verification: git changes, tests, push, remote confirm    |
@@ -1513,7 +1535,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 6 | Are.na image fetching | arena_search → arena_fetch_channel → download → upload blob → atproto.createPost with image. Fully dynamic, no hardcoded channels. Temp image files cleaned up on all paths (success, upload failure, post failure). | Code |
 | 7 | Self-reflection on change over time | Reflection cycle includes temporal context (days running, experience count). SELF.md stores learnings across cycles. Deep-reflection skill prompts change awareness. | Code + Prompt |
 | 8 | Self-improvement (implementing missing features) | Friction detection → self-improvement-decision skill → Claude Code execution → reloadSkills(). Also aspirational growth for proactive evolution. | Code |
-| 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. Fatal errors restore terminal state (raw mode, input box, status bar) before exit. | Code |
+| 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. **Experience recording:** captures owner's message as `owner_guidance` experience with `source: 'terminal'` + SOUL's response as insight — feeds reflection for SELF.md development. Fatal errors restore terminal state (raw mode, input box, status bar) before exit. | Code |
 | 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in ALL THREE code paths: (1) `handlePlanComplete()` in self-task-report.ts (merge-gated path — dominant), (2) executor.ts `plan_execute_task` handler, (3) scheduler.ts `executeClaimedTask`. Both PR paths pass full test results (testsRun, testsPassed) in completion reports. Three-tier workspace issue auto-close keeps workspaces clean: Tier 1 (immediate on graceful_exit), Tier 2 (24h handled auto-close), Tier 3 (3-7 day stale cleanup). | Code + Prompt |
 | 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
 | 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. **Discussion vs. work awareness:** github-response skill teaches SOULs to distinguish discussions (share ideas) from work mandates (ship code). **No self-introduction:** username already visible on GitHub comments. | Code + Prompt |
