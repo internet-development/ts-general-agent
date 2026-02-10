@@ -1,5 +1,5 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my nine loops of being:
+//NOTE(self): Coordinates my ten loops of being:
 //NOTE(self): 0. Session Refresh (15m) - proactive Bluesky token refresh to prevent expiration
 //NOTE(self): 0b. Version Check (5m) - check remote package.json, shut down if version mismatch
 //NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
@@ -9,6 +9,8 @@
 //NOTE(self): 4. Self-Improvement (24h) - fixing friction via Claude Code (rare)
 //NOTE(self): 5. Plan Awareness (3m) - polling workspaces for collaborative tasks and PRs
 //NOTE(self): 6. Commitment Fulfillment (15s) - fulfilling promises made in replies
+//NOTE(self): 7. Heartbeat (5m) - show signs of life so owner knows agent is running
+//NOTE(self): 8. Engagement Check (15m) - check how expressions are being received
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';

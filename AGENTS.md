@@ -6,7 +6,7 @@
   This **MUST** refer to this software system. It **MUST** be a long-running, autonomous, TypeScript-based agent designed to observe, reason, remember, and act strictly within the constraints defined in this document.
 
 - **agent**
-  This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (currently: GPT-5.2-Pro).
+  This **MUST** refer to the active reasoning model operating inside the ts-general-agent runtime (currently: `openai/gpt-5.2`, set via `AI_GATEWAY_MODEL` env var).
   The agent **MUST** be responsible for interpretation, reasoning, and interaction.
   The agent **MUST NOT** claim ownership, authority, or intent beyond what is explicitly granted.
   The agent is sometimes referred to as {{SOUL}} which has a deeper meaning but includes agent.
@@ -240,6 +240,8 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 │          │          │            │            │   GROWTH     │                  │
 ├──────────┴──────────┴────────────┴────────────┴──────────────┴──────────────────┤
 │ COMMITMENT FULFILLMENT (15s) — fulfills promises made in replies                 │
+│ HEARTBEAT (5m) — shows signs of life so owner knows agent is running             │
+│ ENGAGEMENT CHECK (15m) — checks how expressions are being received               │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -358,6 +360,22 @@ The agent uses a **multi-loop scheduler architecture** for expressive operation:
 - Design: never blocks social interaction — commitments are fulfilled in the background
 - Deduplication: if a tool (e.g., `create_memo`) was already executed during the same response cycle, matching commitment types are skipped to prevent double-creation
 - **Follow-up reply:** After successful fulfillment that produces a URL (issue or plan), the agent automatically replies in the original Bluesky thread with the link. This closes the feedback loop: human asks → SOUL promises → SOUL delivers → human gets the link
+
+### Loop 7: Heartbeat (Status)
+
+- **Interval:** 5 minutes
+- **Tokens:** 0 (no LLM, terminal output only)
+- **Purpose:** Show signs of life so the owner knows the agent is running
+- Only fires when agent is in idle mode (not mid-response or mid-execution)
+- Displays a heartbeat indicator in the terminal UI
+
+### Loop 8: Engagement Check (Analytics)
+
+- **Interval:** 15 minutes
+- **Tokens:** 0 (API calls only, no LLM)
+- **Purpose:** Check how expressions (original posts) are being received
+- Monitors engagement metrics on previously posted content
+- Only fires when agent is in idle mode
 
 ---
 
@@ -1392,7 +1410,6 @@ ts-general-agent/
 │   ├── github-engagement.ts    # GitHub conversation state
 │   ├── peer-awareness.ts       # Dynamic peer SOUL discovery
 │   ├── workspace-discovery.ts  # Workspace polling for plans
-│   ├── action-queue.ts         # Persistent outbound action queue
 │   ├── commitment-queue.ts     # Commitment tracking (JSONL persistence)
 │   ├── commitment-extract.ts   # LLM-based commitment extraction from replies
 │   ├── commitment-fulfill.ts   # Commitment fulfillment dispatch
@@ -1548,6 +1565,7 @@ The following table maps SCENARIOS.md requirements to their implementation. Ever
 | 19 | PR reviewer auto-assignment | `github_create_pr` in executor.ts calls `requestReviewersForPR()` after PR creation. Discovers peers via registry, falls back to repo collaborators. | Code |
 | 20 | Post-merge work pickup | `github_merge_pr` triggers `requestEarlyPlanCheck()` via `registerOnPRMerged()` callback. Plan awareness fires in 5s, not 3min. | Code |
 | 21 | **[Adversarial]** Branch contamination prevention | `verifyBranch()` PRE-GATE checks Claude Code stayed on feature branch. Skill templates (`task-execution`, `pr-workflow`) explicitly prohibit `git merge/rebase/pull/fetch` and branch switching. | Code + Prompt |
+| 22 | Visual taste development | Expression cycle weighted ~50% for design inspiration (expression.ts). SELF.md template seeds visual taste section. Expression prompts require commentary on aesthetic choices. SOULs develop recognizable design identity over time. | Code + Prompt |
 
 **Enforcement types:**
 - **Hard block** — Code prevents LLM from seeing the notification entirely. Cannot be bypassed. Used for multi-agent feedback loops.

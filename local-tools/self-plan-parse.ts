@@ -38,6 +38,14 @@ export interface ParsedPlan {
   rawBody: string;
 }
 
+//NOTE(self): Split a dependency string into individual dependency items
+//NOTE(self): Only commas are reliable separators in the first pass.
+//NOTE(self): Semicolons are ambiguous — "Task 3; Task 4" vs "Wire parser into page; ensure weights work"
+//NOTE(self): Semicolon splitting is deferred to the second pass (title resolution) where we have context.
+function splitDependencies(deps: string): string[] {
+  return deps.split(',');
+}
+
 //NOTE(self): Parse a plan issue body into structured data
 export function parsePlan(issueBody: string, issueTitle: string): ParsedPlan | null {
   if (!issueBody) {
@@ -166,15 +174,24 @@ export function parsePlan(issueBody: string, issueTitle: string): ParsedPlan | n
             if (deps.toLowerCase() !== 'none') {
               //NOTE(self): Normalize dependency strings to canonical "Task N" format
               //NOTE(self): Handles: "Task 2", "task 2", "Task-2", "2", "task-2", etc.
-              currentTask.dependencies = deps.split(',').map(d => {
+              //NOTE(self): Split by comma first, then by semicolon as fallback
+              //NOTE(self): (LLMs sometimes use ; as separator, but also as mid-sentence punctuation)
+              currentTask.dependencies = splitDependencies(deps).map(d => {
                 const trimmedDep = d.trim();
                 if (!trimmedDep) return '';
-                //NOTE(self): Extract the task number from various formats
-                const numMatch = trimmedDep.match(/(?:task[\s\-]*)?(\d+)/i);
-                if (numMatch) {
-                  return `Task ${numMatch[1]}`;
+                //NOTE(self): Extract task number ONLY if the string looks like a task reference
+                //NOTE(self): "Task 3", "task-3", "3" → "Task 3"
+                //NOTE(self): But NOT "v1 query parser" (spurious digit in title text)
+                const taskRefMatch = trimmedDep.match(/^(?:task[\s\-]*)(\d+)$/i);
+                if (taskRefMatch) {
+                  return `Task ${taskRefMatch[1]}`;
                 }
-                return trimmedDep; //NOTE(self): Fallback to raw string if no number found
+                //NOTE(self): Pure number
+                if (/^\d+$/.test(trimmedDep)) {
+                  return `Task ${trimmedDep}`;
+                }
+                //NOTE(self): Title-based dependency — keep raw for second-pass resolution
+                return trimmedDep;
               }).filter(Boolean);
             }
             continue;
@@ -223,6 +240,81 @@ export function parsePlan(issueBody: string, issueTitle: string): ParsedPlan | n
     currentTask.description = currentTaskContent.join('\n').trim();
     currentTask.rawMarkdown = formatTaskMarkdown(currentTask);
     plan.tasks.push(currentTask);
+  }
+
+  //NOTE(self): Second pass — resolve title-based dependencies to "Task N" format
+  //NOTE(self): LLMs sometimes write dependencies as full task titles instead of "Task 3"
+  //NOTE(self): e.g. "Implement strict v1 query parser" → match against task 3's title → "Task 3"
+  function resolveTitleDep(dep: string, titleMap: Map<string, number>): number | null {
+    const depLower = dep.toLowerCase().trim();
+
+    //NOTE(self): Try exact match against task titles (case-insensitive)
+    const exactMatch = titleMap.get(depLower);
+    if (exactMatch !== undefined) return exactMatch;
+
+    //NOTE(self): Try substring match — dep text may be a subset or superset of a title
+    //NOTE(self): Use the longest matching title to avoid false positives
+    let bestMatch: { number: number; length: number } | null = null;
+    for (const [title, num] of titleMap) {
+      if (depLower.includes(title) || title.includes(depLower)) {
+        if (!bestMatch || title.length > bestMatch.length) {
+          bestMatch = { number: num, length: title.length };
+        }
+      }
+    }
+    return bestMatch ? bestMatch.number : null;
+  }
+
+  if (plan.tasks.length > 0) {
+    //NOTE(self): Build a map of normalized task titles → task numbers
+    const titleToNumber = new Map<string, number>();
+    for (const task of plan.tasks) {
+      titleToNumber.set(task.title.toLowerCase().trim(), task.number);
+    }
+
+    for (const task of plan.tasks) {
+      const resolved: string[] = [];
+      for (const dep of task.dependencies) {
+        //NOTE(self): Already in canonical format
+        if (/^Task \d+$/.test(dep)) {
+          resolved.push(dep);
+          continue;
+        }
+
+        const match = resolveTitleDep(dep, titleToNumber);
+        if (match !== null) {
+          resolved.push(`Task ${match}`);
+          continue;
+        }
+
+        //NOTE(self): No match — try splitting by semicolon (deferred from first pass)
+        //NOTE(self): "Wire parser into page; ensure weights work" might be two deps or one
+        if (dep.includes(';')) {
+          const fragments = dep.split(';').map(f => f.trim()).filter(Boolean);
+          let allResolved = true;
+          const fragmentResults: string[] = [];
+          for (const frag of fragments) {
+            const fragMatch = resolveTitleDep(frag, titleToNumber);
+            if (fragMatch !== null) {
+              fragmentResults.push(`Task ${fragMatch}`);
+            } else {
+              allResolved = false;
+              break;
+            }
+          }
+          if (allResolved && fragmentResults.length > 0) {
+            resolved.push(...fragmentResults);
+            continue;
+          }
+          //NOTE(self): Semicolons weren't separators — try the whole string as a substring
+        }
+
+        //NOTE(self): Unresolvable — log and keep raw string (will block the task)
+        logger.warn('Could not resolve title-based dependency to task number', { task: task.number, dependency: dep });
+        resolved.push(dep);
+      }
+      task.dependencies = resolved;
+    }
   }
 
   //NOTE(self): Derive plan status from tasks

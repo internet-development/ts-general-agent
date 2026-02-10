@@ -1,6 +1,6 @@
 //NOTE(self): Commitment Queue Module
 //NOTE(self): Tracks promises made in Bluesky replies and blocks further replies until fulfilled.
-//NOTE(self): Follows the action-queue.ts pattern: JSONL persistence, audit log, in-memory cache.
+//NOTE(self): Uses JSONL persistence, audit log, in-memory cache.
 //NOTE(self): If I say "I'll open 3 issues", this ensures I actually do it before chatting more.
 
 import * as fs from 'fs';
