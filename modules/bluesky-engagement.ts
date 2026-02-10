@@ -553,33 +553,3 @@ export function getBlueskyConversationStats(): BlueskyConversationStats {
     averageThreadDepth: Math.round(avgDepth * 10) / 10,
   };
 }
-
-//NOTE(self): Get recent conversations for reflection
-export interface RecentBlueskyConversation {
-  rootUri: string;
-  rootAuthorHandle: string;
-  state: ConversationRecord['state'];
-  ourReplyCount: number;
-  participantCount: number;
-  threadDepth: number;
-  lastChecked: string;
-}
-
-export function getRecentBlueskyConversations(hoursAgo: number = 24): RecentBlueskyConversation[] {
-  const state = loadState();
-  const cutoff = Date.now() - (hoursAgo * 60 * 60 * 1000);
-
-  return Object.values(state.conversations)
-    .filter(c => new Date(c.lastChecked).getTime() > cutoff)
-    .sort((a, b) => new Date(b.lastChecked).getTime() - new Date(a.lastChecked).getTime())
-    .slice(0, 10)
-    .map(c => ({
-      rootUri: c.rootUri,
-      rootAuthorHandle: c.rootAuthorHandle,
-      state: c.state,
-      ourReplyCount: c.ourReplyCount,
-      participantCount: Object.keys(c.participants).length,
-      threadDepth: c.threadDepth,
-      lastChecked: c.lastChecked,
-    }));
-}

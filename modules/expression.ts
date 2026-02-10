@@ -413,13 +413,6 @@ export function recordExpression(text: string, postUri: string): void {
   saveExpressionSchedule(schedule);
 }
 
-//NOTE(self): Load today's expression records (in-memory)
-export function loadTodaysExpressions(): ExpressionRecord[] {
-  //NOTE(self): Reset if it's a new day
-  loadExpressionSchedule();
-  return todaysExpressions;
-}
-
 //NOTE(self): Update engagement data for an expression
 export function updateExpressionEngagement(
   postUri: string,
@@ -445,11 +438,6 @@ export function getExpressionsNeedingEngagementCheck(): ExpressionRecord[] {
     const postTime = new Date(record.timestamp).getTime();
     return postTime < thirtyMinutesAgo && !record.engagement;
   });
-}
-
-//NOTE(self): Get expressions with high engagement (for reflection insights)
-export function getHighEngagementExpressions(minReplies: number = 1): ExpressionRecord[] {
-  return todaysExpressions.filter((record) => record.engagement && record.engagement.replies >= minReplies);
 }
 
 //NOTE(self): Get expression statistics for reflection
@@ -646,11 +634,6 @@ export const INVITATION_PROMPTS = {
   get bounded() { return getInvitationPromptsLoaded().bounded; },
   get direct() { return getInvitationPromptsLoaded().direct; },
 };
-
-//NOTE(self): Legacy flat array for backwards compatibility
-export function getInvitationPromptsFlat(): string[] {
-  return [...INVITATION_PROMPTS.choice, ...INVITATION_PROMPTS.bounded, ...INVITATION_PROMPTS.direct];
-}
 
 //NOTE(self): Get a random invitation prompt to append
 //NOTE(self): Weighted toward choice questions (strongest) but includes variety

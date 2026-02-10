@@ -96,7 +96,6 @@ import { getFulfillmentPhrase, getTaskClaimPhrase, regenerateVoicePhrases } from
 import * as github from '@adapters/github/index.js';
 import {
   extractGitHubUrlsFromRecord,
-  type ParsedGitHubUrl,
 } from '@adapters/github/parse-url.js';
 import {
   getNotifications as getGitHubNotifications,
@@ -293,7 +292,7 @@ export class AgentScheduler {
   private versionCheckTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
   //NOTE(self): Track stuck tasks for timeout recovery (30 min) and retry limiting (max 3)
-  private stuckTaskTracker: Map<string, { firstSeen: number; retryCount: number }> = new Map();
+  private stuckTaskTracker: Map<string, { firstSeen: number; retryCount: number; abandonNotified?: boolean }> = new Map();
   private static readonly STUCK_TIMEOUT_MS = 30 * 60 * 1000;
   private static readonly MAX_TASK_RETRIES = 3;
   //NOTE(self): Track when the scheduler started — self-improvement is gated on 48h uptime
@@ -2769,7 +2768,19 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             //NOTE(self): Check retry limit
             const taskKey = `${workspace.owner}/${workspace.repo}#${issue.number}/task-${task.number}`;
             const tracked = this.stuckTaskTracker.get(taskKey);
-            if (tracked && tracked.retryCount >= AgentScheduler.MAX_TASK_RETRIES) continue;
+            if (tracked && tracked.retryCount >= AgentScheduler.MAX_TASK_RETRIES) {
+              //NOTE(self): Notify on the plan issue so the failure is visible to observers
+              if (!tracked.abandonNotified) {
+                tracked.abandonNotified = true;
+                github.createIssueComment({
+                  owner: workspace.owner,
+                  repo: workspace.repo,
+                  issue_number: issue.number,
+                  body: `**Task ${task.number}** (${task.title}) has failed ${AgentScheduler.MAX_TASK_RETRIES} times and will not be retried automatically. Manual intervention may be needed.`,
+                }).catch(err => logger.warn('Failed to post retry-limit comment', { error: String(err) }));
+              }
+              continue;
+            }
 
             //NOTE(self): Try all candidate branch names (current + legacy naming schemes)
             const candidates = getTaskBranchCandidates(task.number, task.title);
@@ -3107,6 +3118,17 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               retryCount: tracked.retryCount,
               maxRetries: AgentScheduler.MAX_TASK_RETRIES,
             });
+            //NOTE(self): Notify on the plan issue so the failure is visible to observers
+            if (!tracked.abandonNotified) {
+              tracked.abandonNotified = true;
+              const task = freshPlan.tasks.find(t => t.number === candidate.number);
+              github.createIssueComment({
+                owner: discovered.workspace.owner,
+                repo: discovered.workspace.repo,
+                issue_number: discovered.issueNumber,
+                body: `**Task ${candidate.number}** (${task?.title || 'Unknown'}) has failed ${AgentScheduler.MAX_TASK_RETRIES} times and will not be retried automatically. Manual intervention may be needed.`,
+              }).catch(err => logger.warn('Failed to post retry-limit comment', { error: String(err) }));
+            }
             continue;
           }
           //NOTE(self): Track retry count for blocked tasks being retried

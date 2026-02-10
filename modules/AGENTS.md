@@ -87,6 +87,7 @@ Ask these questions:
 | `strings.ts` | Shared string utilities: `isEmpty`, `createSlug`, `truncateGraphemes`, `PORTABLE_MAX_GRAPHEMES` (300) | `@atproto/common-web` |
 | `announcement.ts` | Announcement guard shared by scheduler + executor for dual enforcement (`announceIfWorthy`) | Logger |
 | `voice-phrases.ts` | Load/regenerate `voice-phrases.json` for personality-consistent phrasing (`getFulfillmentPhrase`, `getTaskClaimPhrase`, `getGitHubPhrase`) | Memory, Logger |
+| `design-catalog.ts` | Design inspiration catalog for expression cycles (`getRandomDesignSource`, `getRandomBrowseUrl`) | None |
 
 ### State Management (Keep in Modules)
 

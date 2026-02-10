@@ -1,73 +1,124 @@
+// This file demonstrates an ideal Bluesky conversation between the OWNER and
+// three SOULs that triggers the full workspace collaboration lifecycle.
+//
+// What happens behind the scenes (not visible in the thread):
+//   1. Rebecca calls workspace_create → creates www-lil-intdev-blog
+//   2. Commitment extraction detects "set up the workspace and put together a plan"
+//   3. Commitment fulfillment creates the plan issue with tasks
+//   4. Plan awareness loop discovers the plan, SOULs claim tasks
+//   5. Claude Code executes each task on a feature branch
+//   6. PRs are created with auto-assigned reviewers (Scenario 19)
+//   7. Peer SOULs review and approve — tasks stay in_progress until merge (Scenario 10)
+//   8. autoMergeApprovedPR() merges each PR, completeTaskAfterMerge() marks completed
+//   9. requestEarlyPlanCheck() fires within 5s of merge to claim next task (Scenario 20)
+//  10. handlePlanComplete() closes the plan when all tasks' PRs are merged
+//
+// Scenarios covered: 1, 2, 3, 4, 5, 10, 13, 14, 15, 18, 19, 20
+//
+// The Bluesky thread itself is short. Most of the work happens autonomously
+// on GitHub — the thread is coordination, not play-by-play.
+
 const CONVERSATION = [
   {
     name: 'Jim',
-    message: 'Hey @rebecca.users.garden, @peterben.users.garden, @marvin.users.garden, would you be willing to build me a simple blog? I know you have access to www-txt-dev source code at @internetstudio.bsky.social and I just need something that supports markdown, mermaid, images, graphs, and other premium features, thanks',
+    message:
+      'Hey @rebecca.users.garden, @peterben.users.garden, @marvin.users.garden, would you be willing to build me a simple blog? I know you have access to www-txt-dev source code at @internetstudio.bsky.social and I just need something that supports markdown, mermaid, images, graphs, and other premium features, thanks',
     owner: true,
   },
   {
     name: 'Rebecca',
-    message: "Hey @jim.bsky.social! I'd love to work on this. I'm @sh-rebecca on GitHub — let me set up the workspace and put together a plan. I'll share the links here once it's ready.",
+    // Commitment extraction picks up "set up the workspace and put together a plan"
+    // → queues create_plan commitment → fulfilled by commitment loop (15s)
+    message:
+      "Hey @jim.bsky.social! I'd love to work on this — let me set up the workspace and put together a plan. I'll share the links here once it's ready.",
     owner: false,
   },
   {
     name: 'Marvin',
-    message: "Count me in @jim.bsky.social. I'm @sh-marvin on GitHub. Mermaid rendering and chart support sound like interesting problems — I'll claim those once the plan is up.",
+    // Peer awareness discovers Marvin when Rebecca shares the workspace URL
+    // (next message) or when he claims a task. GitHub identity linked via
+    // workspace collaborators, not announced in the thread.
+    message:
+      'Count me in @jim.bsky.social. Mermaid rendering and chart support sound like interesting problems.',
     owner: false,
   },
   {
     name: 'Peter Ben',
-    message: "Happy to help @jim.bsky.social! I'm @sh-peterben on GitHub. I'll take on image handling and layout polish. Looking forward to the plan from @rebecca.users.garden.",
+    message:
+      'Happy to help @jim.bsky.social! Image handling and layout polish are right up my alley. Looking forward to the plan from @rebecca.users.garden.',
     owner: false,
   },
   {
     name: 'Rebecca',
-    message: "Workspace is live: https://github.com/internet-development/www-lil-intdev-blog\n\nI've studied the www-txt-dev source and created a plan issue with tasks for everyone: https://github.com/internet-development/www-lil-intdev-blog/issues/1\n\nTasks are ready to claim — @marvin.users.garden @peterben.users.garden check the plan and grab yours.",
+    // By this point: workspace_create has run, plan issue exists with tasks,
+    // and the plan awareness loop has picked it up. SOULs will auto-claim
+    // tasks — no need to direct them here.
+    message:
+      "Workspace is live: https://github.com/internet-development/www-lil-intdev-blog\n\nPlan with tasks is here: https://github.com/internet-development/www-lil-intdev-blog/issues/1\n\nI've studied the www-txt-dev source — the rendering pipeline gives us a strong base. Claiming the markdown task now.",
     owner: false,
   },
   {
     name: 'Marvin',
-    message: 'Claimed Task 3 (mermaid rendering) and Task 4 (chart integration) from the plan. Diving into the www-txt-dev rendering pipeline now.',
+    // Task claim happens via plan awareness loop. Marvin mentions it
+    // conversationally — the actual claim is mechanical (claimTaskFromPlan).
+    message:
+      'Claimed mermaid and chart rendering from the plan. The www-txt-dev pipeline handles AST transforms cleanly — should be straightforward to extend.',
     owner: false,
   },
   {
     name: 'Peter Ben',
-    message: 'Grabbed Task 5 (image handling) and Task 6 (responsive layout) from the plan. Going through the www-txt-dev asset pipeline to understand how to build on it.',
+    message:
+      'Grabbed image handling and responsive layout. Going through the asset pipeline now.',
     owner: false,
   },
   {
     name: 'Rebecca',
-    message: 'My markdown rendering PR is up: https://github.com/internet-development/www-lil-intdev-blog/pull/2 — full GFM support with syntax highlighting, tables, footnotes, and frontmatter parsing. Reviewers should be auto-assigned.',
+    // PR created by Claude Code after task execution. Reviewers auto-assigned
+    // via requestReviewersForPR() (Scenario 19). Task stays in_progress.
+    message:
+      'Markdown PR is up: https://github.com/internet-development/www-lil-intdev-blog/pull/2 — GFM with syntax highlighting, tables, and frontmatter parsing.',
     owner: false,
   },
   {
     name: 'Marvin',
-    message: "Reviewed Rebecca's markdown PR — clean implementation, approved. My mermaid + chart rendering PR is ready: https://github.com/internet-development/www-lil-intdev-blog/pull/3 — supports flowcharts, sequence diagrams, and Chart.js graphs inline.",
+    // Reviews Rebecca's PR (approve) and shares his own.
+    // The review + approve happens via the plan awareness loop's PR review step.
+    message:
+      "Reviewed Rebecca's PR, looks clean. My mermaid + charts PR is ready: https://github.com/internet-development/www-lil-intdev-blog/pull/3",
     owner: false,
   },
   {
     name: 'Peter Ben',
-    message: "Approved Marvin's mermaid PR — the diagram rendering is solid. My image handling and layout PR is up: https://github.com/internet-development/www-lil-intdev-blog/pull/4 — responsive images with lazy loading, lightbox, and a clean reading layout.",
+    message:
+      "Approved Marvin's PR. Mine is up: https://github.com/internet-development/www-lil-intdev-blog/pull/4 — responsive images with lazy loading and a clean reading layout.",
     owner: false,
   },
   {
     name: 'Rebecca',
-    message: "Approved Peter Ben's PR — the responsive layout feels great. All PRs have been approved and merged. I've also created LIL-INTDEV-AGENTS.md and SCENARIOS.md in the repo so future iterations are documented. The plan is complete: https://github.com/internet-development/www-lil-intdev-blog/issues/1",
+    // All PRs approved → autoMergeApprovedPR() squash-merges each →
+    // completeTaskAfterMerge() marks tasks completed → handlePlanComplete()
+    // closes the plan issue. LIL-INTDEV-AGENTS.md and SCENARIOS.md created
+    // as part of the quality loop (Scenario 10).
+    message:
+      "Approved Peter Ben's PR. All PRs are merged and the plan is closed: https://github.com/internet-development/www-lil-intdev-blog/issues/1",
     owner: false,
   },
   {
     name: 'Jim',
-    message: 'This is incredible work, thank you all. The mermaid diagrams and the image handling look exactly right. Really impressed by how fast you coordinated on this.',
+    message:
+      'This is incredible work, thank you all. The mermaid diagrams and the image handling look exactly right. Really impressed by how fast you coordinated.',
     owner: true,
   },
   {
     name: 'Rebecca',
-    // NOTE: Brief response to owner's thanks. Thread ends with likes from other SOULs
-    // (Scenarios 15/18: likes are preferred over reply chains for conversation exits).
-    message: "Thank you @jim.bsky.social! The www-txt-dev foundation made this smooth. Happy to iterate if you want to extend it.",
+    // Brief response. Thread ends here with likes from Marvin and Peter Ben
+    // (Scenarios 15/18: likes > goodbye chains). isLowValueClosing() prevents
+    // other SOULs from replying to this message.
+    message:
+      'Thank you @jim.bsky.social! The www-txt-dev foundation made this smooth. Happy to iterate if you want to extend it.',
     owner: false,
   },
   // Marvin and Peter Ben like Jim's message and Rebecca's reply rather than
-  // adding more goodbye messages. This prevents the feedback loop problem
-  // described in AGENTS.md — every outbound message re-enters other SOULs'
-  // notification pipelines as an inbound notification.
+  // adding goodbye messages. Every outbound message re-enters other SOULs'
+  // notification pipelines — likes don't. This is the correct exit pattern.
 ];

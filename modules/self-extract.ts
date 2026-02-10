@@ -423,8 +423,3 @@ export function randomFrom<T>(arr: T[]): T | undefined {
   if (arr.length === 0) return undefined;
   return arr[Math.floor(Math.random() * arr.length)];
 }
-
-//NOTE(self): Get the most recently added items (assumes newest are at the end)
-export function recentFrom<T>(arr: T[], count: number = 3): T[] {
-  return arr.slice(-count);
-}

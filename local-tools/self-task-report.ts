@@ -122,9 +122,10 @@ export async function reportTaskBlocked(
   logger.info('Reporting task blocked', { taskNumber, blockReason });
 
   //NOTE(self): Update plan body with blocked status (fresh read to avoid clobbering)
+  //NOTE(self): Release assignee so getClaimableTasks() can re-claim the task
   const blockedUpdateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'blocked',
-    assignee: myUsername,
+    assignee: null,
   });
 
   if (!blockedUpdateResult.success) {
