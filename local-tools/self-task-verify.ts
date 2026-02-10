@@ -173,6 +173,32 @@ export async function runTestsIfPresent(workspacePath: string): Promise<TestResu
         return;
       }
 
+      //NOTE(self): Detect "command not found" — the test RUNNER isn't installed, not a test failure
+      //NOTE(self): e.g. package.json says "test": "vitest" but vitest isn't in node_modules
+      //NOTE(self): The SOUL's code is fine; the project just doesn't have the test tool installed
+      const lowerOutput = output.toLowerCase();
+      const isCommandNotFound = code !== 0 && (
+        lowerOutput.includes('command not found') ||
+        lowerOutput.includes('not found') && lowerOutput.includes('err!') ||
+        lowerOutput.includes('cannot find module') ||
+        lowerOutput.includes('err_module_not_found') ||
+        lowerOutput.includes('enoent')
+      );
+
+      if (isCommandNotFound) {
+        logger.info('Test runner not found (not a test failure — tool not installed)', {
+          workspacePath,
+          outputPreview: output.slice(-500),
+        });
+        resolve({
+          testsExist: true,
+          testsRun: false,
+          testsPassed: false,
+          output: `Test runner not installed: ${output.slice(-1000)}`,
+        });
+        return;
+      }
+
       resolve({
         testsExist: true,
         testsRun: true,
