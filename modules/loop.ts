@@ -162,23 +162,25 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
       inputBuffer = '';
       cursorPos = 0;
 
-      ui.finalizeInputBox();
-
       if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+        ui.finalizeInputBox();
         shutdown('exit command');
         return;
       }
 
+      //NOTE(self): Keep input box alive during owner chat — response renders inside ║ frame
+      //NOTE(self): Only clear the text and show [Thinking...] status
+      ui.clearInputBox(VERSION);
+
       if (input) {
+        ui.setAvailable(false);
         ui.printSpacer();
         ui.social('Owner speaks', input);
 
         //NOTE(self): Process owner input with full context
         await processOwnerInput(input, config);
 
-        ui.initInputBox(VERSION);
-      } else {
-        ui.initInputBox(VERSION);
+        ui.setAvailable(true);
       }
       return;
     }

@@ -397,7 +397,9 @@ export class TerminalUI {
   //NOTE(self): Response box for agent thoughts
   printResponse(text: string): void {
     const width = getTerminalWidth();
-    const innerWidth = Math.min(width - 6, 76);
+    //NOTE(self): When inside ║ bordered frame, account for 2 extra chars (║ on each side)
+    const effectiveWidth = this.inputBoxEnabled ? width - 2 : width;
+    const innerWidth = Math.min(effectiveWidth - 6, 76);
 
     this.writeOutput('');
     this.writeOutput(`  ${ANSI.dim}${BOX.topLeft}${BOX.horizontal.repeat(innerWidth + 2)}${BOX.topRight}${ANSI.reset}`);
