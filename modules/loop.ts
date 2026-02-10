@@ -1,6 +1,8 @@
 //NOTE(self): Main Loop Module
-//NOTE(self): The heart of the agent - powered by the five-loop scheduler.
-//NOTE(self): Awareness (cheap) + Expression (scheduled) + Reflection (deep) + Self-Improvement (rare) + Plan Awareness (collaborative)
+//NOTE(self): The heart of the agent - powered by the multi-loop scheduler.
+//NOTE(self): 10 loops: Session Refresh, Version Check, Bluesky Awareness, GitHub Awareness,
+//NOTE(self): Expression, Reflection, Self-Improvement + Aspirational Growth, Plan Awareness,
+//NOTE(self): Commitment Fulfillment, Heartbeat, Engagement Check.
 //NOTE(self): Self-discovery through expression, not passive waiting.
 
 import { logger } from '@modules/logger.js';
@@ -37,7 +39,7 @@ export interface LoopCallbacks {
 }
 
 //NOTE(self): ========== SCHEDULER-BASED LOOP ==========
-//NOTE(self): Uses the five-loop architecture: awareness, expression, reflection, self-improvement, plan awareness
+//NOTE(self): Uses the multi-loop scheduler architecture (see AGENTS.md for all loops)
 //NOTE(self): More efficient, more expressive, better self-discovery
 
 export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void> {

@@ -37,7 +37,6 @@ Each skill is a folder with a `SKILL.md` file:
 | `task-execution` | `AGENT-TASK-EXECUTION` | Multi-SOUL collaborative task execution |
 | `peer-awareness` | `AGENT-PEER-AWARENESS` | Shared peer awareness blocks |
 | `github-announcement` | `AGENT-GITHUB-ANNOUNCEMENT` | Cross-platform announcement decisions (PRs/issues → Bluesky) |
-| `pr-workflow` | `AGENT-PR-WORKFLOW` | Branch and PR workflow constraints for task execution |
 | `workspace-decision` | `AGENT-WORKSPACE-DECISION` | Workspace awareness context for creation/usage decisions |
 
 ## Adding a Skill

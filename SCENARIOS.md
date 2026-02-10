@@ -245,7 +245,7 @@ An observer reads a Bluesky thread between @soul1, @soul2, and @soul3. The threa
 @soul1 is executing a task on a feature branch `task-3-add-dashboard`. During execution, Claude Code must NOT run `git merge main`, `git checkout main`, `git pull`, `git rebase`, or `git fetch`. After execution completes, the system verifies that @soul1 is still on the correct feature branch. If Claude Code switched branches or merged other branches into the feature branch, the task fails immediately — contaminated PRs are never created.
 
 **What MUST happen:**
-- `task-execution` and `pr-workflow` skill templates explicitly tell Claude Code to never run `git merge`, `git rebase`, `git pull`, `git fetch`, or switch branches
+- The `task-execution` skill template explicitly tells Claude Code to never run `git merge`, `git rebase`, `git pull`, `git fetch`, or switch branches
 - After Claude Code execution, `verifyBranch()` confirms the current branch matches the expected feature branch
 - If verification fails, `reportTaskFailed("Branch hygiene failure")` is called — no PR is created
 - This PRE-GATE check runs BEFORE `verifyGitChanges` (GATE 1) in both scheduler.ts and executor.ts

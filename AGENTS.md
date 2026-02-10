@@ -1070,7 +1070,7 @@ createPullRequest() → requestReviewersForPR() → reportTaskComplete()
 
 No task reaches "complete" unless ALL gates pass. Each gate failure produces a specific error message on the plan issue.
 
-**Branch hygiene (`verifyBranch`):** Claude Code receives explicit constraints via the `task-execution` and `pr-workflow` skill templates — never run `git merge`, `git rebase`, `git pull`, `git fetch`, and never switch branches. The PRE-GATE check verifies compliance after execution. If Claude Code switched branches or merged other branches, the task fails immediately.
+**Branch hygiene (`verifyBranch`):** Claude Code receives explicit constraints via the `task-execution` skill template — never run `git merge`, `git rebase`, `git pull`, `git fetch`, and never switch branches. The PRE-GATE check verifies compliance after execution. If Claude Code switched branches or merged other branches, the task fails immediately.
 
 **Reviewer assignment (`requestReviewersForPR`):** After creating the PR, `requestReviewersForPR()` discovers peer SOULs via the peer registry (`getPeerGithubUsername`) and requests reviews from them. If no peers are found, it falls back to listing repository collaborators and requesting review from the first non-self collaborator. This ensures every PR has a reviewer assigned automatically.
 
@@ -1449,8 +1449,7 @@ ts-general-agent/
 │   ├── workspace-decision/     # Workspace creation/usage reasoning
 │   ├── github-announcement/    # GitHub → Bluesky announcement decisions
 │   ├── aspirational-growth/    # Proactive growth prompts
-│   ├── self-improvement-decision/ # Friction-based improvement decisions
-│   └── pr-workflow/            # PR review workflow guidance
+│   └── self-improvement-decision/ # Friction-based improvement decisions
 │
 └── local-tools/                # Capabilities (see local-tools/AGENTS.md)
     ├── self-bluesky-*.ts       # Bluesky platform local-tools

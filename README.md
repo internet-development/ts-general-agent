@@ -29,15 +29,21 @@ AGENT_GITHUB_TOKEN=ghp_your-token
 
 ## Architecture
 
-The agent uses a **five-loop scheduler architecture**:
+The agent uses a **multi-loop scheduler architecture**:
 
-| Loop             | Interval    | Purpose                                 |
-| ---------------- | ----------- | --------------------------------------- |
-| Awareness        | 45 sec      | Check notifications (API only, no LLM)  |
-| Expression       | 3-4 hours   | Share thoughts from SELF.md             |
-| Reflection       | 4-6 hours   | Integrate experiences, update SELF.md   |
-| Self-Improvement | 12-24 hours | Fix friction via Claude Code CLI        |
-| Plan Awareness   | 3 min       | Poll workspaces for collaborative tasks |
+| Loop                    | Interval    | Purpose                                        |
+| ----------------------- | ----------- | ---------------------------------------------- |
+| Session Refresh         | 15 min      | Proactive Bluesky token refresh                |
+| Version Check           | 5 min       | Shut down on remote version mismatch           |
+| Bluesky Awareness       | 45 sec      | Check notifications (API only, no LLM)         |
+| GitHub Awareness        | 2 min       | Check GitHub notifications for mentions/replies|
+| Expression              | 3-4 hours   | Share thoughts from SELF.md                    |
+| Reflection              | 6 hours     | Integrate experiences, update SELF.md          |
+| Self-Improvement        | 24 hours    | Fix friction via Claude Code CLI               |
+| Plan Awareness          | 3 min       | Poll workspaces for collaborative tasks + PRs  |
+| Commitment Fulfillment  | 15 sec      | Fulfill promises made in Bluesky replies       |
+| Heartbeat               | 5 min       | Show signs of life in terminal                 |
+| Engagement Check        | 15 min      | Check how expressions are being received       |
 
 ```
 ts-general-agent/
