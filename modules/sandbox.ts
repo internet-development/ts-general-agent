@@ -41,14 +41,14 @@ export function isPathSafe(targetPath: string): boolean {
   return isSafe;
 }
 
-export function safePath(targetPath: string): string | null {
+function safePath(targetPath: string): string | null {
   if (!isPathSafe(targetPath)) {
     return null;
   }
   return path.resolve(targetPath);
 }
 
-export function isWritablePath(targetPath: string): boolean {
+function isWritablePath(targetPath: string): boolean {
   if (!isPathSafe(targetPath)) {
     return false;
   }
@@ -145,45 +145,3 @@ export function safeAppendFile(filePath: string, content: string): boolean {
   }
 }
 
-export function safeListDir(dirPath: string): string[] | null {
-  const safe = safePath(dirPath);
-  if (!safe) {
-    return null;
-  }
-
-  try {
-    return fs.readdirSync(safe);
-  } catch (error) {
-    logger.error('Failed to list directory', { path: safe, error: String(error) });
-    return null;
-  }
-}
-
-export function safeExists(filePath: string): boolean {
-  const safe = safePath(filePath);
-  if (!safe) {
-    return false;
-  }
-  return fs.existsSync(safe);
-}
-
-export function safeDeleteFile(filePath: string): boolean {
-  if (!isWritablePath(filePath)) {
-    logger.error('Delete rejected - path not writable', { path: filePath });
-    return false;
-  }
-
-  const safe = safePath(filePath);
-  if (!safe) {
-    return false;
-  }
-
-  try {
-    fs.unlinkSync(safe);
-    logger.info('File deleted', { path: safe });
-    return true;
-  } catch (error) {
-    logger.error('Failed to delete file', { path: safe, error: String(error) });
-    return false;
-  }
-}

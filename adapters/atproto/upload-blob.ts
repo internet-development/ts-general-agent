@@ -64,11 +64,3 @@ export async function uploadBlob(
   }
 }
 
-//NOTE(self): Upload image from base64 encoded string
-export async function uploadImageFromBase64(
-  base64Data: string,
-  mimeType: string
-): Promise<AtprotoResult<UploadBlobResponse>> {
-  const buffer = Buffer.from(base64Data, 'base64');
-  return uploadBlob(buffer, mimeType);
-}

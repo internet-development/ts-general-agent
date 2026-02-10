@@ -34,7 +34,7 @@ export async function authenticate(
   }
 }
 
-export async function refreshSession(): Promise<AtprotoResult<AtprotoSession>> {
+async function refreshSession(): Promise<AtprotoResult<AtprotoSession>> {
   if (!currentSession) {
     return { success: false, error: 'No active session to refresh' };
   }
@@ -111,6 +111,3 @@ export async function ensureValidSession(): Promise<boolean> {
   return true;
 }
 
-export function clearSession(): void {
-  currentSession = null;
-}

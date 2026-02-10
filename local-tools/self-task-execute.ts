@@ -213,6 +213,28 @@ export async function ensureWorkspace(
   //NOTE(self): Configure git identity so commits are attributed to the SOUL, not the host machine
   configureGitIdentity(workspacePath);
 
+  //NOTE(self): Install dependencies if package.json exists — without this, test runners
+  //NOTE(self): (vitest, jest, etc.) aren't in node_modules/.bin and npm test fails with
+  //NOTE(self): "command not found". This caused issue #29 to loop ~20 times.
+  const packageJsonPath = path.join(workspacePath, 'package.json');
+  if (fs.existsSync(packageJsonPath)) {
+    try {
+      logger.info('Installing workspace dependencies', { workspacePath });
+      execSync('npm install --ignore-scripts 2>&1', {
+        cwd: workspacePath,
+        timeout: 120_000, // 2 min cap
+        encoding: 'utf-8',
+        env: { ...process.env, CI: 'true' },
+      });
+      logger.info('Workspace dependencies installed');
+    } catch (err) {
+      //NOTE(self): Non-fatal — workspace may not need dependencies, or npm may not be available
+      logger.warn('Failed to install workspace dependencies (non-fatal)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return { success: true, path: workspacePath };
 }
 

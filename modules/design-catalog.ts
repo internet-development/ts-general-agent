@@ -39,16 +39,6 @@ export function getRandomDesignSource(): DesignSource {
   return DESIGN_CATALOG[Math.floor(Math.random() * DESIGN_CATALOG.length)];
 }
 
-//NOTE(self): Get all sources
-export function getDesignCatalog(): DesignSource[] {
-  return [...DESIGN_CATALOG];
-}
-
-//NOTE(self): Get sources by type
-export function getDesignSourcesByType(type: DesignSource['type']): DesignSource[] {
-  return DESIGN_CATALOG.filter(s => s.type === type);
-}
-
 //NOTE(self): Get a random browse URL for a web source
 export function getRandomBrowseUrl(source: DesignSource): string {
   if (source.browseUrls && source.browseUrls.length > 0) {

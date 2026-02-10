@@ -41,10 +41,3 @@ export async function getProfile(
   }
 }
 
-export async function getMyProfile(): Promise<AtprotoResult<AtprotoProfile>> {
-  const session = getSession();
-  if (!session) {
-    return { success: false, error: 'Not authenticated' };
-  }
-  return getProfile(session.did);
-}

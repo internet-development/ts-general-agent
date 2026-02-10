@@ -112,24 +112,6 @@ export async function getIssueThread(
   }
 }
 
-//NOTE(self): Check if the agent has already commented on an issue
-export async function hasAgentCommented(
-  params: GetIssueThreadParams,
-  agentUsername?: string
-): Promise<GitHubResult<boolean>> {
-  const threadResult = await getIssueThread(params, agentUsername);
-  if (!threadResult.success) {
-    //NOTE(self): Fail OPEN - better to attempt than block
-    logger.debug('Failed to check agent comment status, failing open', {
-      ...params,
-      error: threadResult.error,
-    });
-    return { success: true, data: false };
-  }
-
-  return { success: true, data: threadResult.data.agentHasCommented };
-}
-
 //NOTE(self): Analyze conversation state to help SOUL decide whether to respond
 export interface ConversationAnalysis {
   shouldRespond: boolean;

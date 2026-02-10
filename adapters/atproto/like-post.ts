@@ -50,36 +50,3 @@ export async function likePost(
   }
 }
 
-export async function unlikePost(likeUri: string): Promise<AtprotoResult<void>> {
-  const session = getSession();
-  if (!session) {
-    return { success: false, error: 'Not authenticated' };
-  }
-
-  try {
-    const rkey = likeUri.split('/').pop();
-    if (!rkey) {
-      return { success: false, error: 'Invalid like URI' };
-    }
-
-    const response = await blueskyFetch(`${BSKY_SERVICE}/xrpc/com.atproto.repo.deleteRecord`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        repo: session.did,
-        collection: 'app.bsky.feed.like',
-        rkey,
-      }),
-    });
-
-    if (!response.ok) {
-      let errorMsg = `Failed to unlike post: ${response.status}`;
-      try { const error = await response.json(); errorMsg = error.message || errorMsg; } catch { /* non-JSON response */ }
-      return { success: false, error: errorMsg };
-    }
-
-    return { success: true, data: undefined };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}

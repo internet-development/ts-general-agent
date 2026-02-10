@@ -102,7 +102,6 @@ import {
   filterActionableNotifications,
   extractNumberFromApiUrl,
   markNotificationRead,
-  type GitHubNotification,
 } from '@adapters/github/get-notifications.js';
 import {
   getIssueThread,
@@ -139,12 +138,9 @@ import {
   updateWorkspaceSynthesisTimestamp,
   closeRolledUpIssues,
   isWatchingWorkspace,
-  type DiscoveredPlan,
-  type DiscoveredIssue,
   type ReviewablePR,
-  type PlanPollResult,
 } from '@modules/workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeer, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';

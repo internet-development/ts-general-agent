@@ -1,6 +1,4 @@
 import type { GitHubAuth } from '@adapters/github/types.js';
-import { logger } from '@modules/logger.js';
-const GITHUB_API = 'https://api.github.com';
 
 let currentAuth: GitHubAuth | null = null;
 
@@ -24,20 +22,3 @@ export function getAuthHeaders(): Record<string, string> {
   };
 }
 
-export function clearAuth(): void {
-  currentAuth = null;
-}
-
-export async function verifyAuth(): Promise<boolean> {
-  if (!currentAuth) return false;
-
-  try {
-    const response = await fetch(`${GITHUB_API}/user`, {
-      headers: getAuthHeaders(),
-    });
-    return response.ok;
-  } catch (e) {
-    logger.debug('GitHub auth verification failed', { error: String(e) });
-    return false;
-  }
-}

@@ -169,35 +169,6 @@ export function lookupPostByBskyUrl(bsky_url: string): PostLogEntry | null {
   }
 }
 
-//NOTE(self): Look up a post by Are.na block ID
-//NOTE(self): Useful for checking if we've posted a specific block before
-export function lookupPostByBlockId(block_id: number): PostLogEntry | null {
-  try {
-    if (!fs.existsSync(POST_LOG_PATH)) {
-      return null;
-    }
-
-    const content = fs.readFileSync(POST_LOG_PATH, 'utf8');
-    const lines = content.trim().split('\n').filter(line => line.length > 0);
-
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i]) as PostLogEntry;
-        if (entry.source.block_id === block_id) {
-          return entry;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    return null;
-  } catch (err) {
-    logger.warn('Failed to read post log', { error: String(err) });
-    return null;
-  }
-}
-
 //NOTE(self): Get recent posts (newest first)
 //NOTE(self): Useful for generating context about recent activity
 export function getRecentPosts(limit: number = 10): PostLogEntry[] {

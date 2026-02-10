@@ -70,12 +70,6 @@ export function extractGitHubUrls(text: string): ParsedGitHubUrl[] {
   return results;
 }
 
-//NOTE(self): Check if text contains any GitHub URLs
-export function hasGitHubUrls(text: string): boolean {
-  GITHUB_URL_REGEX.lastIndex = 0;
-  return GITHUB_URL_REGEX.test(text);
-}
-
 //NOTE(self): Extract GitHub URLs from a Bluesky post record
 //NOTE(self): CRITICAL - Bluesky truncates URLs in displayed text!
 //NOTE(self): A truncated URL like "issues/12..." might parse as issue #12 when it's really #123

@@ -12,8 +12,6 @@ import { getConfig } from '@modules/config.js';
 import {
   safeReadFile,
   safeWriteFile,
-  safeAppendFile,
-  safeListDir,
   getRepoRoot,
 } from '@modules/sandbox.js';
 import type { ToolCall, ToolResult } from '@modules/tools.js';

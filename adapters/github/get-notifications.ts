@@ -98,34 +98,6 @@ export async function markNotificationRead(
   }
 }
 
-//NOTE(self): Mark all notifications as read
-export async function markAllNotificationsRead(
-  lastReadAt?: string
-): Promise<GitHubResult<void>> {
-  const auth = getAuth();
-  if (!auth) {
-    return { success: false, error: 'GitHub not authenticated' };
-  }
-
-  try {
-    const body = lastReadAt ? JSON.stringify({ last_read_at: lastReadAt }) : '{}';
-    const response = await githubFetch(`${GITHUB_API}/notifications`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body,
-    });
-
-    if (!response.ok && response.status !== 205) {
-      const error = await response.json().catch(() => ({}));
-      return { success: false, error: (error as { message?: string }).message || 'Failed to mark notifications read' };
-    }
-
-    return { success: true, data: undefined };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
 //NOTE(self): Extract issue/PR number from a GitHub API URL
 //NOTE(self): e.g., https://api.github.com/repos/owner/repo/issues/123 -> 123
 export function extractNumberFromApiUrl(apiUrl: string): number | null {

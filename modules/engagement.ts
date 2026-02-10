@@ -226,7 +226,7 @@ export function recordInteraction(
   saveState(state);
 }
 
-export function getRelationship(handle: string): RelationshipRecord | null {
+function getRelationship(handle: string): RelationshipRecord | null {
   const state = loadState();
   return state.relationships[handle] || null;
 }
@@ -247,7 +247,7 @@ export function markInteractionResponded(originalUri: string, responseUri: strin
   }
 }
 
-export function hasRespondedToNotification(uri: string): boolean {
+function hasRespondedToNotification(uri: string): boolean {
   //NOTE(self): Check relationship interaction records for response tracking
   //NOTE(self): This provides engagement intelligence without being critical for spam prevention
   //NOTE(self): The API check (hasAgentRepliedInThread) is the real source of truth
@@ -263,7 +263,7 @@ export function hasRespondedToNotification(uri: string): boolean {
   return false;
 }
 
-export function getPendingResponses(): Array<{ handle: string; interactions: InteractionRecord[] }> {
+function getPendingResponses(): Array<{ handle: string; interactions: InteractionRecord[] }> {
   const state = loadState();
   const pending: Array<{ handle: string; interactions: InteractionRecord[] }> = [];
 
@@ -287,7 +287,7 @@ export function getPendingResponses(): Array<{ handle: string; interactions: Int
 //NOTE(self): Posting Intelligence
 
 
-export interface PostingDecision {
+interface PostingDecision {
   shouldPost: boolean;
   reason: string;
   suggestedTone?: 'reflective' | 'celebratory' | 'curious' | 'supportive' | 'quiet';
@@ -342,7 +342,7 @@ export function recordOriginalPost(): void {
   saveState(state);
 }
 
-export function boostInspiration(amount: number = 10, source?: string): void {
+function boostInspiration(amount: number = 10, source?: string): void {
   const state = loadState();
   state.posting.inspirationLevel = Math.min(100, state.posting.inspirationLevel + amount);
   saveState(state);
@@ -474,7 +474,7 @@ export function hasUrgentNotifications(notifications: PrioritizedNotification[])
 //NOTE(self): Detect verbose SOUL-style closing/acknowledgment messages
 //NOTE(self): SOULs write "Thanks for coordinating! I'll stop here so we don't loop" — 80+ chars but zero value
 //NOTE(self): Questions and code blocks always return false (substantive content)
-export function isLowValueClosing(text: string): boolean {
+function isLowValueClosing(text: string): boolean {
   const trimmed = text.trim();
 
   //NOTE(self): Questions are always substantive
@@ -594,7 +594,7 @@ export function shouldRespondTo(notification: AtprotoNotification, ownerDid: str
 //NOTE(self): Notification Triage
 
 
-export interface TriagedThread {
+interface TriagedThread {
   rootUri: string;
   notifications: PrioritizedNotification[];
   highestPriority: number;
@@ -621,7 +621,7 @@ function getThreadRootUri(notification: AtprotoNotification): string {
   return notification.uri;
 }
 
-export function triageNotifications(
+function triageNotifications(
   notifications: PrioritizedNotification[],
   ownerDid: string
 ): TriagedThread[] {
@@ -687,7 +687,7 @@ export function triageNotifications(
   });
 }
 
-export function flattenTriagedNotifications(threads: TriagedThread[]): PrioritizedNotification[] {
+function flattenTriagedNotifications(threads: TriagedThread[]): PrioritizedNotification[] {
   const result: PrioritizedNotification[] = [];
   for (const thread of threads) {
     result.push(...thread.notifications);
@@ -695,7 +695,7 @@ export function flattenTriagedNotifications(threads: TriagedThread[]): Prioritiz
   return result;
 }
 
-export function deduplicateNotifications(
+function deduplicateNotifications(
   notifications: PrioritizedNotification[]
 ): PrioritizedNotification[] {
   const seen = new Map<string, PrioritizedNotification>();
@@ -715,13 +715,13 @@ export function deduplicateNotifications(
 //NOTE(self): Expression Prompts
 
 
-export interface ExpressionPrompt {
+interface ExpressionPrompt {
   theme: string;
   prompt: string;
   tone: PostingDecision['suggestedTone'];
 }
 
-export function generateExpressionPrompts(
+function generateExpressionPrompts(
   selfContent: string,
   recentObservations: string[]
 ): ExpressionPrompt[] {
@@ -778,7 +778,7 @@ export function generateExpressionPrompts(
 const REFLECTION_THRESHOLD = 5;
 const MAJOR_REFLECTION_THRESHOLD = 4;
 
-export function shouldReflect(): boolean {
+function shouldReflect(): boolean {
   const state = loadState();
   return state.reflection.significantEvents >= REFLECTION_THRESHOLD;
 }
@@ -811,7 +811,7 @@ export function recordReflectionComplete(insightsIntegrated: boolean = true): vo
   saveState(state);
 }
 
-export function recordSelfUpdate(): void {
+function recordSelfUpdate(): void {
   const state = loadState();
   state.reflection.lastSelfUpdate = new Date().toISOString();
   saveState(state);
@@ -842,7 +842,7 @@ export function getReflectionState(): ReflectionState {
   return state.reflection;
 }
 
-export function shouldMajorReflect(): boolean {
+function shouldMajorReflect(): boolean {
   const state = loadState();
   return state.reflection.reflectionCount % MAJOR_REFLECTION_THRESHOLD === 0;
 }
@@ -850,7 +850,7 @@ export function shouldMajorReflect(): boolean {
 //NOTE(self): Engagement Stats
 
 
-export interface EngagementStats {
+interface EngagementStats {
   totalRelationships: number;
   positiveRelationships: number;
   pendingResponses: number;
@@ -860,7 +860,7 @@ export interface EngagementStats {
   canPostNow: boolean;
 }
 
-export function getEngagementStats(): EngagementStats {
+function getEngagementStats(): EngagementStats {
   const state = loadState();
   const pending = getPendingResponses();
   const postingDecision = canPostOriginal();
@@ -881,7 +881,7 @@ export function getEngagementStats(): EngagementStats {
 }
 
 //NOTE(self): Relationship Summary for Reflection
-export interface RelationshipSummary {
+interface RelationshipSummary {
   total: number;
   positive: number;
   recurring: number;

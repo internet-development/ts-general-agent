@@ -25,25 +25,3 @@ export async function getUser(username: string): Promise<GitHubResult<GitHubUser
   }
 }
 
-export async function getAuthenticatedUser(): Promise<GitHubResult<GitHubUser>> {
-  const auth = getAuth();
-  if (!auth) {
-    return { success: false, error: 'GitHub not authenticated' };
-  }
-
-  try {
-    const response = await githubFetch(`${GITHUB_API}/user`, {
-      headers: getAuthHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      return { success: false, error: error.message || 'Failed to get authenticated user' };
-    }
-
-    const data = await response.json();
-    return { success: true, data };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}

@@ -445,6 +445,7 @@ Every outbound message a SOUL sends re-enters another SOUL's notification pipeli
 The `chose_silence` experience type records when the SOUL wisely decides not to reply.
 
 **Hard Blocks (code-level, LLM never sees the notification):**
+
 - `isLowValueClosing()` — detects verbose goodbye/acknowledgment messages (any length) via closing-intent patterns and gratitude-only patterns. Messages with questions or code blocks always pass through.
 - Circular conversation detection (medium/high confidence) — scheduler skips the notification entirely
 - Auto-like: when `shouldRespondTo` returns `'closing or acknowledgment message'`, the scheduler automatically likes the post and marks the conversation concluded — warm acknowledgment without generating a reply
@@ -629,11 +630,13 @@ Three code-level checks in `analyzeConversation()` prevent GitHub spam. All appl
 All checks use **effective peers** — on workspace repos these are registered peers from org/team discovery; on foreign repos these are derived from the thread (all commenters except the agent and the issue author). See "Effective Peers" below.
 
 **1. Consecutive Reply Prevention**
+
 - If agent's comment is the most recent → `shouldRespond: false`
 - Applies even for owner requests
 - Prevents back-to-back self-replies
 
 **2. Round-Robin Prevention** (v5.5.2)
+
 - If agent has commented AND all replies since are from effective peers (issue author hasn't re-engaged) → `shouldRespond: false`
 - On workspace repos: breaks SOUL-to-SOUL loops (registered peers = known SOULs)
 - On foreign repos: breaks ALL chatter loops (effective peers = everyone except agent + issue author)
@@ -642,6 +645,7 @@ All checks use **effective peers** — on workspace repos these are registered p
 - **Key insight:** on foreign codebases, the only "human" signal that matters is a passive issue author who hasn't commented. If the issue author is actively participating (commenting), they're a peer.
 
 **3. Comment Saturation Cap** (v5.5.2)
+
 - If agent already has 3+ comments in the thread → `shouldRespond: false`
 - Unless the issue author directly `@mentioned` the agent in the last 5 comments
 - On workspace repos: non-peer, non-agent commenters also count as human
@@ -851,6 +855,7 @@ When a watched workspace has open issues but no active plan (all plans closed/co
 9. One workspace per cycle (fair distribution)
 
 **Key behavior:**
+
 - Cooldown prevents tight retry loops (1 hour between attempts per workspace)
 - If LLM doesn't create a plan, timestamp still updates (avoids repeated attempts)
 - Closed issues link to the plan — plan becomes the single source of truth
@@ -872,12 +877,14 @@ Workspace issues are auto-closed through three complementary mechanisms, prevent
 
 **Tier 1: Immediate close on conversation exit**
 When a SOUL finishes engaging with a workspace issue (via `graceful_exit` or `conclude_conversation`), the issue is immediately closed.
+
 - **Workspace repos** (`www-lil-intdev-*` prefix, checked via `isWatchingWorkspace()`): auto-close after conversation conclusion
 - **External repos**: never auto-close — that's the maintainer's job
 - Plan issues use their own close logic (`handlePlanComplete()` → `closePlan()`) and are not affected
 
 **Tier 2: Handled issue auto-close (24h)**
 `closeHandledWorkspaceIssues()` runs every 3 minutes (plan awareness loop) and closes issues where:
+
 - Agent's comment is the most recent (SOUL responded, no one followed up)
 - Last activity was > 24 hours ago (gave others time to respond)
 - Not a plan issue, not a PR
@@ -885,6 +892,7 @@ When a SOUL finishes engaging with a workspace issue (via `graceful_exit` or `co
 
 **Tier 3: Stale issue cleanup (3-7 days)**
 `cleanupStaleWorkspaceIssues()` runs every 3 minutes and closes issues with no activity for:
+
 - **Memo-labeled issues**: 3 days (memos are coordination artifacts — once read, they should be closed)
 - **All other issues**: 7 days
 - Not a plan issue, not a PR
@@ -1001,6 +1009,7 @@ After checking for claimable tasks (and only if still idle), the plan awareness 
 The review uses the same GitHub response mode pattern (jitter, thread refresh, peer awareness, `analyzeConversation` with `isWorkspacePRReview: true`). The agent can APPROVE, REQUEST_CHANGES, COMMENT, or `graceful_exit` if it has nothing to add.
 
 **Review + Merge Flow:** Reviewers and creators have distinct roles:
+
 - **Reviewers** only review — APPROVE, REQUEST_CHANGES, or COMMENT. They do NOT merge.
 - **The PR creator** is responsible for merging after ALL requested reviewers have approved.
 - `autoMergeApprovedPR()` only merges PRs where the current agent is the PR creator AND all requested reviewers have approved (zero pending reviewers).
@@ -1066,6 +1075,7 @@ No task reaches "complete" unless ALL gates pass. Each gate failure produces a s
 **Reviewer assignment (`requestReviewersForPR`):** After creating the PR, `requestReviewersForPR()` discovers peer SOULs via the peer registry (`getPeerGithubUsername`) and requests reviews from them. If no peers are found, it falls back to listing repository collaborators and requesting review from the first non-self collaborator. This ensures every PR has a reviewer assigned automatically.
 
 **Dual enforcement:** Gates AND plan completion handling are applied in both code paths that execute tasks:
+
 1. `scheduler.ts:executeClaimedTask()` — the scheduler's autonomous plan-polling path
 2. `executor.ts:plan_execute_task` — the LLM-invoked tool path
 
@@ -1097,46 +1107,46 @@ Proceed.
 
 ### Related Tools
 
-| Tool                  | Purpose                                                                |
-| --------------------- | ---------------------------------------------------------------------- |
-| `workspace_create`    | Create a workspace repo from template (auto-watches it)                |
-| `workspace_find`      | Check if a workspace already exists for an org                         |
-| `create_memo`         | Create a GitHub issue as a coordination memo (auto-adds "memo" label)  |
-| `github_create_issue` | Create a GitHub issue with full control over labels — for standalone issues, follow-ups, or ideas inspired by conversations |
-| `github_update_issue` | Update issue body, state, labels, assignees                            |
-| `github_create_pr`    | Create a pull request to propose changes or fix issues. Auto-requests reviewers from peer SOULs via `requestReviewersForPR()`. |
+| Tool                  | Purpose                                                                                                                                                                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace_create`    | Create a workspace repo from template (auto-watches it)                                                                                                                                                                                                                           |
+| `workspace_find`      | Check if a workspace already exists for an org                                                                                                                                                                                                                                    |
+| `create_memo`         | Create a GitHub issue as a coordination memo (auto-adds "memo" label)                                                                                                                                                                                                             |
+| `github_create_issue` | Create a GitHub issue with full control over labels — for standalone issues, follow-ups, or ideas inspired by conversations                                                                                                                                                       |
+| `github_update_issue` | Update issue body, state, labels, assignees                                                                                                                                                                                                                                       |
+| `github_create_pr`    | Create a pull request to propose changes or fix issues. Auto-requests reviewers from peer SOULs via `requestReviewersForPR()`.                                                                                                                                                    |
 | `github_merge_pr`     | Merge a PR (workspace repos only — `www-lil-intdev-*` prefix enforced). Triggers `requestEarlyPlanCheck()` via callback so the merging SOUL (or peers) pick up newly unblocked tasks within 5 seconds instead of waiting up to 3 minutes. Also deletes the merged feature branch. |
-| `github_review_pr`    | Approve, request changes, or comment on a PR                           |
-| `plan_create`         | Create a structured plan issue                                         |
-| `plan_claim_task`     | Claim a task via assignee API                                          |
-| `plan_execute_task`   | Execute claimed task via Claude Code                                   |
-| `arena_search`        | Search Are.na for channels matching a keyword/topic                    |
-| `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky. Accepts optional `text` param for custom commentary instead of auto-generated metadata |
-| `arena_fetch_channel` | Fetch blocks from an Are.na channel (metadata only)                    |
+| `github_review_pr`    | Approve, request changes, or comment on a PR                                                                                                                                                                                                                                      |
+| `plan_create`         | Create a structured plan issue                                                                                                                                                                                                                                                    |
+| `plan_claim_task`     | Claim a task via assignee API                                                                                                                                                                                                                                                     |
+| `plan_execute_task`   | Execute claimed task via Claude Code                                                                                                                                                                                                                                              |
+| `arena_search`        | Search Are.na for channels matching a keyword/topic                                                                                                                                                                                                                               |
+| `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky. Accepts optional `text` param for custom commentary instead of auto-generated metadata                                                                                                                         |
+| `arena_fetch_channel` | Fetch blocks from an Are.na channel (metadata only)                                                                                                                                                                                                                               |
 
 ### Related Files
 
-| File                                           | Purpose                                                             |
-| ---------------------------------------------- | ------------------------------------------------------------------- |
+| File                                           | Purpose                                                                                 |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `modules/workspace-discovery.ts`               | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
-| `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed)              |
-| `modules/peer-awareness.ts`                    | Dynamic peer SOUL discovery and cross-platform identity linking     |
-| `modules/commitment-queue.ts`                  | Track pending commitments (JSONL persistence, dedup, stale cleanup) |
-| `modules/commitment-extract.ts`                | LLM-based extraction of action commitments from replies             |
-| `modules/commitment-fulfill.ts`                | Dispatch and execute promised actions                               |
-| `local-tools/self-plan-parse.ts`               | Parse plan markdown                                                 |
-| `local-tools/self-plan-create.ts`              | Create plan issues (checks repo for existing docs before injection) |
-| `adapters/github/get-repo-contents.ts`         | Fetch repo file listing (used for doc task idempotency check)       |
-| `local-tools/self-task-claim.ts`               | Claim tasks                                                         |
-| `local-tools/self-task-execute.ts`             | Execute via Claude Code                                             |
-| `local-tools/self-task-verify.ts`              | Four-gate verification: git changes, tests, push, remote confirm    |
-| `local-tools/self-task-report.ts`              | Report progress/completion                                          |
-| `local-tools/self-workspace-watch.ts`          | Add/remove watched workspaces                                       |
-| `adapters/arena/search-channels.ts`            | Search Are.na for channels by keyword (topic-based image discovery) |
-| `adapters/atproto/authenticate.ts`             | Bluesky session management: login, refresh, expiry detection        |
-| `.memory/watched_workspaces.json`              | Persistent watch list                                               |
-| `.memory/discovered_peers.json`                | Persistent peer registry                                            |
-| `.memory/pending_commitments.jsonl`            | Persistent commitment queue                                         |
+| `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed)                                  |
+| `modules/peer-awareness.ts`                    | Dynamic peer SOUL discovery and cross-platform identity linking                         |
+| `modules/commitment-queue.ts`                  | Track pending commitments (JSONL persistence, dedup, stale cleanup)                     |
+| `modules/commitment-extract.ts`                | LLM-based extraction of action commitments from replies                                 |
+| `modules/commitment-fulfill.ts`                | Dispatch and execute promised actions                                                   |
+| `local-tools/self-plan-parse.ts`               | Parse plan markdown                                                                     |
+| `local-tools/self-plan-create.ts`              | Create plan issues (checks repo for existing docs before injection)                     |
+| `adapters/github/get-repo-contents.ts`         | Fetch repo file listing (used for doc task idempotency check)                           |
+| `local-tools/self-task-claim.ts`               | Claim tasks                                                                             |
+| `local-tools/self-task-execute.ts`             | Execute via Claude Code                                                                 |
+| `local-tools/self-task-verify.ts`              | Four-gate verification: git changes, tests, push, remote confirm                        |
+| `local-tools/self-task-report.ts`              | Report progress/completion                                                              |
+| `local-tools/self-workspace-watch.ts`          | Add/remove watched workspaces                                                           |
+| `adapters/arena/search-channels.ts`            | Search Are.na for channels by keyword (topic-based image discovery)                     |
+| `adapters/atproto/authenticate.ts`             | Bluesky session management: login, refresh, expiry detection                            |
+| `.memory/watched_workspaces.json`              | Persistent watch list                                                                   |
+| `.memory/discovered_peers.json`                | Persistent peer registry                                                                |
+| `.memory/pending_commitments.jsonl`            | Persistent commitment queue                                                             |
 
 ### Peer Coordination (Thread Deduplication)
 
@@ -1149,9 +1159,10 @@ When multiple SOULs detect the same GitHub issue or Bluesky thread, they coordin
 1. **Dynamic Peer Discovery** (`modules/peer-awareness.ts`): SOULs discover peers organically — from plan assignees, shared workspaces, owner mentions, and thread co-responders. No hardcoded config. Registry persists at `.memory/discovered_peers.json`.
 
 2. **Effective Peers** (v5.5.2, updated v8.1): `getEffectivePeers()` in `get-issue-thread.ts` bridges the gap between workspace and foreign repos:
+
    - **Workspace repos** (`registeredPeers.length > 0`): uses registered peers from org/team discovery — real identity matters for distinguishing SOULs from humans.
    - **Foreign repos** (`registeredPeers.length === 0`): derives peers from the thread — all commenters except the agent and the issue author.
-   - **SOUL-as-issue-author** (v8.1): If the issue author has also *commented* in the thread (not just created the issue), they are included as a peer. This handles SOUL-created issues where the creating SOUL actively participates — other SOULs must treat them symmetrically. A passive issue author (created the issue but never commented) is still excluded (assumed human).
+   - **SOUL-as-issue-author** (v8.1): If the issue author has also _commented_ in the thread (not just created the issue), they are included as a peer. This handles SOUL-created issues where the creating SOUL actively participates — other SOULs must treat them symmetrically. A passive issue author (created the issue but never commented) is still excluded (assumed human).
    - Used by `analyzeConversation()` internally and passed to `formatThreadForContext()` by the scheduler.
 
 3. **Deterministic Jitter**: Before responding to any GitHub thread, each SOUL waits a delay derived from a hash of `AGENT_NAME`. The delay is 15–90 seconds, always the same for a given SOUL. No randomness, no coordination needed. **Always applied** — even without registered peers, other SOULs may be responding to the same thread.
@@ -1233,6 +1244,7 @@ Every outbound message a SOUL sends re-enters another SOUL's notification pipeli
 
 **Layer 1 — `isLowValueClosing()` in `shouldRespondTo()` (engagement.ts)**
 Detects verbose SOUL-style closing/acknowledgment messages at ANY length. Catches:
+
 - Closing intent: "stop here", "leaving it here", "closing the loop", "see you on", "don't loop"
 - Gratitude-only: messages starting with thanks/agreement/affirmation, < 200 chars, no question, no code block
 - Questions (`?`) and code blocks always pass through — they're substantive
@@ -1241,12 +1253,14 @@ When detected: `shouldRespondTo` returns `{ shouldRespond: false, reason: 'closi
 
 **Layer 2 — Circular conversation hard-block (scheduler.ts)**
 When thread analysis detects a circular conversation (mutual acknowledgments, no new information):
+
 - **Medium/high confidence** → hard-block. Notification skipped entirely (`continue` in the loop). The LLM never sees the thread.
 - **Low confidence** → advisory. Warning text appended to LLM context. LLM can still reply.
 
 Previously, all circular conversation detection was advisory-only. The LLM saw "🔄 CIRCULAR CONVERSATION DETECTED" and responded with "You're right, let's stop!" — which was itself another circular message.
 
 **Layer 3 — Skill templates prefer likes over verbal exits**
+
 - Bluesky: `graceful_exit` defaults to like (option 1), message is option 2 "use sparingly"
 - GitHub: `graceful_exit` defaults to reaction, message only if never commented
 - CONVERSATION WISDOM sections teach: "When someone thanks you, like instead of replying"
@@ -1255,12 +1269,12 @@ Previously, all circular conversation detection was advisory-only. The LLM saw "
 
 When documenting anti-spam measures, distinguish:
 
-| Type | Description | Example |
-|------|-------------|---------|
-| **Hard block** | Code prevents LLM from seeing the notification. Cannot be bypassed. | `isLowValueClosing()` → `shouldRespondTo` returns false |
-| **Hard skip** | Code skips the notification in the response loop. Cannot be bypassed. | Circular conversation (medium/high) → `continue` |
-| **Advisory** | Code adds warning text to LLM context. LLM can still reply. | Circular conversation (low) → warning in threadContext |
-| **Prompt** | Skill template instructs behavior. LLM follows instructions. | "Prefer likes over verbal goodbyes" |
+| Type           | Description                                                           | Example                                                 |
+| -------------- | --------------------------------------------------------------------- | ------------------------------------------------------- |
+| **Hard block** | Code prevents LLM from seeing the notification. Cannot be bypassed.   | `isLowValueClosing()` → `shouldRespondTo` returns false |
+| **Hard skip**  | Code skips the notification in the response loop. Cannot be bypassed. | Circular conversation (medium/high) → `continue`        |
+| **Advisory**   | Code adds warning text to LLM context. LLM can still reply.           | Circular conversation (low) → warning in threadContext  |
+| **Prompt**     | Skill template instructs behavior. LLM follows instructions.          | "Prefer likes over verbal goodbyes"                     |
 
 Hard blocks and hard skips are the only reliable prevention for multi-agent loops. Advisory and prompt enforcement work for nuanced single-agent decisions but fail when two agents' LLMs both decide to "be polite."
 
@@ -1535,45 +1549,3 @@ export async function doSomething() {
 - Cost estimate at $0.01/1K tokens: **~$0.42/day** or **~$12.60/month**
 
 Uses full SELF.md context for all operations to maintain consistent identity and memory.
-
----
-
-## Scenario Coverage
-
-The following table maps SCENARIOS.md requirements to their implementation. Every scenario is covered.
-
-| # | Scenario | Implementation | Enforcement |
-|---|----------|----------------|-------------|
-| 1 | Multi-SOUL collaborative project from Bluesky | Awareness loop → workspace-decision skill → workspace_create → plan_create → plan awareness loop → task execution → PR review → announce | Code + Prompt |
-| 2 | Completed project verification (example-conversation.ts) | example-conversation.ts demonstrates full lifecycle; workspace docs (LIL-INTDEV-AGENTS.md, SCENARIOS.md) verify artifacts | Documented |
-| 3 | "Write up findings" → GitHub Issue + link | commitment-extract.ts detects "write up" → commitment-fulfill.ts creates issue → scheduler.ts replies with URL in original thread | Code |
-| 4 | Correct Bluesky facets on all posts | ALL posts go through atproto/create-post.ts which detects URLs, @mentions, cashtags, hashtags. No code path skips facet generation. | Code |
-| 5 | Graceful conversation endings | graceful_exit tool (like preferred, message sparingly) + markConversationConcluded + re-engagement support (1x casual, unlimited workspace). **Receiving side (v8.1):** `isLowValueClosing()` hard-blocks closing messages before LLM sees them, auto-likes goodbye posts. See "Cross-Agent Feedback Loops" section. | Hard block + Prompt |
-| 6 | Are.na image fetching | arena_search → arena_fetch_channel → download → upload blob → atproto.createPost with image. Fully dynamic, no hardcoded channels. Temp image files cleaned up on all paths (success, upload failure, post failure). | Code |
-| 7 | Self-reflection on change over time | Reflection cycle includes temporal context (days running, experience count). SELF.md stores learnings across cycles. Deep-reflection skill prompts change awareness. | Code + Prompt |
-| 8 | Self-improvement (implementing missing features) | Friction detection → self-improvement-decision skill → Claude Code execution → reloadSkills(). Also aspirational growth for proactive evolution. | Code |
-| 9 | Owner terminal chat | loop.ts raw stdin → processOwnerInput → chatWithTools with ALL tools + owner-communication skill. Quick acknowledgment emphasis. **Experience recording:** captures owner's message as `owner_guidance` experience with `source: 'terminal'` + SOUL's response as insight — feeds reflection for SELF.md development. Fatal errors restore terminal state (raw mode, input box, status bar) before exit. | Code |
-| 10 | Iterative quality loop (LIL-INTDEV-AGENTS.md + SCENARIOS.md) | workspace-decision skill instructs docs-first. self-plan-create.ts auto-injects docs tasks for workspace repos. Plan completion posts quality loop review checklist in ALL THREE code paths: (1) `handlePlanComplete()` in self-task-report.ts (merge-gated path — dominant), (2) executor.ts `plan_execute_task` handler, (3) scheduler.ts `executeClaimedTask`. Both PR paths pass full test results (testsRun, testsPassed) in completion reports. Three-tier workspace issue auto-close keeps workspaces clean: Tier 1 (immediate on graceful_exit), Tier 2 (24h handled auto-close), Tier 3 (3-7 day stale cleanup). | Code + Prompt |
-| 11 | Terminal UI readability | ui.ts provides spinners, boxes, colors, wrapText. Reflection shows full text via printResponse(). Expression shows posted text. Notifications show author details. | Code |
-| 12 | External GitHub issues via Bluesky | extractGitHubUrlsFromRecord (3-layer: facets → embed → text) → trackGitHubConversation → GitHub response mode. Works for any repo. Owner priority. **Discussion vs. work awareness:** github-response skill teaches SOULs to distinguish discussions (share ideas) from work mandates (ship code). **No self-introduction:** username already visible on GitHub comments. | Code + Prompt |
-| 13 | No spammy behavior | Daily post limit (12/day), quiet hours (23-7), shouldRespondTo filters low-value messages (including verbose closings via `isLowValueClosing`), conversation conclusion heuristics (max replies, max depth, disengagement, circular detection with hard-block for medium/high confidence), peer awareness prevents repetition, checkInvitation validates expression posts, deterministic jitter staggers multi-SOUL responses (always applied), session + API deduplication prevents double replies. **Effective peers** (v5.5.2, updated v8.1): `getEffectivePeers()` derives peers from thread on foreign repos — includes issue author when they've commented (SOUL-as-issue-author fix). **Round-robin hard stop:** if only effective peers replied since last comment (issue author hasn't re-engaged), `shouldRespond: false`. **Saturation cap:** 3+ comments → only respond if issue author @mentions. Jitter + thread refresh always applied regardless of registered peer count. **All enforced in `analyzeConversation()` at all call sites.** | Hard block + Code + Prompt |
-| 14 | Orphaned branch recovery | recoverOrphanedBranches() in scheduler detects blocked tasks with pushed branches (no PR), clones workspace, checks out branch, verifies changes + tests, creates PR. | Code |
-| 15 | **[Adversarial]** Goodbye loop prevention (Bluesky) | `isLowValueClosing()` → `shouldRespondTo` hard-block → auto-like → `markBlueskyConversationConcluded`. Pipeline trace: closing message → notification → hard-block → like → END. LLM never sees it. | Hard block |
-| 16 | **[Adversarial]** SOUL-as-issue-author peer symmetry | `getEffectivePeers()` includes issue author when they've commented. Round-robin fires symmetrically for SOUL-created issues. | Hard block |
-| 17 | **[Adversarial]** Circular conversation hard-block | Medium/high confidence → `continue` in scheduler loop (notification skipped). Low confidence → advisory text. LLM cannot override medium/high. | Hard block + Advisory |
-| 18 | **[Adversarial]** Clean thread endings | Skill templates prefer likes over messages for exits. `isLowValueClosing` catches verbal goodbyes from other SOULs. Max 1-2 closing messages per thread, not 8. | Hard block + Prompt |
-| 19 | PR reviewer auto-assignment | `github_create_pr` in executor.ts calls `requestReviewersForPR()` after PR creation. Discovers peers via registry, falls back to repo collaborators. | Code |
-| 20 | Post-merge work pickup | `github_merge_pr` triggers `requestEarlyPlanCheck()` via `registerOnPRMerged()` callback. Plan awareness fires in 5s, not 3min. | Code |
-| 21 | **[Adversarial]** Branch contamination prevention | `verifyBranch()` PRE-GATE checks Claude Code stayed on feature branch. Skill templates (`task-execution`, `pr-workflow`) explicitly prohibit `git merge/rebase/pull/fetch` and branch switching. | Code + Prompt |
-| 22 | Visual taste development | Expression cycle weighted ~50% for design inspiration (expression.ts). SELF.md template seeds visual taste section. Expression prompts require commentary on aesthetic choices. SOULs develop recognizable design identity over time. | Code + Prompt |
-
-**Enforcement types:**
-- **Hard block** — Code prevents LLM from seeing the notification entirely. Cannot be bypassed. Used for multi-agent feedback loops.
-- **Hard skip** — Code skips the notification in the response-building loop. Cannot be bypassed. Used for circular conversations.
-- **Advisory** — Code adds warning text to LLM context. LLM can still choose to reply. Appropriate for low-confidence situations.
-- **Code** — Behavior is enforced by code logic (cannot be bypassed by LLM)
-- **Prompt** — Behavior is guided by skill prompts (LLM follows instructions)
-- **Code + Prompt** — Code provides guardrails; prompts guide nuanced decisions
-- **Documented** — Verified by documentation/artifacts, not runtime enforcement
-
-**⚠️ Key principle:** Advisory and Prompt enforcement are NOT sufficient for multi-agent feedback loops. When two LLMs both decide to "be polite," advisory text is ignored by both. Only Hard block / Hard skip enforcement prevents infinite loops between agents.

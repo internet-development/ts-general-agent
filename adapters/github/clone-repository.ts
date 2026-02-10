@@ -95,19 +95,3 @@ export async function cloneRepository(
   }
 }
 
-export async function pullRepository(
-  repoPath: string
-): Promise<GitHubResult<void>> {
-  //NOTE(self): Validate path
-  if (!isValidGitParam(repoPath)) {
-    return { success: false, error: `Invalid repo path: ${repoPath}` };
-  }
-
-  try {
-    //NOTE(self): Use execFile instead of exec to prevent shell injection
-    await execFileAsync('git', ['pull'], { cwd: repoPath });
-    return { success: true, data: undefined };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
