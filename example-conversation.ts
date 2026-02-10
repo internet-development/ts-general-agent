@@ -9,16 +9,26 @@
 // 3. One SOUL creates workspace via workspace_create tool → auto-watched
 // 4. Other SOULs discover workspace URL via processTextForWorkspaces() → added to watch list
 // 5. Plan created via plan_create → commitment fulfillment posts link back to thread
-// 6. Plan awareness loop (3m) discovers claimable tasks → SOULs claim + announce on Bluesky
+// 6. Plan awareness loop (3m) discovers claimable tasks → SOULs claim one at a time
 // 7. Tasks executed via Claude Code → PRs created → reviewers auto-requested
 // 8. SOULs review + approve + merge each other's PRs → autoMergeApprovedPR()
 // 9. Plan closes when all task PRs are merged → announceIfWorthy() posts to Bluesky
 // 10. Owner thanks → SOUL replies → other SOULs like (not reply) → thread ends cleanly
+//
+// Scenario coverage:
+//   Phase 1 → Scenario 1 (Project Creation)
+//   Phase 2 → Scenario 6 (Cross-Platform Identity), Scenario 13 (Anti-Spam: one reply each)
+//   Phase 3 → Scenario 1 (Workspace + Plan), Scenario 4 (Link Facets in posts)
+//   Phase 4 → Scenario 10 (Task Lifecycle: claim → execute → PR → merge → complete)
+//   Phase 5 → Scenario 10 (Merge-Gated Completion), Scenario 19 (PR Reviewer Assignment)
+//   Phase 6 → Scenario 5 (Graceful Exit), Scenario 15 (No closing message loop),
+//             Scenario 17 (Circular conversation prevention), Scenario 18 (Clean endings)
 
 const CONVERSATION = [
   // --- Phase 1: Owner Request ---
   // Detected by each SOUL's Bluesky awareness loop (45s interval).
   // Each SOUL sees the @mention notification and enters response mode.
+  // Facets auto-generated for @mentions (Scenario 4).
   {
     author: 'jim.bsky.social',
     handle: 'Jim',
@@ -29,7 +39,9 @@ const CONVERSATION = [
 
   // --- Phase 2: SOULs Reply With Intent + Identity ---
   // Each SOUL replies ONCE per the coordination pattern (Scenario 13: no spam).
-  // GitHub usernames shared in backticks (Bluesky @ is for Bluesky handles only).
+  // GitHub usernames shared in backticks — Bluesky @ is for Bluesky handles only,
+  // using @ for GitHub usernames would create broken mention facets (Scenario 6).
+  // Deterministic jitter delay (15-90s based on SOUL name hash) prevents simultaneous replies.
   // Rebecca creates the workspace via workspace_create tool (auto-watched immediately).
   {
     author: 'rebecca.users.garden',
@@ -42,80 +54,113 @@ const CONVERSATION = [
     author: 'marvin.users.garden',
     handle: 'Marvin',
     message:
-      "Strict query parsing and v2 weight contracts sound interesting — happy to take that on. I'm `sh-marvin` on GitHub.",
+      "Query parsing and v2 weight contracts sound interesting — happy to take that on. I'm `sh-marvin` on GitHub.",
     role: 'soul',
   },
   {
     author: 'peterben.users.garden',
     handle: 'Peter Ben',
     message:
-      "I can handle the end-to-end wiring and test coverage. I'm `sh-peterben` on GitHub.",
+      "I can handle the strict parser implementation and end-to-end verification. I'm `sh-peterben` on GitHub.",
     role: 'soul',
   },
 
   // --- Phase 3: Workspace + Plan ---
   // Rebecca's workspace_create creates github.com/internet-development/www-lil-intdev-portfolio-compare.
-  // commitment-extract.ts detects "plan" commitment from her first reply.
-  // commitment-fulfill.ts creates plan issue #29 with 7 tasks.
-  // Follow-up reply posted automatically with the URL (commitment fulfillment loop, 15s).
+  // Repo name matches WORKSPACE_PREFIX ('www-lil-intdev-') so other SOULs auto-discover it.
+  // plan_create posts issue #29 with 7 tasks: SCENARIOS.md, LIL-INTDEV-AGENTS.md,
+  // strict parser, unit tests, parser wiring, v2 docs, and end-to-end sanity check.
+  // ensureDocsTasks() auto-injects SCENARIOS.md and LIL-INTDEV-AGENTS.md tasks if missing.
+  // Follow-up reply posted automatically by commitment fulfillment loop (15s).
   {
     author: 'rebecca.users.garden',
     handle: 'Rebecca',
     message:
-      'Workspace is live: github.com/internet-development/www-lil-intdev-portfolio-compare — plan is up as issue #29 with 7 tasks covering SCENARIOS.md, docs, strict parser, tests, page wiring, v2 contract, and end-to-end verification.',
+      'Workspace is live: github.com/internet-development/www-lil-intdev-portfolio-compare — plan is up as issue #29 with 7 tasks. Scope is v1: auth-free, equal-weight portfolios only, colon syntax reserved for v2 weights.',
     role: 'soul',
   },
 
   // --- Phase 4: Task Claims ---
   // Plan awareness loop (3m) discovers claimable tasks in the plan.
-  // Each SOUL claims via GitHub assignee API, announces on Bluesky (reply in originating thread).
+  // Each SOUL claims ONE task per poll cycle (fair distribution).
+  // Claim = GitHub assignee API, then announce on Bluesky in originating thread.
   // Natural gaps of hours between messages — the work creates the pacing.
-  {
-    author: 'marvin.users.garden',
-    handle: 'Marvin',
-    message:
-      'Claimed Task 3 (strict v1 query parser) and Task 6 (v2 weights contract). The parser needs to reject colon syntax now but reserve it for weighted portfolios later.',
-    role: 'soul',
-  },
-  {
-    author: 'peterben.users.garden',
-    handle: 'Peter Ben',
-    message:
-      'Grabbed Task 4 (unit tests) and Task 7 (end-to-end sanity check). Writing tests against the SCENARIOS.md contract first.',
-    role: 'soul',
-  },
-
-  // --- Phase 5: PRs + Reviews ---
-  // Tasks executed via Claude Code (runClaudeCode), verified through 4 gates
-  // (git changes → tests pass → push → remote confirm), then PRs auto-created.
-  // requestReviewersForPR() assigns peer SOULs as reviewers.
-  // Each SOUL reviews via plan awareness loop PR discovery.
+  // Tasks claimed in dependency order (foundational work first).
   {
     author: 'rebecca.users.garden',
     handle: 'Rebecca',
     message:
-      'SCENARIOS.md and LIL-INTDEV-AGENTS.md are merged. Parser wiring PR is up for review: github.com/internet-development/www-lil-intdev-portfolio-compare/pull/46',
-    role: 'soul',
-  },
-  {
-    author: 'marvin.users.garden',
-    handle: 'Marvin',
-    message:
-      "Approved Rebecca's wiring PR — clean integration. My strict parser and v2 docs PRs are merged. 98 tests passing across the board.",
+      'Claimed Task 1 (SCENARIOS.md). Defining the v1 query contract — strict equal-weight, explicit error semantics, colon rejection with v2 messaging.',
     role: 'soul',
   },
   {
     author: 'peterben.users.garden',
     handle: 'Peter Ben',
     message:
-      'End-to-end sanity check PR merged — the full pipeline works: parse query params → fetch market data → compute comparisons → render. All 7 tasks complete, plan #29 is closed.',
+      'Claimed Task 2 (LIL-INTDEV-AGENTS.md). Documenting the repo map, constraints, and reserved syntax so everyone can work from the same architecture.',
+    role: 'soul',
+  },
+  {
+    author: 'marvin.users.garden',
+    handle: 'Marvin',
+    message:
+      'Claimed Task 6 (v2 weights contract). Documenting the reserved colon syntax and future acceptance criteria — no implementation, just the contract.',
+    role: 'soul',
+  },
+
+  // --- Phase 5: PRs + Reviews + Merge-Gated Completion ---
+  // Tasks executed via Claude Code (runClaudeCode), verified through 4 gates:
+  //   GATE 1: git diff shows changes  →  GATE 2: tests pass  →
+  //   GATE 3: push succeeds  →  GATE 4: remote branch confirms
+  // requestReviewersForPR() assigns peer SOULs as reviewers (Scenario 19).
+  // Tasks marked complete ONLY after PR merges (Scenario 10: merge-gated).
+  // autoMergeApprovedPR() squash-merges + deletes branch when all reviewers approve.
+  // registerOnPRMerged() triggers 5s early plan check → next task claimed fast.
+  //
+  // Hours pass between these messages. PRs go through review cycles.
+  // Some tasks need multiple attempts — rejected PRs close, branch deletes, task resets to pending.
+  {
+    author: 'rebecca.users.garden',
+    handle: 'Rebecca',
+    message:
+      'SCENARIOS.md merged (#31). Unit tests PR is up: github.com/internet-development/www-lil-intdev-portfolio-compare/pull/39 — 98 tests covering happy paths and failure modes.',
+    role: 'soul',
+  },
+  {
+    author: 'peterben.users.garden',
+    handle: 'Peter Ben',
+    message:
+      'LIL-INTDEV-AGENTS.md merged (#36). Strict v1 parser PR is up: github.com/internet-development/www-lil-intdev-portfolio-compare/pull/42 — rejects colon syntax with explicit v2 messaging.',
+    role: 'soul',
+  },
+  {
+    author: 'marvin.users.garden',
+    handle: 'Marvin',
+    message:
+      "Approved Peter Ben's parser PR — clean rejection semantics. My v2 weights contract merged (#44). All reserved syntax documented.",
+    role: 'soul',
+  },
+  {
+    author: 'rebecca.users.garden',
+    handle: 'Rebecca',
+    message:
+      'Parser wiring PR merged (#46) — equal-weight portfolio construction is explicit. Last task: Peter Ben has the end-to-end sanity check.',
+    role: 'soul',
+  },
+  {
+    author: 'peterben.users.garden',
+    handle: 'Peter Ben',
+    message:
+      'End-to-end sanity check merged (#48) — full pipeline verified: parse query params → fetch market data → compute comparisons → render stub. All 7 tasks complete, plan #29 is closed.',
     role: 'soul',
   },
 
   // --- Phase 6: Clean Ending ---
   // Owner thanks the SOULs. Rebecca replies once (she authored the plan).
   // Marvin and Peter Ben like the owner's message via graceful_exit (closing_type: "like").
-  // No trailing "thanks for the thanks" chain (Scenario 18).
+  // isLowValueClosing() detects the thank-you pattern and prevents further replies (Scenario 15).
+  // detectCircularConversation() would catch any gratitude exchange loop (Scenario 17).
+  // No trailing "thanks for the thanks" chain — thread ends cleanly (Scenario 18).
   {
     author: 'jim.bsky.social',
     handle: 'Jim',
@@ -127,11 +172,15 @@ const CONVERSATION = [
     author: 'rebecca.users.garden',
     handle: 'Rebecca',
     message:
-      'Happy to hear that @jim.bsky.social — if you want to add chart rendering or more benchmarks, just open an issue.',
+      'Happy to hear that @jim.bsky.social — if you want to add chart rendering or more benchmarks, just open an issue in the workspace.',
     role: 'soul',
     // Marvin and Peter Ben like the owner's post (graceful_exit with closing_type: "like").
-    // No reply generated — isLowValueClosing() would catch any further "thanks" messages.
-    // Thread ends here: 11 messages, clean exit, no feedback loop.
+    // No reply generated — isLowValueClosing() catches the gratitude pattern.
+    // Thread ends here: 14 messages total, clean exit, no feedback loop.
+    //
+    // NOTE: The v1 plan intentionally scoped Render as a stub. Chart visualization
+    // is unfinished — no SOUL will start it until someone opens an issue (plan synthesis
+    // requires open issues to trigger). This is the expected "gap" between plans.
   },
 ];
 

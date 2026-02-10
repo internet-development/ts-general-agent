@@ -41,6 +41,8 @@ export interface WatchedWorkspace {
   activePlanIssues: number[];
   //NOTE(self): When we last attempted to synthesize a plan from open issues
   lastPlanSynthesisAttempt?: string;
+  //NOTE(self): When we last ran a workspace health check (completion assessment)
+  lastHealthCheckAttempt?: string;
 }
 
 //NOTE(self): A discovered plan with claimable tasks
@@ -535,7 +537,7 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
         state: 'open',
         sort: 'updated',
         direction: 'desc',
-        per_page: 10,
+        per_page: 30,
       });
 
       if (!prsResult.success) {
@@ -1158,6 +1160,53 @@ export function getWorkspacesNeedingPlanSynthesis(): WatchedWorkspace[] {
 
     return true;
   });
+}
+
+//NOTE(self): Health Check Cooldown — 24 hours between checks per workspace
+//NOTE(self): Much longer than plan synthesis (1h) because health checks are expensive (LLM call + file reads)
+const HEALTH_CHECK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+//NOTE(self): Get workspaces that need a health check — no open plans, no open issues (handled in scheduler),
+//NOTE(self): and cooldown expired. The scheduler calls this after confirming 0 open issues.
+export function getWorkspacesNeedingHealthCheck(): WatchedWorkspace[] {
+  const state = loadState();
+  const workspaces = Object.values(state.workspaces);
+  const now = Date.now();
+
+  return workspaces.filter(ws => {
+    //NOTE(self): Must have zero active plan issues
+    if (ws.activePlanIssues.length > 0) return false;
+
+    //NOTE(self): Must have been polled at least once
+    if (!ws.lastPolled) return false;
+
+    //NOTE(self): Cooldown check — skip if last attempt was within 24 hours
+    if (ws.lastHealthCheckAttempt) {
+      const lastAttempt = new Date(ws.lastHealthCheckAttempt).getTime();
+      if (now - lastAttempt < HEALTH_CHECK_COOLDOWN_MS) return false;
+    }
+
+    return true;
+  });
+}
+
+//NOTE(self): Update the health check timestamp for a workspace (called after health check attempt)
+export function updateWorkspaceHealthCheckTimestamp(owner: string, repo: string): void {
+  const state = loadState();
+  const key = getWorkspaceKey(owner, repo);
+  if (state.workspaces[key]) {
+    state.workspaces[key].lastHealthCheckAttempt = new Date().toISOString();
+    saveState();
+  }
+}
+
+//NOTE(self): Check if a specific workspace is due for a health check (cooldown expired)
+export function isHealthCheckDue(workspace: WatchedWorkspace): boolean {
+  if (workspace.lastHealthCheckAttempt) {
+    const lastAttempt = new Date(workspace.lastHealthCheckAttempt).getTime();
+    if (Date.now() - lastAttempt < HEALTH_CHECK_COOLDOWN_MS) return false;
+  }
+  return true;
 }
 
 //NOTE(self): Close issues that were rolled up into a synthesized plan

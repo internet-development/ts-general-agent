@@ -138,6 +138,8 @@ import {
   updateWorkspaceSynthesisTimestamp,
   closeRolledUpIssues,
   isWatchingWorkspace,
+  isHealthCheckDue,
+  updateWorkspaceHealthCheckTimestamp,
   type ReviewablePR,
 } from '@modules/workspace-discovery.js';
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
@@ -3421,6 +3423,12 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           //NOTE(self): No issues to synthesize from — update timestamp so we don't check again for 1 hour
           updateWorkspaceSynthesisTimestamp(workspace.owner, workspace.repo);
           logger.debug('No open issues to synthesize plan from', { workspace: `${workspace.owner}/${workspace.repo}` });
+
+          //NOTE(self): Health check — if no open issues AND no active plans, assess workspace completeness
+          //NOTE(self): This catches the gap where a plan completes, all issues close, but work remains
+          if (isHealthCheckDue(workspace)) {
+            await this.checkWorkspaceHealth(workspace);
+          }
           continue;
         }
 
@@ -3651,6 +3659,152 @@ Create a plan using \`plan_create\` that synthesizes all of the above issues int
     }
 
     return false;
+  }
+
+  //NOTE(self): Workspace Health Check — assess completeness when 0 open issues and 0 active plans
+  //NOTE(self): Reads README.md + LIL-INTDEV-AGENTS.md, fetches recent closed plans, asks LLM if work remains
+  //NOTE(self): If incomplete, LLM creates a follow-up issue → normal plan synthesis picks it up next cycle
+  private async checkWorkspaceHealth(workspace: { owner: string; repo: string; discoveredInThread?: string }): Promise<void> {
+    const workspaceKey = `${workspace.owner}/${workspace.repo}`;
+    logger.info('Running workspace health check', { workspace: workspaceKey });
+
+    try {
+      //NOTE(self): Fetch README.md (skip if missing — some repos don't have one)
+      const readmeResult = await github.getFileContent(workspace.owner, workspace.repo, 'README.md');
+      const readmeContent = readmeResult.success ? readmeResult.data : null;
+
+      //NOTE(self): Fetch LIL-INTDEV-AGENTS.md (skip if missing)
+      const agentsResult = await github.getFileContent(workspace.owner, workspace.repo, 'LIL-INTDEV-AGENTS.md');
+      const agentsContent = agentsResult.success ? agentsResult.data : null;
+
+      //NOTE(self): If neither file exists, skip health check — nothing to assess against
+      if (!readmeContent && !agentsContent) {
+        logger.debug('No README or agents doc found, skipping health check', { workspace: workspaceKey });
+        updateWorkspaceHealthCheckTimestamp(workspace.owner, workspace.repo);
+        return;
+      }
+
+      //NOTE(self): Fetch last 5 closed plan issues for context on what was planned
+      const closedPlansResult = await github.listIssues({
+        owner: workspace.owner,
+        repo: workspace.repo,
+        state: 'closed',
+        labels: ['plan'],
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 5,
+      });
+
+      let closedPlanContext = 'No closed plans found.';
+      if (closedPlansResult.success && closedPlansResult.data.length > 0) {
+        closedPlanContext = closedPlansResult.data.map(plan => {
+          const bodyPreview = plan.body ? plan.body.substring(0, 1000) : '(no body)';
+          return `Plan #${plan.number}: ${plan.title}\nClosed: ${plan.closed_at || 'unknown'}\nBody:\n${bodyPreview}`;
+        }).join('\n\n---\n\n');
+      }
+
+      //NOTE(self): Build LLM prompt for completeness assessment
+      const config = this.appConfig;
+      const soul = readSoul(config.paths.soul);
+      const selfContent = readSelf(config.paths.selfmd);
+
+      const ghWorkspaceState = `Active workspace: \`${workspace.owner}/${workspace.repo}\` exists. This workspace has 0 open issues and 0 active plans. Running health check.`;
+      const ghWorkspaceSection = renderSkillSection('AGENT-WORKSPACE-DECISION', 'Workspace Context', { workspaceState: ghWorkspaceState });
+
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-GITHUB-RESPONSE', {
+        peerSection: '',
+        workspaceSection: ghWorkspaceSection ? '\n' + ghWorkspaceSection + '\n' : '',
+        owner: workspace.owner,
+        repo: workspace.repo,
+        number: '0',
+        githubUsername: config.github.username,
+      });
+
+      const readmeSection = readmeContent
+        ? `## README.md\n\n\`\`\`\n${readmeContent}\n\`\`\``
+        : '## README.md\n\nNot found.';
+
+      const agentsSection = agentsContent
+        ? `## LIL-INTDEV-AGENTS.md\n\n\`\`\`\n${agentsContent}\n\`\`\``
+        : '## LIL-INTDEV-AGENTS.md\n\nNot found.';
+
+      const userMessage = `# Workspace Health Check — Completion Assessment
+
+**Workspace:** \`${workspace.owner}/${workspace.repo}\`
+**Status:** 0 open issues, 0 active plans
+
+This workspace has no open issues and no active plans. Assess whether the project is actually complete or if work remains.
+
+${readmeSection}
+
+${agentsSection}
+
+## Recent Closed Plans
+
+${closedPlanContext}
+
+---
+
+## Your Task
+
+Review the README and agents document for:
+- Status tables with "Not started", "In Progress", or incomplete indicators
+- Architectural claims or features that may not be fully implemented
+- Sections describing planned but unfinished work
+- Gaps between what the most recent closed plan covered and what the README describes
+
+**If the project appears complete:** Do nothing — the workspace is healthy.
+
+**If work remains:** Use \`github_create_issue\` to create ONE issue summarizing the remaining work. The issue should:
+- Have a clear, actionable title (e.g. "Remaining work: Render stage, API integration")
+- List specific tasks that need to be done
+- Reference any relevant plan numbers
+- Be concrete enough to synthesize into a plan
+
+Do NOT create an issue for minor polish, documentation-only gaps, or subjective improvements. Only create an issue if there is clearly unfinished functional work.`;
+
+      const messages: Message[] = [{ role: 'user', content: userMessage }];
+
+      ui.startSpinner(`Health check: ${workspaceKey}`);
+
+      let response = await chatWithTools({
+        system: systemPrompt,
+        messages,
+        tools: AGENT_TOOLS,
+      });
+
+      //NOTE(self): Execute tool calls in a while loop (same pattern as synthesizePlanForWorkspaces)
+      while (response.toolCalls.length > 0) {
+        const results = await executeTools(response.toolCalls);
+
+        //NOTE(self): Check if an issue was created
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i];
+          const result = results[i];
+          if (tc.name === 'github_create_issue' && !result.is_error) {
+            logger.info('Health check created follow-up issue', { workspace: workspaceKey, result: result.content.substring(0, 200) });
+          }
+        }
+
+        messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+        messages.push(createToolResultMessage(results));
+
+        response = await chatWithTools({
+          system: systemPrompt,
+          messages,
+          tools: AGENT_TOOLS,
+        });
+      }
+
+      ui.stopSpinner();
+      logger.info('Workspace health check complete', { workspace: workspaceKey });
+    } catch (err) {
+      ui.stopSpinner();
+      logger.error('Error during workspace health check', { workspace: workspaceKey, error: String(err) });
+    }
+
+    //NOTE(self): Always update timestamp — even on error, to avoid tight retry loops
+    updateWorkspaceHealthCheckTimestamp(workspace.owner, workspace.repo);
   }
 
   //NOTE(self): Execute a claimed task via Claude Code
