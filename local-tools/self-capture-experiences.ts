@@ -31,7 +31,7 @@ export interface Experience {
   //NOTE(self): The heart of the experience - what actually happened
   description: string;
   //NOTE(self): Optional context
-  source?: 'bluesky' | 'github';
+  source?: 'bluesky' | 'github' | 'terminal';
   person?: string; // Who was involved (handle or username)
   url?: string;    // Reference if helpful
   //NOTE(self): Has this been integrated into SELF.md during reflection?
@@ -86,7 +86,7 @@ export function recordExperience(
   type: ExperienceType,
   description: string,
   context?: {
-    source?: 'bluesky' | 'github';
+    source?: 'bluesky' | 'github' | 'terminal';
     person?: string;
     url?: string;
   }

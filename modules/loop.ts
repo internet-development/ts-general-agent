@@ -11,6 +11,7 @@ import { executeTools } from '@modules/executor.js';
 import { ui, getTerminalWidth } from '@modules/ui.js';
 import { buildSystemPrompt } from '@modules/skills.js';
 import { recordSignificantEvent, addInsight } from '@modules/engagement.js';
+import { recordExperience } from '@local-tools/self-capture-experiences.js';
 import { getScheduler } from '@modules/scheduler.js';
 import { recordFriction } from '@local-tools/self-detect-friction.js';
 import { createRequire } from 'module';
@@ -261,9 +262,22 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
       ui.printResponse(response.text);
     }
 
-    //NOTE(self): Owner interaction is always significant
+    //NOTE(self): Owner interaction is always significant — capture the ACTUAL conversation
     recordSignificantEvent('owner_interaction');
-    addInsight('Owner spoke - what did they need?');
+
+    //NOTE(self): Record the owner's message as an experience so reflection can integrate it into SELF.md
+    const ownerMessage = input.length > 500 ? input.slice(0, 500) + '...' : input;
+    recordExperience(
+      'owner_guidance',
+      `Owner said (terminal): "${ownerMessage}"`,
+      { source: 'terminal' }
+    );
+
+    //NOTE(self): If the SOUL responded, capture that too — the pair forms the full experience
+    if (response.text) {
+      const soulResponse = response.text.length > 500 ? response.text.slice(0, 500) + '...' : response.text;
+      addInsight(`Owner asked: "${ownerMessage}" — I responded: "${soulResponse}"`);
+    }
   } catch (error) {
     ui.stopSpinner('Error processing input', false);
 
