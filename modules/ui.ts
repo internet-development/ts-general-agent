@@ -354,8 +354,8 @@ export class TerminalUI {
     const isPast = nextAt.getTime() <= Date.now();
 
     const icon = isPast ? SYM.arrowRight : SYM.ring;
-    const iconColor = isPast ? ANSI.green : (isImminent ? ANSI.yellow : ANSI.cyan);
-    const timeColor = isPast ? ANSI.green : (isImminent ? ANSI.yellow : ANSI.white);
+    const iconColor = isPast ? ANSI.green : isImminent ? ANSI.yellow : ANSI.cyan;
+    const timeColor = isPast ? ANSI.green : isImminent ? ANSI.yellow : ANSI.white;
     const timeStr = `in ${timeRemaining}`.padEnd(timePadded);
 
     return `  ${iconColor}${icon}${ANSI.reset} ${ANSI.white}${labelPadded}${ANSI.reset}${timeColor}${timeStr}${ANSI.reset}${ANSI.dim}(${description})${ANSI.reset}`;
@@ -547,12 +547,7 @@ export class TerminalUI {
 
     //NOTE(self): Draw timer lines (4 lines showing scheduled actions)
     if (this.timers) {
-      const timerLines = [
-        this.formatTimerLine('Awareness', this.timers.awareness.nextAt, 'checking notifications'),
-        this.formatTimerLine('Expression', this.timers.expression.nextAt, this.timers.expression.description || 'next post'),
-        this.formatTimerLine('Reflection', this.timers.reflection.nextAt, 'updating SELF.md'),
-        this.formatTimerLine('Improvement', this.timers.improvement.nextAt, this.timers.improvement.description || 'code changes'),
-      ];
+      const timerLines = [this.formatTimerLine('Awareness', this.timers.awareness.nextAt, 'checking notifications'), this.formatTimerLine('Expression', this.timers.expression.nextAt, this.timers.expression.description || 'next post'), this.formatTimerLine('Reflection', this.timers.reflection.nextAt, 'updating SELF.md'), this.formatTimerLine('Improvement', this.timers.improvement.nextAt, this.timers.improvement.description || 'code changes')];
 
       for (const timerLine of timerLines) {
         process.stdout.write(CSI.moveTo(currentRow, 1));
@@ -579,9 +574,9 @@ export class TerminalUI {
     currentRow++;
 
     //NOTE(self): Build the input box lines
-    const statusTag = this.availableForMessage ? '[Available]' : '[Thinking...]';
+    const statusTag = this.availableForMessage ? '[AVAILABLE]' : '[THINKING]';
     const statusColor = this.availableForMessage ? ANSI.green : ANSI.yellow;
-    const hotkeys = `ESC: clear  Ctrl+C: quit  Enter: send`;
+    const hotkeys = `[ESC] CLEAR  [CTRL+C] QUIT  [Enter] SEND`;
     //NOTE(self): Calculate padding: width - ┌─ (2) - space (1) - statusTag - spaces (2) - hotkeys - space (1) - ─┐ (2)
     const topPadding = Math.max(0, width - statusTag.length - hotkeys.length - 8);
     //NOTE(self): Structure: red(┌─) + space + coloredStatus + reset + spaces + hotkeys + space + red(─...─┐)
@@ -636,7 +631,7 @@ export class TerminalUI {
 
     //NOTE(self): Position cursor on the correct visible row
     const cursorVisibleRow = cursorLineIndex - displayStartLine;
-    const inputLineRow = (currentRow - VISIBLE_LINES) + cursorVisibleRow;
+    const inputLineRow = currentRow - VISIBLE_LINES + cursorVisibleRow;
     const cursorCol = Math.min(cursorColIndex, innerWidth) + 3; //NOTE(self): +3 for "│ " prefix
     process.stdout.write(CSI.moveTo(inputLineRow, Math.max(3, cursorCol)));
   }
