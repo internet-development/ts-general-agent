@@ -839,7 +839,7 @@ A project is not done when one SOUL finishes its tasks. It's done when **all par
 
 1. Each SOUL maintains a checklist of what they're responsible for
 2. When a SOUL completes its work, it comments on the plan issue: "My tasks are complete. Here's what was delivered: [summary]"
-3. When the last task in a plan is completed, `reportTaskComplete` returns `planComplete: true`. Both the scheduler and executor paths announce the completion on Bluesky via `announceIfWorthy()` (from `modules/announcement.ts`) — closing the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
+3. When the last task in a plan is completed, `reportTaskComplete` returns `planComplete: true`. Both the scheduler and executor paths announce the completion on Bluesky via `announceIfWorthy()` (from `local-tools/self-announcement.ts`) — closing the feedback loop from Bluesky request → GitHub execution → Bluesky celebration
 4. If ALL SOULs have posted completion summaries and no open issues remain, the project is done
 5. New GitHub issues or expanded Bluesky asks reopen the project — the loop is never permanently closed
 6. SOULs can create new checklists as scope emerges — checklists are not static
@@ -1186,7 +1186,7 @@ No task reaches "complete" unless ALL gates pass. Each gate failure produces a s
 1. `scheduler.ts:executeClaimedTask()` — the scheduler's autonomous plan-polling path
 2. `executor.ts:plan_execute_task` — the LLM-invoked tool path
 
-Both paths must stay in sync. Any change to the gate sequence or post-completion behavior (quality loop comment, announcements, experience recording) must be applied to both. The shared `announceIfWorthy()` function in `modules/announcement.ts` is used by both paths to ensure identical Bluesky announcement behavior.
+Both paths must stay in sync. Any change to the gate sequence or post-completion behavior (quality loop comment, announcements, experience recording) must be applied to both. The shared `announceIfWorthy()` function in `local-tools/self-announcement.ts` is used by both paths to ensure identical Bluesky announcement behavior.
 
 ### Claude Code Execution for Tasks
 
@@ -1236,12 +1236,12 @@ Proceed.
 
 | File                                           | Purpose                                                                                 |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `modules/self-github-workspace-discovery.ts`   | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
+| `modules/github-workspace-discovery.ts`        | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
 | `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed)                                  |
 | `modules/peer-awareness.ts`                    | Dynamic peer SOUL discovery and cross-platform identity linking                         |
 | `modules/commitment-queue.ts`                  | Track pending commitments (JSONL persistence, dedup, stale cleanup)                     |
-| `modules/commitment-extract.ts`                | LLM-based extraction of action commitments from replies                                 |
-| `modules/commitment-fulfill.ts`                | Dispatch and execute promised actions                                                   |
+| `local-tools/self-commitment-extract.ts`       | LLM-based extraction of action commitments from replies                                 |
+| `local-tools/self-commitment-fulfill.ts`       | Dispatch and execute promised actions                                                   |
 | `local-tools/self-plan-parse.ts`               | Parse plan markdown                                                                     |
 | `local-tools/self-plan-create.ts`              | Create plan issues (checks repo for existing docs before injection)                     |
 | `adapters/github/get-repo-contents.ts`         | Fetch repo file listing (used for doc task idempotency check)                           |

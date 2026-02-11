@@ -154,7 +154,7 @@ export async function handleGithubCreatePr(call: ToolCall): Promise<ToolResult> 
   const result = await github.createPullRequest({ owner, repo, title, body, head, base, draft });
   if (result.success) {
     if (result.data.number) {
-      requestReviewersForPR(owner, repo, result.data.number).catch(() => {});
+      requestReviewersForPR(owner, repo, result.data.number).catch(err => logger.warn('Failed to request PR reviewers', { error: String(err), prNumber: result.data.number }));
     }
 
     return {

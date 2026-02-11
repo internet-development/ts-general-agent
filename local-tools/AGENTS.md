@@ -59,8 +59,6 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | `self-detect-` | Detection | Pattern detection (friction, etc.) |
 | `self-identify-` | Identification | Finding opportunities (aspirations, etc.) |
 | `self-capture-` | Capture | Recording data (experiences, etc.) |
-| `self-enrich-` | Enrichment | Adding context (social graph, etc.) |
-| `self-manage-` | Management | Managing state (attribution, etc.) |
 | `self-plan-` | Planning | Multi-SOUL plan creation and parsing |
 | `self-task-` | Task execution | Claiming and executing tasks from plans |
 | `self-workspace-` | Workspaces | Collaborative workspace discovery and management |
@@ -307,8 +305,7 @@ describe('self-detect-friction', () => {
 2. Create `local-tools/{prefix}-{name}.ts`
 3. Export one primary function
 4. Add types file if needed: `local-tools/{prefix}-types.ts`
-5. Update `local-tools/index.ts` with exports
-6. Update this AGENTS.md
+5. Update this AGENTS.md
 
 ### Checklist
 - [ ] Single primary function exported
@@ -316,7 +313,6 @@ describe('self-detect-friction', () => {
 - [ ] Uses modules for shared state
 - [ ] Handles errors gracefully
 - [ ] Has JSDoc documentation
-- [ ] Added to index.ts
 - [ ] Added to this AGENTS.md
 
 ## Migration Notes
@@ -325,6 +321,5 @@ When migrating a module to a local-tool:
 
 1. **Identify the boundary** - What functions are the public API vs internal helpers?
 2. **Check dependencies** - Update imports in scheduler and other consumers
-3. **Update index.ts** - Export from the new location
-4. **Delete the old module** - Don't leave dead code
-5. **Update modules/AGENTS.md** - Document the migration
+3. **Delete the old module** - Don't leave dead code
+4. **Update AGENTS.md files** - Document the migration in both local-tools/AGENTS.md and modules/AGENTS.md

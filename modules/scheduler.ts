@@ -1214,7 +1214,7 @@ export class AgentScheduler {
             const postUri = pn.notification.uri;
             const postCid = pn.notification.cid;
             if (postUri && postCid) {
-              atproto.likePost({ uri: postUri, cid: postCid }).catch(() => {});
+              atproto.likePost({ uri: postUri, cid: postCid }).catch(err => logger.warn('Failed to like closing message', { error: String(err), postUri }));
               //NOTE(self): Also conclude the conversation — the goodbye was received
               const rootUri = record?.reply?.root?.uri || postUri;
               markBlueskyConversationConcluded(rootUri, 'Closing message received — liked and concluded');
@@ -1228,7 +1228,7 @@ export class AgentScheduler {
             const postUri = pn.notification.uri;
             const postCid = pn.notification.cid;
             if (postUri && postCid) {
-              atproto.likePost({ uri: postUri, cid: postCid }).catch(() => {});
+              atproto.likePost({ uri: postUri, cid: postCid }).catch(err => logger.warn('Failed to like emoji reaction', { error: String(err), postUri }));
               const rootUri = record?.reply?.root?.uri || postUri;
               markBlueskyConversationConcluded(rootUri, 'Emoji reaction received — conversation concluded');
             }
@@ -1248,7 +1248,7 @@ export class AgentScheduler {
                   const rootUri = threadResult.data.thread.post.record?.reply?.root?.uri || subjectUri;
                   markBlueskyConversationConcluded(rootUri, 'Like received on our post — conversation concluded');
                 }
-              }).catch(() => { /* non-fatal */ });
+              }).catch(err => logger.warn('Failed to look up thread for like-based conclusion', { error: String(err), subjectUri }));
             }
           }
 
@@ -1615,7 +1615,7 @@ export class AgentScheduler {
             const postUri = pn.notification.uri;
             const postCid = pn.notification.cid;
             if (postUri && postCid) {
-              atproto.likePost({ uri: postUri, cid: postCid }).catch(() => {});
+              atproto.likePost({ uri: postUri, cid: postCid }).catch(err => logger.warn('Failed to like post for auto-conclusion', { error: String(err), postUri }));
             }
             markBlueskyConversationConcluded(rootUri, `Auto-concluded after response: ${postResponseAnalysis.reason}`);
             logger.info('Auto-concluded conversation after response', {
@@ -4570,11 +4570,6 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
   //NOTE(self): ========== PUBLIC API ==========
 
-  //NOTE(self): Record friction from external sources
-  noteFriction(category: FrictionCategory, description: string, context: string): void {
-    recordFriction(category, description, context);
-  }
-
   //NOTE(self): Get current state for UI
   getState(): SchedulerState {
     return { ...this.state };
@@ -4665,10 +4660,6 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     }
     await this.growthCycle();
     return true;
-  }
-
-  async forceGitHubAwareness(): Promise<void> {
-    await this.githubAwarenessCheck();
   }
 
   //NOTE(self): Get scheduled timers for UI display

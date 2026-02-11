@@ -106,8 +106,6 @@ These were previously modules but have been migrated to local-tools as they repr
 | `friction.ts` | `self-detect-friction.ts` | Optional self-improvement trigger |
 | `aspiration.ts` | `self-identify-aspirations.ts` | Optional growth tracking |
 | `experiences.ts` | `self-capture-experiences.ts` | Optional reflection enhancement |
-| `social-graph.ts` | `self-enrich-social-context.ts` | Optional context enrichment |
-| `attribution.ts` | `self-manage-attribution.ts` | Optional attribution tracking |
 
 ## Design Principles
 
@@ -277,6 +275,6 @@ Before adding a module, verify it meets the criteria:
 
 If adding:
 1. Create `modules/{name}.ts`
-2. Export from `modules/index.ts`
+2. Import directly from `@modules/{name}.js` where needed
 3. Add to this AGENTS.md
 4. Document state shape if stateful

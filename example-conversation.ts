@@ -35,7 +35,7 @@ const CONVERSATION: Message[] = [
       { description: 'watchWorkspace: Auto-watch the new workspace with Bluesky thread URI as discoveredInThread context', location: 'LOCAL' },
       { description: 'linkPeerIdentities: Register sh-rebecca <> rebecca.users.garden in .memory/discovered_peers.json', location: 'LOCAL' },
       { description: 'captureExperience: Record owner_guidance experience — "Owner wants portfolio comparison app with URL query interface"', location: 'LOCAL' },
-      { description: 'recordInteraction: Log interaction with owner for relationship tracking in self-engagement.ts', location: 'LOCAL' },
+      { description: 'recordInteraction: Log interaction with owner for relationship tracking in engagement.ts', location: 'LOCAL' },
     ],
   },
   {

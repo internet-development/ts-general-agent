@@ -63,7 +63,7 @@ export interface TaskExecutionResult {
 }
 
 //NOTE(self): Build the task execution prompt for Claude Code
-export function buildTaskPrompt(params: {
+function buildTaskPrompt(params: {
   plan: ParsedPlan;
   task: ParsedTask;
   repoFullName: string;

@@ -629,12 +629,6 @@ function getInvitationPromptsLoaded(): { choice: string[]; bounded: string[]; di
   return _invitationPromptsCache;
 }
 
-export const INVITATION_PROMPTS = {
-  get choice() { return getInvitationPromptsLoaded().choice; },
-  get bounded() { return getInvitationPromptsLoaded().bounded; },
-  get direct() { return getInvitationPromptsLoaded().direct; },
-};
-
 //NOTE(self): Get a random invitation prompt to append
 //NOTE(self): Weighted toward choice questions (strongest) but includes variety
 export function getInvitationPrompt(type?: 'choice' | 'bounded' | 'direct'): string {

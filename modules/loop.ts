@@ -304,8 +304,3 @@ async function processOwnerInput(input: string, config: Config): Promise<void> {
   }
 }
 
-//NOTE(self): Legacy export for backward compatibility
-//NOTE(self): Just redirects to the scheduler-based loop
-export async function runLoop(callbacks?: LoopCallbacks): Promise<void> {
-  return runSchedulerLoop(callbacks);
-}

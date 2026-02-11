@@ -144,15 +144,6 @@ export async function releaseTaskClaim(params: ClaimTaskParams): Promise<{ succe
   return { success: true };
 }
 
-//NOTE(self): Get the next claimable task from a plan
-export function getNextClaimableTask(plan: ParsedPlan): ParsedTask | null {
-  const claimable = getClaimableTasks(plan);
-  if (claimable.length === 0) return null;
-
-  //NOTE(self): Return the first claimable task (lowest number)
-  return claimable.sort((a, b) => a.number - b.number)[0];
-}
-
 //NOTE(self): Mark a task as in_progress (after claiming)
 //NOTE(self): Uses freshUpdateTaskInPlan to avoid clobbering concurrent writes
 export async function markTaskInProgress(
