@@ -22,6 +22,7 @@ import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
 import { getConfig } from '@modules/config.js';
 import { getConversation } from '@modules/github-engagement.js';
+import { getGitHubPhrase } from '@modules/voice-phrases.js';
 
 //NOTE(self): Path to watched workspaces state
 const WATCHED_WORKSPACES_PATH = '.memory/watched_workspaces.json';
@@ -1189,11 +1190,12 @@ export async function createFinishedSentinel(
   summary: string,
 ): Promise<number | null> {
   try {
+    const body = getGitHubPhrase('workspace_finished', { summary });
     const result = await createIssue({
       owner,
       repo,
       title: `${FINISHED_TITLE_PREFIX} ${summary}`,
-      body: `This workspace has been assessed as complete.\n\n**Summary:** ${summary}\n\n---\n\n**What this means:**\n- No new plans will be created\n- No new tasks will be claimed\n- SOULs will not start new work in this workspace\n\n**To restart work:** Close this issue, or comment on it describing what you need. SOULs will pick it up automatically on the next poll cycle.`,
+      body,
       labels: [FINISHED_LABEL],
     });
 

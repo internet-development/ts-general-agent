@@ -101,7 +101,7 @@ The `self-extract` module can parse any of these sections to generate expression
 ### `voice-phrases.json`
 
 - This file is **auto-generated** from `## Voice` in SELF.md during reflection cycles.
-- Contains operational phrases used in automated messages (task claims, fulfillment replies).
+- **Every piece of text the agent writes to GitHub** goes through this file — task claims, progress updates, completion reports, blocked/failed notices, plan completions, and workspace finished sentinels. Nothing is hardcoded.
 - **Schema:**
   ```json
   {
@@ -120,14 +120,17 @@ The `self-extract` module can parse any of these sections to generate expression
       "task_progress": "markdown with {{number}}, {{details}}, {{username}}",
       "task_blocked": "markdown with {{number}}, {{title}}, {{details}}, {{username}}",
       "task_failed": "markdown with {{number}}, {{title}}, {{details}}, {{username}}",
-      "plan_complete": "markdown (no placeholders)"
+      "plan_complete": "markdown (no placeholders)",
+      "workspace_finished": "markdown with {{summary}} — sentinel issue body"
     }
   }
   ```
 - **Regeneration trigger:** After a reflection cycle updates SELF.md, `regenerateVoicePhrases()` makes a lightweight LLM call (~1000 tokens) to re-derive phrases from the `## Voice` section.
 - **Fallback:** If the file is missing, corrupted, or fails validation, hardcoded defaults are used. Consumers never fail.
-- **Placeholders:** `{{url}}`, `{{number}}`, `{{title}}`, `{{details}}`, `{{username}}` are required per-field and validated before writing. Generation is rejected if any are missing.
+- **Placeholders:** `{{url}}`, `{{number}}`, `{{title}}`, `{{details}}`, `{{username}}`, `{{summary}}` are required per-field and validated before writing. Generation is rejected if any are missing.
 - **Gitignored:** This file is regenerated, not committed.
+
+**The rule: no operational text is hardcoded.** If the agent writes a comment, issue body, or reply, it comes from `voice-phrases.json`. This means the agent's voice evolves with its reflections — the same phrases that sounded one way in week 1 will sound different in week 4 as the `## Voice` section in SELF.md develops through experience.
 
 ---
 

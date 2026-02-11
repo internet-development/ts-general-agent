@@ -3048,6 +3048,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Build workspace summary for terminal display
+      //NOTE(self): ALWAYS show state — even when all zeros. An empty summary is invisible to the operator
       const summaryParts: string[] = [];
       if (planSummary.plansFound > 0) {
         const taskParts: string[] = [];
@@ -3067,6 +3068,14 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           else taskParts.push('0 claimable');
         }
         summaryParts.push(`${planSummary.plansFound} plan${planSummary.plansFound === 1 ? '' : 's'} (${planSummary.totalTasks} tasks: ${taskParts.join(', ')})`);
+      } else {
+        //NOTE(self): No plans found — still show state so operator knows what the workspace looks like
+        const finishedWorkspaces = workspaces.filter(ws => ws.finishedIssueNumber);
+        if (finishedWorkspaces.length > 0) {
+          summaryParts.push(`${finishedWorkspaces.length} finished`);
+        } else {
+          summaryParts.push('0 plans · 0 open issues · no sentinel');
+        }
       }
 
       if (discoveredPlans.length === 0) {

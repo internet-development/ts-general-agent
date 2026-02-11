@@ -576,7 +576,7 @@ export class TerminalUI {
     //NOTE(self): Build the input box lines
     const statusTag = this.availableForMessage ? '[AVAILABLE]' : '[THINKING]';
     const statusColor = this.availableForMessage ? ANSI.green : ANSI.yellow;
-    const hotkeys = `[ESC] CLEAR  [CTRL+C] QUIT  [Enter] SEND`;
+    const hotkeys = `[ESC] CLEAR  [CTRL+C] QUIT  [ENTER] SEND`;
     //NOTE(self): Calculate padding: width - ┌─ (2) - space (1) - statusTag - spaces (2) - hotkeys - space (1) - ─┐ (2)
     const topPadding = Math.max(0, width - statusTag.length - hotkeys.length - 8);
     //NOTE(self): Structure: red(┌─) + space + coloredStatus + reset + spaces + hotkeys + space + red(─...─┐)
