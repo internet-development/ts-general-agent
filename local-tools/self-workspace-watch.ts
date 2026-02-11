@@ -9,7 +9,7 @@ import {
   isWatchingWorkspace,
   parseGitHubWorkspaceUrl,
   type WatchedWorkspace,
-} from '@modules/workspace-discovery.js';
+} from '@modules/self-github-workspace-discovery.js';
 import { findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 
 const WORKSPACE_PREFIX = 'www-lil-intdev-';

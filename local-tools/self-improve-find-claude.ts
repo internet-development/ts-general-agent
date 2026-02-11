@@ -1,5 +1,5 @@
 //NOTE(self): Find the claude binary, checking common paths
-import { execCommand } from '@modules/exec.js';
+import { execCommand } from '@common/exec.js';
 
 export async function findClaudeBinary(): Promise<string | null> {
   //NOTE(self): First try 'which' to find in PATH

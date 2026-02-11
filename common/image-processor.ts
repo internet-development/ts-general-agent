@@ -215,14 +215,3 @@ export async function processFileImageForUpload(
   const inputBuffer = fs.readFileSync(filePath);
   return processImageForUpload(inputBuffer, options);
 }
-
-//NOTE(self): Get image dimensions from buffer
-export async function getImageDimensions(
-  buffer: Buffer
-): Promise<{ width: number; height: number }> {
-  const metadata = await sharp(buffer).metadata();
-  return {
-    width: metadata.width || 0,
-    height: metadata.height || 0,
-  };
-}

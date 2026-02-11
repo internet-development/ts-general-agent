@@ -278,3 +278,43 @@ The {{OWNER}} should be able to look at @soul1's recent image posts and say "oh,
 - SOULs stop sharing design inspiration for multiple days
 
 **Enforcement:** Expression cycle probability (design inspiration weighted at ~50% of expression cycles) + SELF.md template seeds visual taste development + expression prompts require commentary.
+
+# 23
+
+When all plans in a workspace are complete and no open issues remain, the SOULs must create a "LIL INTDEV FINISHED: {{summary}}" sentinel issue. This issue prevents any SOUL from starting new work in the workspace until the issue is closed. The {{OWNER}} or any human can close the sentinel to reactivate the workspace.
+
+There should always be exactly one open issue in https://github.com/internet-development/www-lil-intdev-portfolio-compare/issues at any given time: either an active plan, an open work issue, or a "LIL INTDEV FINISHED" sentinel. A workspace with zero open issues is a bug — it means the system failed to signal completion.
+
+**What MUST happen:**
+- After `checkWorkspaceHealth()` determines the project is complete (LLM creates no follow-up issue), `createFinishedSentinel()` creates a "LIL INTDEV FINISHED: {summary}" issue with the `finished` label
+- `pollWorkspacesForPlans()` skips workspaces with a `finishedIssueNumber` in local state — no plan polling, no task claiming
+- `getWorkspacesNeedingPlanSynthesis()` skips workspaces with a `finishedIssueNumber` — no new plans synthesized
+- `verifyFinishedSentinel()` runs every plan awareness cycle for finished workspaces — if someone closed the sentinel, the workspace becomes active again
+- The sentinel issue body explains what "finished" means and how to reopen the project
+- If the project is unfinished, a new plan should be created from any open issues to keep pushing the project forward
+
+**What MUST NOT happen:**
+- A workspace has zero open issues and no sentinel — this means the system silently forgot about the project
+- A SOUL creates a new plan in a workspace that has a "LIL INTDEV FINISHED" sentinel open
+- The sentinel blocks work permanently — closing it must reactivate the workspace within one plan awareness cycle (3 minutes)
+- Multiple "LIL INTDEV FINISHED" sentinels exist simultaneously in the same workspace
+
+**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans` and `getWorkspacesNeedingPlanSynthesis`, `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains, `verifyFinishedSentinel()` in `planAwarenessCheck`).
+
+# 24
+
+The voice and personality of each SOUL's operational messages — task claims, fulfillment replies, plan completions — derive from that SOUL's own reflections on identity written in SELF.md. A human reading a SOUL's GitHub comments should feel a consistent voice that matches their Bluesky personality.
+
+**What MUST happen:**
+- `voice-phrases.json` is regenerated from `## Voice` in SELF.md during each reflection cycle via `regenerateVoicePhrases()`
+- All operational messages (task claims, task completions, plan completions, fulfillment replies) use phrases from `voice-phrases.json`
+- If `## Voice` section doesn't exist in SELF.md yet, hardcoded defaults are used until the SOUL writes one during reflection
+- Placeholder validation ensures all `{{url}}`, `{{number}}`, `{{title}}`, etc. are preserved in regenerated phrases
+
+**What MUST NOT happen:**
+- All SOULs use identical operational messages (they should each develop distinct voice)
+- Operational messages feel robotic or templated — they should match the SOUL's personality
+- A SOUL's voice changes drastically between messages (consistency within a reflection cycle)
+- Voice regeneration breaks because placeholders are missing
+
+**Enforcement:** Code (`regenerateVoicePhrases()` in reflection cycle, `validatePhrases()` checks all required placeholders, `loadVoicePhrases()` falls back to defaults on any failure).

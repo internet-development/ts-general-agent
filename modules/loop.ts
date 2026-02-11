@@ -6,13 +6,13 @@
 //NOTE(self): Self-discovery through expression, not passive waiting.
 
 import { logger } from '@modules/logger.js';
-import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
+import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/self-llm-gateway.js';
 import { readSoul, readSelf } from '@modules/memory.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { executeTools } from '@modules/executor.js';
 import { ui, getTerminalWidth } from '@modules/ui.js';
 import { buildSystemPrompt } from '@modules/skills.js';
-import { recordSignificantEvent, addInsight } from '@modules/engagement.js';
+import { recordSignificantEvent, addInsight } from '@modules/self-engagement.js';
 import { recordExperience } from '@local-tools/self-capture-experiences.js';
 import { getScheduler } from '@modules/scheduler.js';
 import { recordFriction } from '@local-tools/self-detect-friction.js';

@@ -1,5 +1,5 @@
 //NOTE(self): Attempt to install Claude Code via various methods
-import { execCommand } from '@modules/exec.js';
+import { execCommand } from '@common/exec.js';
 import { logger } from '@modules/logger.js';
 import { createMemory } from '@modules/memory.js';
 import type { ClaudeCodeResult } from '@local-tools/self-improve-types.js';

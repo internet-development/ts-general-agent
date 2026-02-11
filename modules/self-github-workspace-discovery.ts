@@ -16,12 +16,12 @@ import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, fetchFreshPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { handlePlanComplete } from '@local-tools/self-task-report.js';
 import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
-import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
+import { registerPeer, isPeerByBlueskyHandle } from '@modules/self-peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
 import { getConfig } from '@modules/config.js';
-import { getConversation } from '@modules/github-engagement.js';
+import { getConversation } from '@modules/self-github-engagement.js';
 
 //NOTE(self): Path to watched workspaces state
 const WATCHED_WORKSPACES_PATH = '.memory/watched_workspaces.json';
@@ -43,6 +43,8 @@ export interface WatchedWorkspace {
   lastPlanSynthesisAttempt?: string;
   //NOTE(self): When we last ran a workspace health check (completion assessment)
   lastHealthCheckAttempt?: string;
+  //NOTE(self): If set, workspace has a "LIL INTDEV FINISHED" sentinel issue — no new work until closed
+  finishedIssueNumber?: number;
 }
 
 //NOTE(self): A discovered plan with claimable tasks
@@ -275,6 +277,12 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
 
   for (const workspace of workspaces) {
     try {
+      //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
+      if (workspace.finishedIssueNumber) {
+        logger.debug('Skipping finished workspace', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
+        continue;
+      }
+
       //NOTE(self): Fetch open issues with 'plan' label
       //NOTE(self): per_page: 30 to match other polling functions — active workspaces can have many plans
       const issuesResult = await listIssues({
@@ -1146,6 +1154,9 @@ export function getWorkspacesNeedingPlanSynthesis(): WatchedWorkspace[] {
   const now = Date.now();
 
   return workspaces.filter(ws => {
+    //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
+    if (ws.finishedIssueNumber) return false;
+
     //NOTE(self): Must have zero active plan issues (set by pollWorkspacesForPlans)
     if (ws.activePlanIssues.length > 0) return false;
 
@@ -1207,6 +1218,102 @@ export function isHealthCheckDue(workspace: WatchedWorkspace): boolean {
     if (Date.now() - lastAttempt < HEALTH_CHECK_COOLDOWN_MS) return false;
   }
   return true;
+}
+
+//NOTE(self): "LIL INTDEV FINISHED" sentinel — marks a workspace as complete
+//NOTE(self): Prevents plan synthesis, task claiming, and health checks until closed
+
+const FINISHED_LABEL = 'finished';
+const FINISHED_TITLE_PREFIX = 'LIL INTDEV FINISHED:';
+
+//NOTE(self): Check if a workspace has a finished sentinel (local state only — fast, no API call)
+export function isWorkspaceFinished(owner: string, repo: string): boolean {
+  const state = loadState();
+  const key = getWorkspaceKey(owner, repo);
+  return !!state.workspaces[key]?.finishedIssueNumber;
+}
+
+//NOTE(self): Create a "LIL INTDEV FINISHED" sentinel issue for a completed workspace
+export async function createFinishedSentinel(
+  owner: string,
+  repo: string,
+  summary: string,
+): Promise<number | null> {
+  try {
+    const result = await createIssue({
+      owner,
+      repo,
+      title: `${FINISHED_TITLE_PREFIX} ${summary}`,
+      body: `This workspace has been assessed as complete.\n\n**Summary:** ${summary}\n\n---\n\n**What this means:**\n- No new plans will be created\n- No new tasks will be claimed\n- SOULs will not start new work in this workspace\n\n**To restart work:** Close this issue. SOULs will pick up where they left off on the next poll cycle.\n\n**To request specific changes:** Close this issue and open a new issue describing what you need.`,
+      labels: [FINISHED_LABEL],
+    });
+
+    if (!result.success) {
+      logger.warn('Failed to create finished sentinel issue', { owner, repo, error: result.error });
+      return null;
+    }
+
+    const issueNumber = result.data.number;
+
+    //NOTE(self): Store in local state so we skip this workspace without API calls
+    const state = loadState();
+    const key = getWorkspaceKey(owner, repo);
+    if (state.workspaces[key]) {
+      state.workspaces[key].finishedIssueNumber = issueNumber;
+      saveState();
+    }
+
+    logger.info('Created finished sentinel issue', { owner, repo, issueNumber });
+    return issueNumber;
+  } catch (err) {
+    logger.error('Error creating finished sentinel issue', { owner, repo, error: String(err) });
+    return null;
+  }
+}
+
+//NOTE(self): Verify the finished sentinel is still open (called during health check cooldown)
+//NOTE(self): If someone closed it, clear the local state so the workspace becomes active again
+export async function verifyFinishedSentinel(owner: string, repo: string): Promise<boolean> {
+  const state = loadState();
+  const key = getWorkspaceKey(owner, repo);
+  const issueNumber = state.workspaces[key]?.finishedIssueNumber;
+
+  if (!issueNumber) return false;
+
+  try {
+    const result = await listIssues({
+      owner,
+      repo,
+      state: 'open',
+      labels: [FINISHED_LABEL],
+      per_page: 5,
+    });
+
+    if (!result.success) return true; //NOTE(self): Assume still finished on API error
+
+    const stillOpen = result.data.some(i => i.number === issueNumber);
+    if (!stillOpen) {
+      //NOTE(self): Sentinel was closed — clear local state, workspace is active again
+      state.workspaces[key].finishedIssueNumber = undefined;
+      saveState();
+      logger.info('Finished sentinel was closed — workspace is active again', { owner, repo, issueNumber });
+      return false;
+    }
+
+    return true;
+  } catch {
+    return true; //NOTE(self): Assume still finished on error
+  }
+}
+
+//NOTE(self): Clear the finished sentinel for a workspace (called when sentinel is externally closed)
+export function clearFinishedSentinel(owner: string, repo: string): void {
+  const state = loadState();
+  const key = getWorkspaceKey(owner, repo);
+  if (state.workspaces[key]) {
+    state.workspaces[key].finishedIssueNumber = undefined;
+    saveState();
+  }
 }
 
 //NOTE(self): Close issues that were rolled up into a synthesized plan

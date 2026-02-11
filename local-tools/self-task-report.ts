@@ -13,7 +13,7 @@ import {
   type TaskStatus,
 } from '@local-tools/self-plan-parse.js';
 import { updatePlanStatus, closePlan } from '@local-tools/self-plan-create.js';
-import { getGitHubPhrase } from '@modules/voice-phrases.js';
+import { getGitHubPhrase } from '@modules/self-voice-phrases.js';
 
 export interface ReportTaskParams {
   owner: string;

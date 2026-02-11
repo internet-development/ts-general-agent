@@ -3,7 +3,7 @@
 //NOTE(self): create_issue → createMemo(), create_plan → createPlan(), comment_issue → commentOnIssue()
 
 import { logger } from '@modules/logger.js';
-import type { Commitment } from '@modules/commitment-queue.js';
+import type { Commitment } from '@modules/self-commitment-queue.js';
 import { createMemo } from '@local-tools/self-github-create-issue.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { commentOnIssue } from '@local-tools/self-github-comment-issue.js';

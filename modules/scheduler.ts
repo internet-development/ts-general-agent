@@ -19,10 +19,10 @@ import { getGitHubRateLimitStatus } from '@adapters/github/rate-limit.js';
 import { getBlueskyRateLimitStatus } from '@adapters/atproto/rate-limit.js';
 import { getConfig, type Config } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
-import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/openai.js';
+import { chatWithTools, AGENT_TOOLS, isFatalError, createAssistantToolUseMessage, createToolResultMessage, type Message } from '@modules/self-llm-gateway.js';
 import { executeTools, setResponseThreadContext, registerOnPRMerged, recordWebImagePosted } from '@modules/executor.js';
 import type { ToolCall } from '@modules/tools.js';
-import { pacing } from '@modules/pacing.js';
+import { pacing } from '@modules/self-pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
 import { getPostThread } from '@adapters/atproto/get-post-thread.js';
@@ -43,7 +43,7 @@ import {
   getSeenAt,
   updateSeenAt,
   type PrioritizedNotification,
-} from '@modules/engagement.js';
+} from '@modules/self-engagement.js';
 import {
   extractFromSelf,
   assessSelfRichness,
@@ -70,7 +70,7 @@ import {
   getEngagementPatterns,
   checkInvitation,
   getInvitationPrompt,
-} from '@modules/expression.js';
+} from '@modules/self-expression.js';
 import {
   recordFriction,
   shouldAttemptImprovement,
@@ -92,7 +92,7 @@ import {
 } from '@local-tools/self-identify-aspirations.js';
 import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import { buildSystemPrompt, renderSkillSection, areSkillsLoaded, reloadSkills } from '@modules/skills.js';
-import { getFulfillmentPhrase, getTaskClaimPhrase, regenerateVoicePhrases } from '@modules/voice-phrases.js';
+import { getFulfillmentPhrase, getTaskClaimPhrase, regenerateVoicePhrases } from '@modules/self-voice-phrases.js';
 import * as github from '@adapters/github/index.js';
 import {
   extractGitHubUrlsFromRecord,
@@ -121,7 +121,7 @@ import {
   markConversationConcluded as markGitHubConversationConcluded,
   getConversationsNeedingAttention as getGitHubConversationsNeedingAttention,
   cleanupOldConversations as cleanupOldGitHubConversations,
-} from '@modules/github-engagement.js';
+} from '@modules/self-github-engagement.js';
 import {
   pollWorkspacesForPlans,
   pollWorkspacesForReviewablePRs,
@@ -140,9 +140,12 @@ import {
   isWatchingWorkspace,
   isHealthCheckDue,
   updateWorkspaceHealthCheckTimestamp,
+  isWorkspaceFinished,
+  createFinishedSentinel,
+  verifyFinishedSentinel,
   type ReviewablePR,
-} from '@modules/workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
+} from '@modules/self-github-workspace-discovery.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/self-peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
@@ -160,7 +163,7 @@ import {
   getConversation as getBlueskyConversation,
   cleanupOldConversations as cleanupOldBlueskyConversations,
   markConversationConcluded as markBlueskyConversationConcluded,
-} from '@modules/bluesky-engagement.js';
+} from '@modules/self-bluesky-engagement.js';
 import {
   enqueueCommitment,
   getPendingCommitments,
@@ -168,10 +171,10 @@ import {
   markCommitmentCompleted,
   markCommitmentFailed,
   abandonStaleCommitments,
-} from '@modules/commitment-queue.js';
-import { extractCommitments, type ReplyForExtraction } from '@modules/commitment-extract.js';
-import { fulfillCommitment } from '@modules/commitment-fulfill.js';
-import { announceIfWorthy } from '@modules/announcement.js';
+} from '@modules/self-commitment-queue.js';
+import { extractCommitments, type ReplyForExtraction } from '@modules/self-commitment-extract.js';
+import { fulfillCommitment } from '@modules/self-commitment-fulfill.js';
+import { announceIfWorthy } from '@modules/self-announcement.js';
 import { createRequire } from 'module';
 
 //NOTE(self): Read local version from package.json for version check loop
@@ -2977,6 +2980,14 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       ui.startSpinner(`Checking ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} for tasks`);
 
+      //NOTE(self): Verify finished sentinels — if someone closed a "LIL INTDEV FINISHED" issue,
+      //NOTE(self): the workspace becomes active again. Check once per plan awareness cycle.
+      for (const ws of workspaces) {
+        if (ws.finishedIssueNumber) {
+          await verifyFinishedSentinel(ws.owner, ws.repo);
+        }
+      }
+
       //NOTE(self): Recover stuck tasks before looking for new ones
       await this.recoverStuckTasks();
 
@@ -3426,7 +3437,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
           //NOTE(self): Health check — if no open issues AND no active plans, assess workspace completeness
           //NOTE(self): This catches the gap where a plan completes, all issues close, but work remains
-          if (isHealthCheckDue(workspace)) {
+          //NOTE(self): Skip if workspace already has a finished sentinel
+          if (!isWorkspaceFinished(workspace.owner, workspace.repo) && isHealthCheckDue(workspace)) {
             await this.checkWorkspaceHealth(workspace);
           }
           continue;
@@ -3774,14 +3786,16 @@ Do NOT create an issue for minor polish, documentation-only gaps, or subjective 
       });
 
       //NOTE(self): Execute tool calls in a while loop (same pattern as synthesizePlanForWorkspaces)
+      let issueCreated = false;
       while (response.toolCalls.length > 0) {
         const results = await executeTools(response.toolCalls);
 
-        //NOTE(self): Check if an issue was created
+        //NOTE(self): Check if an issue was created (LLM found remaining work)
         for (let i = 0; i < response.toolCalls.length; i++) {
           const tc = response.toolCalls[i];
           const result = results[i];
           if (tc.name === 'github_create_issue' && !result.is_error) {
+            issueCreated = true;
             logger.info('Health check created follow-up issue', { workspace: workspaceKey, result: result.content.substring(0, 200) });
           }
         }
@@ -3796,7 +3810,21 @@ Do NOT create an issue for minor polish, documentation-only gaps, or subjective 
         });
       }
 
-      ui.stopSpinner();
+      //NOTE(self): If LLM found no remaining work → project is complete → create "LIL INTDEV FINISHED" sentinel
+      //NOTE(self): The sentinel prevents plan synthesis, task claiming, and further health checks
+      //NOTE(self): Anyone can close the sentinel to reactivate the workspace
+      if (!issueCreated) {
+        const summary = response.text?.substring(0, 200) || 'All planned work complete';
+        const sentinelNumber = await createFinishedSentinel(workspace.owner, workspace.repo, summary);
+        if (sentinelNumber) {
+          ui.stopSpinner(`Workspace finished — sentinel issue #${sentinelNumber} created`);
+          logger.info('Workspace marked as finished', { workspace: workspaceKey, sentinelIssue: sentinelNumber });
+        } else {
+          ui.stopSpinner();
+        }
+      } else {
+        ui.stopSpinner();
+      }
       logger.info('Workspace health check complete', { workspace: workspaceKey });
     } catch (err) {
       ui.stopSpinner();
@@ -4288,7 +4316,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   //NOTE(self): After fulfilling a commitment, reply on Bluesky with the link
   //NOTE(self): Closes the feedback loop: human asks → SOUL promises → SOUL delivers → human gets link
   private async replyWithFulfillmentLink(
-    commitment: import('@modules/commitment-queue.js').Commitment,
+    commitment: import('@modules/self-commitment-queue.js').Commitment,
     result: Record<string, unknown>
   ): Promise<void> {
     //NOTE(self): Only reply if we have a source thread URI to reply to

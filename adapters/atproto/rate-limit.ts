@@ -1,4 +1,5 @@
 import { logger } from '@modules/logger.js';
+import { ensureValidSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
 
 // Module-level singleton state
 let rateLimitRemaining = 300;
@@ -50,6 +51,29 @@ export async function blueskyFetch(url: string | URL | Request, options?: Reques
 
   // Read rate limit headers from every response
   readRateLimitHeaders(response);
+
+  // Handle 401 Unauthorized — token expired, refresh and retry once
+  if (response.status === 401) {
+    logger.info('Bluesky 401, attempting token refresh');
+    const refreshed = await ensureValidSession();
+    if (refreshed) {
+      // Rebuild request with fresh auth headers
+      const freshHeaders = getAuthHeaders();
+      const retryOptions: RequestInit = {
+        ...options,
+        headers: { ...options?.headers, ...freshHeaders },
+      };
+      lastRequestTime = Date.now();
+      const retryResponse = await fetch(url, retryOptions);
+      readRateLimitHeaders(retryResponse);
+      if (retryResponse.status === 401) {
+        logger.error('Bluesky 401 persists after token refresh');
+      }
+      return retryResponse;
+    }
+    logger.error('Bluesky 401 and token refresh failed');
+    return response;
+  }
 
   // Handle 429 Too Many Requests
   if (response.status === 429) {

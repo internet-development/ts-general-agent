@@ -53,7 +53,6 @@ All local-tool files use a **flat structure** with semantic prefixes:
 
 | Prefix | Domain | Description |
 |--------|--------|-------------|
-| `self-bluesky-` | Bluesky/social | Actions on Bluesky platform |
 | `self-github-` | GitHub | Actions on GitHub platform |
 | `self-` | Core self | Self-reflection, reading/writing SELF.md |
 | `self-improve-` | Self-improvement | Claude Code integration, code changes |
@@ -70,30 +69,12 @@ All local-tool files use a **flat structure** with semantic prefixes:
 
 ### Platform Actions
 
-#### Bluesky (`self-bluesky-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `check-timeline` | Get home timeline feed |
-| `check-notifications` | Get notifications |
-| `get-owner-follows` | Get owner's follows list |
-| `reply` | Reply to a post |
-| `engage` | Like or repost |
-| `follow` | Follow a user |
-| `post` | Create a new post |
-| `types` | Shared type definitions |
-
 #### GitHub (`self-github-*`)
 | Local Tool | Purpose |
 |-------|---------|
-| `get-issues` | List open issues |
-| `get-prs` | List open PRs |
 | `comment-issue` | Comment on an issue |
-| `comment-pr` | Comment on a PR |
-| `clone-repo` | Clone a repository |
-| `star-repo` | Star a repository |
 | `create-workspace` | Create collaborative development workspace from template |
 | `create-issue` | Create issues/memos in repositories |
-| `types` | Shared type definitions |
 
 ### Self-Reflection (`self-*`)
 | Local Tool | Purpose |
@@ -163,13 +144,13 @@ Each local-tool file exports one primary function. Helpers can be internal but t
 
 ```typescript
 // GOOD - one primary export
-// local-tools/self-bluesky-post.ts
-export async function post(text: string): Promise<string | null> { ... }
+// local-tools/self-github-comment-issue.ts
+export async function commentOnIssue(params: CommentParams): Promise<boolean> { ... }
 
 // BAD - multiple unrelated exports
-export async function post(text: string) { ... }
-export async function schedulePost(text: string, when: Date) { ... }
-export async function validatePostLength(text: string) { ... }
+export async function commentOnIssue(params: CommentParams) { ... }
+export async function scheduleComment(params: CommentParams, when: Date) { ... }
+export async function validateCommentLength(text: string) { ... }
 ```
 
 ### 2. Flat Structure
@@ -177,13 +158,13 @@ No subdirectories. Use prefixes for organization. This makes it easy to see all 
 
 ```
 local-tools/
-├── self-bluesky-post.ts       ✓ Flat with prefix
-├── self-github-comment-issue.ts
-└── self-detect-friction.ts
+├── self-github-comment-issue.ts  ✓ Flat with prefix
+├── self-detect-friction.ts
+└── self-plan-create.ts
 
 local-tools/
-├── bluesky/                   ✗ No subdirectories
-│   └── post.ts
+├── github/                       ✗ No subdirectories
+│   └── comment-issue.ts
 ```
 
 ### 3. Composable
@@ -191,16 +172,16 @@ Local-tools can use adapters and modules. Minimize local-tool-to-local-tool depe
 
 ```typescript
 // GOOD - uses adapter and module
-import * as atproto from '@adapters/atproto/index.js';
+import * as github from '@adapters/github/index.js';
 import { logger } from '@modules/logger.js';
 
-export async function post(text: string): Promise<string | null> {
-  const result = await atproto.createPost({ text });
-  if (!result.success) {
-    logger.error('Failed to post', { error: result.error });
-    return null;
+export async function commentOnIssue(owner: string, repo: string, issueNumber: number, body: string): Promise<boolean> {
+  const result = await github.createComment(owner, repo, issueNumber, body);
+  if (!result) {
+    logger.error('Failed to comment', { owner, repo, issueNumber });
+    return false;
   }
-  return result.data.uri;
+  return true;
 }
 
 // CAREFUL - local-tool-to-local-tool dependency (OK if necessary)
@@ -238,7 +219,7 @@ Local-tools should prefer stateless operation. If state is needed, use modules f
 
 ```typescript
 // GOOD - stateless, uses module for state
-import { getRelationship } from '@modules/engagement.js';
+import { getRelationship } from '@modules/self-engagement.js';
 
 export function shouldRespond(handle: string): boolean {
   const relationship = getRelationship(handle);
@@ -274,22 +255,21 @@ Local-tools should handle errors gracefully and return meaningful results:
 
 ```typescript
 // GOOD - graceful error handling
-export async function post(text: string): Promise<string | null> {
-  const result = await atproto.createPost({ text });
-  if (!result.success) {
-    logger.error('Failed to post', { error: result.error });
-    return null;  // Caller handles null
+export async function commentOnIssue(owner: string, repo: string, num: number, body: string): Promise<boolean> {
+  const result = await github.createComment(owner, repo, num, body);
+  if (!result) {
+    logger.error('Failed to comment on issue', { owner, repo, num });
+    return false;  // Caller handles false
   }
-  return result.data.uri;
+  return true;
 }
 
 // BAD - throws without context
-export async function post(text: string): Promise<string> {
-  const result = await atproto.createPost({ text });
-  if (!result.success) {
-    throw new Error(result.error);  // Unhelpful
+export async function commentOnIssue(owner: string, repo: string, num: number, body: string): Promise<void> {
+  const result = await github.createComment(owner, repo, num, body);
+  if (!result) {
+    throw new Error('Comment failed');  // Unhelpful
   }
-  return result.data.uri;
 }
 ```
 

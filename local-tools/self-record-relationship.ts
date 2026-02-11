@@ -1,5 +1,5 @@
 import { createMemory } from '@modules/memory.js';
-import { createSlug } from '@modules/strings.js';
+import { createSlug } from '@common/strings.js';
 
 export function recordRelationship(
   memoryPath: string,

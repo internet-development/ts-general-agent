@@ -3,9 +3,9 @@
 //NOTE(self): Single focused LLM call, no tools, ~500 tokens max.
 //NOTE(self): "I'll open 3 issues" → structured commitment to create 3 issues.
 
-import { chat, type Message } from '@modules/openai.js';
+import { chat, type Message } from '@modules/self-llm-gateway.js';
 import { logger } from '@modules/logger.js';
-import type { CommitmentType } from '@modules/commitment-queue.js';
+import type { CommitmentType } from '@modules/self-commitment-queue.js';
 
 export interface ReplyForExtraction {
   text: string;

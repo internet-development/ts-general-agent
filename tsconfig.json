@@ -16,7 +16,8 @@
       "@root/*": ["./*"],
       "@adapters/*": ["./adapters/*"],
       "@modules/*": ["./modules/*"],
-      "@local-tools/*": ["./local-tools/*"]
+      "@local-tools/*": ["./local-tools/*"],
+      "@common/*": ["./common/*"]
     }
   },
   "include": ["**/*.ts"],

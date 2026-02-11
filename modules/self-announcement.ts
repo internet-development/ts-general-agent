@@ -6,11 +6,11 @@
 import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
 import { readSoul, readSelf } from '@modules/memory.js';
-import { chatWithTools } from '@modules/openai.js';
+import { chatWithTools } from '@modules/self-llm-gateway.js';
 import { executeTools } from '@modules/executor.js';
 import { renderSkillSection } from '@modules/skills.js';
 import { getPostThread } from '@adapters/atproto/get-post-thread.js';
-import { recordSignificantEvent } from '@modules/engagement.js';
+import { recordSignificantEvent } from '@modules/self-engagement.js';
 import type { ToolCall } from '@modules/tools.js';
 
 /**

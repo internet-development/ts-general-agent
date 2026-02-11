@@ -22,12 +22,12 @@ import {
   scheduleNextExpression,
   getExpressionsNeedingEngagementCheck,
   updateExpressionEngagement,
-} from '@modules/expression.js';
+} from '@modules/self-expression.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
-import { addInsight, getInsights, getRelationshipSummary } from '@modules/engagement.js';
+import { addInsight, getInsights, getRelationshipSummary } from '@modules/self-engagement.js';
 import { getFrictionReadyForImprovement } from '@local-tools/self-detect-friction.js';
 import { getAspirationForGrowth, getAspirationStats, getAllAspirations } from '@local-tools/self-identify-aspirations.js';
-import { getEngagementPatterns } from '@modules/expression.js';
+import { getEngagementPatterns } from '@modules/self-expression.js';
 import { createRequire } from 'module';
 
 //NOTE(self): Get the directory of this file (repo root)

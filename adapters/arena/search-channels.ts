@@ -3,7 +3,7 @@
 //NOTE(self): Are.na public API: GET /v2/search/channels?q=TERM
 
 import type { ArenaResult } from '@adapters/arena/types.js';
-import { isEmpty } from '@modules/strings.js';
+import { isEmpty } from '@common/strings.js';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);

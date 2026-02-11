@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
-import { isWatchingWorkspace } from '@modules/workspace-discovery.js';
+import { isWatchingWorkspace } from '@modules/self-github-workspace-discovery.js';
 
 //NOTE(self): Path to GitHub engagement state
 const GITHUB_ENGAGEMENT_PATH = '.memory/github_engagement.json';

@@ -1,22 +1,7 @@
 //NOTE(self): Local-tools exports - single function per file, flat structure
 
-// Bluesky local-tools
-export { checkTimeline } from '@local-tools/self-bluesky-check-timeline.js';
-export { checkNotifications } from '@local-tools/self-bluesky-check-notifications.js';
-export { getOwnerFollows } from '@local-tools/self-bluesky-get-owner-follows.js';
-export { replyToPost } from '@local-tools/self-bluesky-reply.js';
-export { engageWithPost } from '@local-tools/self-bluesky-engage.js';
-export { followPerson } from '@local-tools/self-bluesky-follow.js';
-export { post } from '@local-tools/self-bluesky-post.js';
-export type { EngagementTarget } from '@local-tools/self-bluesky-types.js';
-
 // GitHub local-tools
-export { getOpenIssues } from '@local-tools/self-github-get-issues.js';
-export { getOpenPRs } from '@local-tools/self-github-get-prs.js';
 export { commentOnIssue } from '@local-tools/self-github-comment-issue.js';
-export { commentOnPR } from '@local-tools/self-github-comment-pr.js';
-export { cloneRepo } from '@local-tools/self-github-clone-repo.js';
-export { starRepo } from '@local-tools/self-github-star-repo.js';
 export {
   createWorkspace,
   findExistingWorkspace,
@@ -30,7 +15,6 @@ export {
   type CreateMemoParams,
   type MemoResult,
 } from '@local-tools/self-github-create-issue.js';
-export type { RepoToMonitor } from '@local-tools/self-github-types.js';
 
 // Self-reflection local-tools
 export { readSelf } from '@local-tools/self-read.js';

@@ -7,7 +7,7 @@
 import { extractFromSelf, randomFrom, type SelfExtract } from '@modules/self-extract.js';
 import { logger } from '@modules/logger.js';
 import { getSkillSection, getSkillSubsection } from '@modules/skills.js';
-import { getRandomDesignSource, getRandomBrowseUrl, type DesignSource } from '@modules/design-catalog.js';
+import { getRandomDesignSource, getRandomBrowseUrl, type DesignSource } from '@common/design-catalog.js';
 
 //NOTE(self): Load prompt template from skill by category, with variable interpolation
 function getPromptTemplate(category: string, vars: Record<string, string>): string {

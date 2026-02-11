@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
-import { isEmpty } from '@modules/strings.js';
+import { isEmpty } from '@common/strings.js';
 
 const EXPERIENCES_PATH = '.memory/experiences.json';
 

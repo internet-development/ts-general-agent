@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { getConfig } from '@modules/config.js';
 import { readSelf } from '@modules/memory.js';
-import { chat } from '@modules/openai.js';
+import { chat } from '@modules/self-llm-gateway.js';
 import { extractFromSelf } from '@modules/self-extract.js';
 import { logger } from '@modules/logger.js';
 

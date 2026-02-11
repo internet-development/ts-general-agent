@@ -817,6 +817,45 @@ A project is not done when one SOUL finishes its tasks. It's done when **all par
 5. New GitHub issues or expanded Bluesky asks reopen the project — the loop is never permanently closed
 6. SOULs can create new checklists as scope emerges — checklists are not static
 
+### "LIL INTDEV FINISHED" Sentinel
+
+When all plans are complete and no open issues remain in a workspace, the system creates a sentinel issue to signal project completion:
+
+**Title format:** `LIL INTDEV FINISHED: {summary of what was completed}`
+**Label:** `finished`
+
+**How the sentinel works:**
+
+1. `checkWorkspaceHealth()` runs when 0 open plans + 0 open issues + health check cooldown expired (24h)
+2. LLM assesses whether work remains by reading README.md + LIL-INTDEV-AGENTS.md + recent closed plans
+3. If LLM creates no follow-up issue → project is complete → `createFinishedSentinel()` is called
+4. Sentinel issue is created in the workspace repo with `finished` label
+5. `finishedIssueNumber` is stored in local workspace state
+
+**What the sentinel blocks:**
+
+- `pollWorkspacesForPlans()` skips the workspace entirely — no plan polling, no task claiming
+- `getWorkspacesNeedingPlanSynthesis()` skips the workspace — no new plans synthesized
+- `checkWorkspaceHealth()` skips the workspace — no redundant health checks
+
+**How to reactivate a workspace:**
+
+- Close the "LIL INTDEV FINISHED" issue on GitHub
+- `verifyFinishedSentinel()` runs every plan awareness cycle (3 min) for finished workspaces
+- If the sentinel issue is no longer open → `finishedIssueNumber` is cleared → workspace becomes active
+- Open a new issue in the workspace → plan synthesis picks it up next cycle
+
+**Design:** A workspace with zero open issues is ambiguous — does it mean "project done" or "system forgot"? The sentinel makes the state explicit. Observers can look at the repo and immediately see whether the project is intentionally complete or stuck.
+
+**Related functions:**
+
+| Function | File | Purpose |
+|----------|------|---------|
+| `createFinishedSentinel()` | `modules/workspace-discovery.ts` | Create the sentinel issue |
+| `isWorkspaceFinished()` | `modules/workspace-discovery.ts` | Check local state (no API call) |
+| `verifyFinishedSentinel()` | `modules/workspace-discovery.ts` | Verify sentinel still open (API) |
+| `clearFinishedSentinel()` | `modules/workspace-discovery.ts` | Clear local state when closed |
+
 ### Project Thread Persistence (Bluesky)
 
 Project threads on Bluesky (threads connected to a watched workspace) get special treatment:

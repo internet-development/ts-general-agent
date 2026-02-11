@@ -13,7 +13,7 @@ import {
   type ParsedPlan,
   type ParsedTask,
 } from '@local-tools/self-plan-parse.js';
-import { getGitHubPhrase } from '@modules/voice-phrases.js';
+import { getGitHubPhrase } from '@modules/self-voice-phrases.js';
 
 export interface ClaimTaskParams {
   owner: string;

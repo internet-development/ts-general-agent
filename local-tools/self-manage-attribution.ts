@@ -4,7 +4,7 @@
 //NOTE(self): This local tool provides stats and prompts for working on attribution backlog.
 //NOTE(self): This local tool is a discrete, toggleable capability for attribution tracking.
 
-import { getPostsNeedingAttributionFollowup, getPostCount } from '@modules/post-log.js';
+import { getPostsNeedingAttributionFollowup, getPostCount } from '@modules/self-post-log.js';
 import { logger } from '@modules/logger.js';
 
 export interface AttributionBacklogStats {
