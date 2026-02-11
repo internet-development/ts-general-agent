@@ -15,7 +15,7 @@ import { listRepositoryCollaborators } from '@adapters/github/list-repository-co
 import { getAuth } from '@adapters/github/authenticate.js';
 import { runGitCommand } from '@local-tools/self-task-verify.js';
 import { createSlug } from '@common/strings.js';
-import { getPeerUsernames, registerPeer } from '@modules/self-peer-awareness.js';
+import { getPeerUsernames, registerPeer } from '@modules/peer-awareness.js';
 
 //NOTE(self): Generate a consistent branch name for a task
 //NOTE(self): Shared by scheduler.ts and executor.ts to avoid divergent naming

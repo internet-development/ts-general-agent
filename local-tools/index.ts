@@ -165,3 +165,29 @@ export {
   stopWatchingWorkspace,
   ensureWatchingDefaultWorkspace,
 } from '@local-tools/self-workspace-watch.js';
+
+// Extract & Analysis local-tools (moved from modules/)
+export {
+  extractFromSelf,
+  assessSelfRichness,
+  getSocialMechanics,
+  randomFrom,
+  PROJECT_SOCIAL_MECHANICS,
+  type SelfExtract,
+  type SocialMechanics,
+} from '@local-tools/self-extract.js';
+
+// Commitment local-tools (moved from modules/)
+export {
+  extractCommitments,
+  type ReplyForExtraction,
+  type ExtractedCommitment,
+} from '@local-tools/self-commitment-extract.js';
+
+export {
+  fulfillCommitment,
+  type FulfillmentResult,
+} from '@local-tools/self-commitment-fulfill.js';
+
+// Announcement local-tool (moved from modules/)
+export { announceIfWorthy } from '@local-tools/self-announcement.js';

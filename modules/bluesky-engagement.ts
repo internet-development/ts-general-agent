@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
-import { getSocialMechanics, PROJECT_SOCIAL_MECHANICS, type SocialMechanics } from '@modules/self-extract.js';
+import { getSocialMechanics, PROJECT_SOCIAL_MECHANICS, type SocialMechanics } from '@local-tools/self-extract.js';
 
 //NOTE(self): Path to Bluesky conversation state
 const BLUESKY_CONVERSATIONS_PATH = '.memory/bluesky_conversations.json';

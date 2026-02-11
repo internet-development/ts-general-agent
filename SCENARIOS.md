@@ -370,3 +370,72 @@ Some issues don't need a PR. Some issues are long-form writing, discussion, or b
 Three SOULs posted 23 comments in 47 minutes on a "Draft: A Great Website As A Claude Skill" issue. Every comment proposed overlapping skill structures, evaluation frameworks, and verification approaches. Each SOUL posted 5-9 comments. The issue read like a meeting transcript, not a curated discussion. The correct behavior: 3 comments (one per SOUL, each adding a unique perspective the others didn't cover), then done. If the SOULs wanted to refine the skill, they'd open a new draft or iterate on the existing one — not post 20 more comments.
 
 **Enforcement:** Code (`analyzeConversation()` 3-comment saturation cap on external issues, round-robin prevention after first round of SOUL-only replies, `DISCUSSION_LABEL` hard-skip in `synthesizePlanForWorkspaces`, `cleanupStaleWorkspaceIssues`, `closeHandledWorkspaceIssues`) + Prompt (github-response skill: "never restate what a peer already said", "one comment per cycle", issue classification with `discussion` label).
+
+# 26
+
+@soul1 is having a conversation on Bluesky and says "I'll put together a plan for this." Fifteen seconds later, the commitment fulfillment loop detects the promise, verifies the plan was created, and auto-replies in the original thread with a link. The human who asked sees the follow-up within seconds — no manual coordination required. The SOUL keeps its word automatically.
+
+**What MUST happen:**
+- `self-commitment-extract.ts` scans recent SOUL replies every 15 seconds via the commitment fulfillment loop (Loop 6)
+- Natural language patterns are matched: "I'll open an issue" → `create_issue`, "I'll put together a plan" → `create_plan`, "I'll comment on that" → `comment_issue`
+- Extracted commitments are stored as JSONL with content hash for deduplication
+- `self-commitment-fulfill.ts` executes the matching tool call or detects the action was already completed
+- After fulfillment, `getFulfillmentPhrase(action, url)` generates a natural-sounding reply using `voice-phrases.json` (Scenario 24)
+- The reply is posted in the original Bluesky thread with a link facet to the created resource
+- Plan deduplication: before creating a plan, checks for existing open `plan`-labeled issues in the workspace
+
+**What MUST NOT happen:**
+- A SOUL promises to create something and never follows through
+- Duplicate commitments create duplicate resources (dedup via content hash)
+- Fulfillment replies feel robotic — they should match the SOUL's voice from ## Voice in SELF.md
+- Commitments linger forever — auto-abandoned after 24h or 3 failed attempts
+- The commitment loop consumes excessive tokens (~500 tokens per extraction, 0 for fulfillment)
+
+**Enforcement:** Code (`self-commitment-extract.ts` pattern matching via LLM, `self-commitment-fulfill.ts` tool execution, JSONL persistence + hash dedup, 24h/3-failure auto-abandon, `getFulfillmentPhrase()` for voice-consistent replies).
+
+# 27
+
+@soul1 creates a PR but it has a merge conflict with main. Or @soul1's PR has been sitting with only rejections for over an hour. Or @soul1's PR has had zero reviews for over two hours. In all cases, the system recovers automatically: close the PR, delete the branch, reset the task to pending, and let any SOUL re-execute the task from a fresh main branch. The {{OWNER}} observes that work never stalls — broken PRs are cleaned up and retried, not left to rot.
+
+**What MUST happen:**
+- `autoMergeApprovedPR()` detects merge conflicts when attempting squash-merge → triggers recovery
+- PRs with only rejections (no approvals) for >1 hour → recovery triggered
+- PRs with zero reviews for >2 hours → recovery triggered
+- Recovery sequence: close PR → `deleteBranch()` → `resetTaskToPending()` via `freshUpdateTaskInPlan()` → task becomes claimable again
+- The re-executed task starts from a fresh `main` branch — no contamination from the failed attempt
+- Reviewer feedback from rejected PRs is preserved as a follow-up issue via `createFollowUpIssueFromReviews()`
+- `recoverStuckTasks()` catches tasks stuck `in_progress`/`claimed` for >30 minutes and resets them (max 3 retries via `stuckTaskTracker`)
+- `recoverOrphanedBranches()` finds branches pushed to GitHub with no PR and creates PRs for them
+
+**What MUST NOT happen:**
+- A PR with merge conflicts sits open indefinitely
+- A rejected PR blocks the task forever — feedback is valid but doesn't block shipping
+- An unreviewed PR blocks the task forever — if no one reviews within 2 hours, retry
+- A task gets stuck in `in_progress` permanently — 30-minute timeout with auto-recovery
+- Recovery creates an infinite retry loop — max 3 retries per task via `stuckTaskTracker`
+- Orphaned branches (pushed but no PR) accumulate on GitHub — `recoverOrphanedBranches()` creates PRs or cleans up
+
+**Enforcement:** Code (`autoMergeApprovedPR` merge conflict detection, PR age-based recovery in `planAwarenessCheck`, `recoverStuckTasks` 30-min timeout with 3-retry max, `recoverOrphanedBranches` for pushed-but-no-PR branches, `stuckTaskTracker` Map for retry counting).
+
+# 28
+
+@soul1 notices friction in its capabilities — the web search skill keeps returning low-quality results, or a specific adapter keeps failing. After 3+ occurrences of the same friction category, the self-improvement cycle triggers. @soul1 spawns Claude Code CLI to fix the issue in its own codebase, reloads the modified skills, and the problem is resolved. The {{OWNER}} comes back and sees that @soul1 improved itself. If the improvement fails, skills are restored from backup — the SOUL never leaves itself in a broken state.
+
+**What MUST happen:**
+- `self-detect-friction.ts` records friction events with category and description
+- After 3+ occurrences of the same friction category, `getFrictionReadyForImprovement()` returns the friction
+- The self-improvement cycle (Loop 4, 24h minimum, 48h burn-in) uses the `self-improvement-decision` skill to let the LLM decide whether to fix it
+- If approved, Claude Code CLI is spawned to modify files in `adapters/`, `modules/`, `local-tools/`, or `skills/`
+- After modification, `reloadSkills()` hot-reloads all SKILL.md files immediately — no restart required
+- `reloadSkills()` validates the reload: if validation fails, previous skills are restored from backup (never leaves registry empty)
+- The friction is marked as resolved in `.memory/friction.jsonl`
+- Aspirational growth (Loop 4b) works similarly: `getAspirationForGrowth()` identifies inspiration-driven improvements (not pain-driven)
+
+**What MUST NOT happen:**
+- A single friction event triggers improvement (needs 3+ occurrences to prove it's a pattern)
+- Self-improvement runs before 48h of operation (burn-in period to establish baseline)
+- A failed skill reload leaves the skill registry empty — `reloadSkills()` restores backup on failure
+- Self-improvement modifies `SOUL.md` (immutable) or creates security vulnerabilities
+- The SOUL enters an infinite self-improvement loop — 24h minimum between cycles
+
+**Enforcement:** Code (`getFrictionReadyForImprovement` 3-occurrence threshold, 48h burn-in check in scheduler, `reloadSkills` validate-and-restore pattern, `self-improvement-decision` LLM gate before execution, 24h cooldown between cycles).

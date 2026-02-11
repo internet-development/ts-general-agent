@@ -21,11 +21,11 @@ export interface ToolResult {
   is_error?: boolean;
 }
 
-import { BLUESKY_TOOLS } from '@modules/self-bluesky-tools.js';
-import { GITHUB_TOOLS } from '@modules/self-github-tools.js';
-import { WORKSPACE_TOOLS } from '@modules/self-workspace-tools.js';
-import { WEB_TOOLS } from '@modules/self-web-tools.js';
-import { SELF_TOOLS } from '@modules/self-tools.js';
+import { BLUESKY_TOOLS } from '@local-tools/self-bluesky-tools.js';
+import { GITHUB_TOOLS } from '@local-tools/self-github-tools.js';
+import { WORKSPACE_TOOLS } from '@local-tools/self-workspace-tools.js';
+import { WEB_TOOLS } from '@local-tools/self-web-tools.js';
+import { SELF_TOOLS } from '@local-tools/self-tools.js';
 
 export const AGENT_TOOLS: ToolDefinition[] = [
   ...BLUESKY_TOOLS,

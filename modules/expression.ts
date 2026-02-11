@@ -4,7 +4,7 @@
 //NOTE(self): The prompts come from SELF.md - the richer my self-knowledge, the richer my expression.
 //NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
 
-import { extractFromSelf, randomFrom, type SelfExtract } from '@modules/self-extract.js';
+import { extractFromSelf, randomFrom, type SelfExtract } from '@local-tools/self-extract.js';
 import { logger } from '@modules/logger.js';
 import { getSkillSection, getSkillSubsection } from '@modules/skills.js';
 import { getRandomDesignSource, getRandomBrowseUrl, type DesignSource } from '@common/design-catalog.js';

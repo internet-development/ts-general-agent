@@ -16,7 +16,7 @@ import {
   handleBlueskyGetProfile,
   handleBlueskyGetFollowers,
   handleBlueskyGetFollows,
-} from '@modules/self-bluesky-handlers.js';
+} from '@local-tools/self-bluesky-handlers.js';
 
 //NOTE(self): GitHub handlers
 import {
@@ -36,7 +36,7 @@ import {
   handleGithubCloneRepo,
   handleGithubCreateIssue,
   handleGithubUpdateIssue,
-} from '@modules/self-github-handlers.js';
+} from '@local-tools/self-github-handlers.js';
 
 //NOTE(self): Web/Arena handlers
 import {
@@ -46,8 +46,8 @@ import {
   handleArenaFetchChannel,
   handleArenaPostImage,
   handleWebBrowseImages,
-} from '@modules/self-web-handlers.js';
-export { recordWebImagePosted } from '@modules/self-web-handlers.js';
+} from '@local-tools/self-web-handlers.js';
+export { recordWebImagePosted } from '@local-tools/self-web-handlers.js';
 
 //NOTE(self): Self/misc handlers
 import {
@@ -61,7 +61,7 @@ import {
   handleGracefulExit,
   handleConcludeConversation,
   handleSelfImprove,
-} from '@modules/self-handlers.js';
+} from '@local-tools/self-handlers.js';
 
 //NOTE(self): Workspace/plan handlers
 import {
@@ -72,7 +72,7 @@ import {
   handlePlanClaimTask,
   handlePlanExecuteTask,
   handleWorkspaceFinish,
-} from '@modules/self-workspace-handlers.js';
+} from '@local-tools/self-workspace-handlers.js';
 
 //NOTE(self): Thread context for workspace creation — set by scheduler before tool execution
 //NOTE(self): so that workspace_create can pass the thread URI to watchWorkspace()

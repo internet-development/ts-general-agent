@@ -10,12 +10,12 @@ import { isEmpty, truncateGraphemes } from '@common/strings.js';
 import { processFileImageForUpload } from '@common/image-processor.js';
 import * as atproto from '@adapters/atproto/index.js';
 import * as arena from '@adapters/arena/index.js';
-import { markInteractionResponded } from '@modules/self-engagement.js';
+import { markInteractionResponded } from '@modules/engagement.js';
 import { ui } from '@modules/ui.js';
 import {
   logPost,
   type PostLogEntry,
-} from '@modules/self-post-log.js';
+} from '@modules/post-log.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');

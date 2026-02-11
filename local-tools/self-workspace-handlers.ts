@@ -5,7 +5,7 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import * as github from '@adapters/github/index.js';
 import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 import { createMemo } from '@local-tools/self-github-create-issue.js';
-import { watchWorkspace, getWatchedWorkspaceForRepo, createFinishedSentinel } from '@modules/self-github-workspace-discovery.js';
+import { watchWorkspace, getWatchedWorkspaceForRepo, createFinishedSentinel } from '@modules/github-workspace-discovery.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName } from '@local-tools/self-task-execute.js';
@@ -13,7 +13,7 @@ import { reportTaskComplete, reportTaskFailed, reportTaskBlocked } from '@local-
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess, verifyBranch } from '@local-tools/self-task-verify.js';
 import { parsePlan } from '@local-tools/self-plan-parse.js';
 import { listIssues } from '@adapters/github/list-issues.js';
-import { announceIfWorthy } from '@modules/self-announcement.js';
+import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { recordExperience } from '@local-tools/self-capture-experiences.js';
 
 export async function handleWorkspaceCreate(call: ToolCall, responseThreadUri: string | null): Promise<ToolResult> {

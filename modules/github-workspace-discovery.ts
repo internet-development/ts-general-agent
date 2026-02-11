@@ -16,12 +16,12 @@ import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, fetchFreshPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { handlePlanComplete } from '@local-tools/self-task-report.js';
 import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
-import { registerPeer, isPeerByBlueskyHandle, isPeer } from '@modules/self-peer-awareness.js';
+import { registerPeer, isPeerByBlueskyHandle, isPeer } from '@modules/peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
 import { getConfig } from '@modules/config.js';
-import { getConversation } from '@modules/self-github-engagement.js';
+import { getConversation } from '@modules/github-engagement.js';
 
 //NOTE(self): Path to watched workspaces state
 const WATCHED_WORKSPACES_PATH = '.memory/watched_workspaces.json';

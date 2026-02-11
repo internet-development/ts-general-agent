@@ -3,25 +3,25 @@ export * from '@common/strings.js';
 export * from '@modules/config.js';
 export * from '@modules/logger.js';
 export * from '@modules/memory.js';
-export * from '@modules/self-llm-gateway.js';
+export * from '@modules/llm-gateway.js';
 export * from '@common/exec.js';
 export * from '@modules/loop.js';
 export * from '@modules/sandbox.js';
 export * from '@modules/tools.js';
 export * from '@modules/executor.js';
 export * from '@modules/ui.js';
-export * from '@modules/self-pacing.js';
-export * from '@modules/self-post-log.js';
+export * from '@modules/pacing.js';
+export * from '@modules/post-log.js';
 
 //NOTE(self): Announcement module (shared by scheduler + executor for dual enforcement)
-export * from '@modules/self-announcement.js';
+export * from '@local-tools/self-announcement.js';
 
 //NOTE(self): New scheduler architecture modules
-export * from '@modules/self-extract.js';
-export * from '@modules/self-expression.js';
+export * from '@local-tools/self-extract.js';
+export * from '@modules/expression.js';
 export * from '@modules/scheduler.js';
-export * from '@modules/self-github-workspace-discovery.js';
-export * from '@modules/self-peer-awareness.js';
+export * from '@modules/github-workspace-discovery.js';
+export * from '@modules/peer-awareness.js';
 
 //NOTE(self): Re-export local-tools that were migrated from modules for backward compatibility
 export {

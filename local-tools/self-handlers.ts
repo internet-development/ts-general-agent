@@ -13,12 +13,12 @@ import { renderSkillSection } from '@modules/skills.js';
 import {
   markConversationConcluded as markBlueskyConversationConcluded,
   getConversation as getBlueskyConversation,
-} from '@modules/self-bluesky-engagement.js';
+} from '@modules/bluesky-engagement.js';
 import {
   markConversationConcluded as markGitHubConversationConcluded,
   getConversation as getGitHubConversation,
-} from '@modules/self-github-engagement.js';
-import { isWatchingWorkspace } from '@modules/self-github-workspace-discovery.js';
+} from '@modules/github-engagement.js';
+import { isWatchingWorkspace } from '@modules/github-workspace-discovery.js';
 import { ui } from '@modules/ui.js';
 import {
   lookupPostByUri,
@@ -29,7 +29,7 @@ import {
   getPostsNeedingAttributionFollowup,
   markPostNeedsAttributionFollowup,
   updatePostAttribution,
-} from '@modules/self-post-log.js';
+} from '@modules/post-log.js';
 
 export async function handleSelfUpdate(call: ToolCall): Promise<ToolResult> {
   const content = call.input.content as string;

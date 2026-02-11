@@ -660,10 +660,10 @@ When multiple SOULs are directed to the same external issue, the system prevents
 
 **Two modes based on issue type:**
 
-| Issue Type | SOUL Behavior | Example |
-|-----------|--------------|---------|
-| **Discussion / writing** | 1 substantive comment per SOUL. The writing IS the contribution. If peers covered your angle, `graceful_exit` with a like. | "Draft: A Great Website Skill" — share unique perspective, don't restate peers |
-| **Implementation / draft** | 1 comment per SOUL + optionally one SOUL pivots to PR. Iterate through PR reviews, not comments. | "Add dark mode" — one SOUL comments on approach, another creates the PR |
+| Issue Type                 | SOUL Behavior                                                                                                              | Example                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **Discussion / writing**   | 1 substantive comment per SOUL. The writing IS the contribution. If peers covered your angle, `graceful_exit` with a like. | "Draft: A Great Website Skill" — share unique perspective, don't restate peers |
+| **Implementation / draft** | 1 comment per SOUL + optionally one SOUL pivots to PR. Iterate through PR reviews, not comments.                           | "Add dark mode" — one SOUL comments on approach, another creates the PR        |
 
 **What prevents pile-on:**
 
@@ -880,13 +880,13 @@ When all plans are complete and no open issues remain in a workspace, the system
 
 **Related functions:**
 
-| Function | File | Purpose |
-|----------|------|---------|
-| `createFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Create the sentinel issue |
-| `isWorkspaceFinished()` | `modules/self-github-workspace-discovery.ts` | Check local state (no API call) |
+| Function                   | File                                         | Purpose                                                     |
+| -------------------------- | -------------------------------------------- | ----------------------------------------------------------- |
+| `createFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Create the sentinel issue                                   |
+| `isWorkspaceFinished()`    | `modules/self-github-workspace-discovery.ts` | Check local state (no API call)                             |
 | `verifyFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Verify sentinel still open + check for human comments (API) |
-| `clearFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Clear local state when closed |
-| `handleWorkspaceFinish()` | `modules/self-workspace-handlers.ts` | Tool handler for `workspace_finish` |
+| `clearFinishedSentinel()`  | `modules/self-github-workspace-discovery.ts` | Clear local state when closed                               |
+| `handleWorkspaceFinish()`  | `modules/self-workspace-handlers.ts`         | Tool handler for `workspace_finish`                         |
 
 ### Project Thread Persistence (Bluesky)
 
@@ -1196,7 +1196,7 @@ Proceed.
 | `plan_create`         | Create a structured plan issue                                                                                                                                                                                                                                                    |
 | `plan_claim_task`     | Claim a task via assignee API                                                                                                                                                                                                                                                     |
 | `plan_execute_task`   | Execute claimed task via Claude Code                                                                                                                                                                                                                                              |
-| `workspace_finish`   | Mark a workspace project as complete by creating a "LIL INTDEV FINISHED" sentinel issue                                                                                                                                                                                          |
+| `workspace_finish`    | Mark a workspace project as complete by creating a "LIL INTDEV FINISHED" sentinel issue                                                                                                                                                                                           |
 | `arena_search`        | Search Are.na for channels matching a keyword/topic                                                                                                                                                                                                                               |
 | `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky. Accepts optional `text` param for custom commentary instead of auto-generated metadata                                                                                                                         |
 | `arena_fetch_channel` | Fetch blocks from an Are.na channel (metadata only)                                                                                                                                                                                                                               |
@@ -1205,7 +1205,7 @@ Proceed.
 
 | File                                           | Purpose                                                                                 |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `modules/self-github-workspace-discovery.ts`    | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
+| `modules/self-github-workspace-discovery.ts`   | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
 | `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed)                                  |
 | `modules/peer-awareness.ts`                    | Dynamic peer SOUL discovery and cross-platform identity linking                         |
 | `modules/commitment-queue.ts`                  | Track pending commitments (JSONL persistence, dedup, stale cleanup)                     |

@@ -6,13 +6,13 @@ import { processBase64ImageForUpload, processFileImageForUpload } from '@common/
 import * as atproto from '@adapters/atproto/index.js';
 import * as fs from 'fs';
 import type { ToolCall, ToolResult } from '@modules/tools.js';
-import { markInteractionResponded, recordOriginalPost } from '@modules/self-engagement.js';
+import { markInteractionResponded, recordOriginalPost } from '@modules/engagement.js';
 import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
 import { ui } from '@modules/ui.js';
 import {
   logPost,
   type PostLogEntry,
-} from '@modules/self-post-log.js';
+} from '@modules/post-log.js';
 
 const BLUESKY_MAX_GRAPHEMES = PORTABLE_MAX_GRAPHEMES;
 
