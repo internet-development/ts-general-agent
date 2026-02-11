@@ -144,6 +144,7 @@ import {
   createFinishedSentinel,
   verifyFinishedSentinel,
   type ReviewablePR,
+  DISCUSSION_LABEL,
 } from '@modules/self-github-workspace-discovery.js';
 import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/self-peer-awareness.js';
 import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
@@ -3422,11 +3423,13 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           continue;
         }
 
-        //NOTE(self): Filter out plan-labeled issues and PRs
+        //NOTE(self): Filter out plan-labeled issues, discussion-labeled issues, and PRs
         const openIssues = issuesResult.data.filter(issue => {
           if (issue.pull_request) return false;
           const hasPlanLabel = issue.labels.some((l: any) => l.name.toLowerCase() === 'plan');
           if (hasPlanLabel) return false;
+          const hasDiscussionLabel = issue.labels.some((l: any) => l.name.toLowerCase() === DISCUSSION_LABEL);
+          if (hasDiscussionLabel) return false;
           return true;
         });
 

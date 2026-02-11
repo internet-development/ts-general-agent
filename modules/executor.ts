@@ -71,6 +71,7 @@ import {
   handlePlanCreate,
   handlePlanClaimTask,
   handlePlanExecuteTask,
+  handleWorkspaceFinish,
 } from '@modules/self-workspace-handlers.js';
 
 //NOTE(self): Thread context for workspace creation — set by scheduler before tool execution
@@ -172,6 +173,8 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return await handlePlanClaimTask(call);
       case 'plan_execute_task':
         return await handlePlanExecuteTask(call);
+      case 'workspace_finish':
+        return await handleWorkspaceFinish(call);
 
       //NOTE(self): Web tools
       case 'web_fetch':

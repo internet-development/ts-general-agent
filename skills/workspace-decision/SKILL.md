@@ -63,7 +63,8 @@ When engaging in conversations about collaborative development:
 When reviewing open issues to synthesize a plan:
 
 **Roll everything up:**
-- Every open issue must be accounted for in the plan
+- Every open issue (except `discussion`-labeled) must be accounted for in the plan
+- Discussion-labeled issues are brainstorming/writing threads — they're excluded from plan synthesis and stay open
 - Actionable issues (bugs, features, implementation) become tasks
 - Memos and decisions become context in the plan's Context section
 - Reference issues by number: "See #N for details"

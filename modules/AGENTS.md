@@ -42,7 +42,8 @@ Modules are **core runtime infrastructure**. They provide the foundational syste
 - State that multiple local-tools depend on (engagement, conversation tracking)
 - Configuration management
 - Logging infrastructure
-- LLM interface (`openai.ts`)
+- LLM interface (`self-llm-gateway.ts`)
+- Domain handler files (`self-*-handlers.ts`) and tool definitions (`self-*-tools.ts`)
 - Shared utilities used by multiple local-tools
 
 ## What Does NOT Belong Here
@@ -71,40 +72,45 @@ Ask these questions:
 | Module | Purpose | Depends On |
 |--------|---------|------------|
 | `scheduler.ts` | Multi-loop architecture (awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment). `executeClaimedTask()` includes PRE-GATE `verifyBranch()` check. `requestEarlyPlanCheck()` fires plan awareness 5s after PR merge via `registerOnPRMerged()` callback. | All modules |
-| `executor.ts` | Tool execution handlers. `github_create_pr` auto-requests reviewers via `requestReviewersForPR()`. `github_merge_pr` triggers `onPRMergedCallback` for early re-poll. `plan_execute_task` includes PRE-GATE `verifyBranch()` check. Exports `registerOnPRMerged()` callback to avoid circular imports with scheduler. | Adapters, local-tools |
-| `tools.ts` | Tool definitions for LLM | None |
+| `executor.ts` | Thin tool dispatcher (242 lines) — imports handler functions from domain files, routes by tool name. `github_create_pr` auto-requests reviewers via `requestReviewersForPR()`. `github_merge_pr` triggers `onPRMergedCallback` for early re-poll. `plan_execute_task` includes PRE-GATE `verifyBranch()` check. Exports `registerOnPRMerged()` callback to avoid circular imports with scheduler. | Domain handlers |
+| `tools.ts` | Tool aggregator (36 lines) — imports domain tool arrays, exports combined `AGENT_TOOLS` | Domain tool files |
+| `self-handlers.ts` | Core domain tool handlers (self_read, self_write, etc.) | Adapters, local-tools |
+| `self-bluesky-handlers.ts` | Bluesky tool handlers (bluesky_post, bluesky_reply, etc.) | ATProto adapter |
+| `self-github-handlers.ts` | GitHub tool handlers (github_create_issue, github_comment, etc.) | GitHub adapter |
+| `self-web-handlers.ts` | Web tool handlers (web_browse, curl_fetch, etc.) | None |
+| `self-workspace-handlers.ts` | Workspace tool handlers (workspace_create, plan_create, etc.) | GitHub adapter, local-tools |
+| `self-tools.ts` | Core domain tool definitions | None |
+| `self-bluesky-tools.ts` | Bluesky tool definitions | None |
+| `self-github-tools.ts` | GitHub tool definitions | None |
+| `self-web-tools.ts` | Web tool definitions | None |
+| `self-workspace-tools.ts` | Workspace tool definitions | None |
 | `config.ts` | Environment configuration | None |
 | `logger.ts` | Logging infrastructure | None |
 | `memory.ts` | File-based persistence | None |
-| `openai.ts` | AI Gateway / LLM interface | Config |
+| `self-llm-gateway.ts` | AI Gateway / LLM interface (formerly `openai.ts`) | Config |
 | `sandbox.ts` | File system sandboxing | Config |
 | `ui.ts` | Terminal UI components | None |
-| `exec.ts` | Shell command execution utilities | None |
-| `image-processor.ts` | Image processing for posts | None |
 | `loop.ts` | Main agent loop runner | Scheduler |
 | `skills.ts` | Skills framework (loads `skills/*/SKILL.md`, interpolation, prompt assembly) | Logger |
-| `peer-awareness.ts` | Dynamic peer SOUL discovery from plans, workspaces, threads | Config, Memory |
-| `strings.ts` | Shared string utilities: `isEmpty`, `createSlug`, `truncateGraphemes`, `PORTABLE_MAX_GRAPHEMES` (300) | `@atproto/common-web` |
-| `announcement.ts` | Announcement guard shared by scheduler + executor for dual enforcement (`announceIfWorthy`) | Logger |
-| `voice-phrases.ts` | Load/regenerate `voice-phrases.json` for personality-consistent phrasing (`getFulfillmentPhrase`, `getTaskClaimPhrase`, `getGitHubPhrase`) | Memory, Logger |
-| `design-catalog.ts` | Design inspiration catalog for expression cycles (`getRandomDesignSource`, `getRandomBrowseUrl`) | None |
+| `self-peer-awareness.ts` | Dynamic peer SOUL discovery from plans, workspaces, threads | Config, Memory |
+| `self-announcement.ts` | Announcement guard shared by scheduler + executor for dual enforcement (`announceIfWorthy`) | Logger |
+| `self-voice-phrases.ts` | Load/regenerate `voice-phrases.json` for personality-consistent phrasing (`getFulfillmentPhrase`, `getTaskClaimPhrase`, `getGitHubPhrase`) | Memory, Logger |
 
 ### State Management (Keep in Modules)
 
 | Module | Purpose | Why It Stays |
 |--------|---------|--------------|
-| `engagement.ts` | Relationship tracking, notification prioritization, `isLowValueClosing()` (verbose closing/acknowledgment detection), `shouldRespondTo()` (notification filtering with hard-block for closings) | Used by scheduler, multiple local-tools depend on it |
-| `bluesky-engagement.ts` | Bluesky conversation state | Essential for response loop |
-| `github-engagement.ts` | GitHub conversation state | Essential for response loop |
-| `expression.ts` | Expression scheduling (core parts) | Orchestration infrastructure |
-| `pacing.ts` | Rate limiting | Cross-cutting concern |
-| `post-log.ts` | Post logging (core parts) | Infrastructure for attribution local-tools |
+| `self-engagement.ts` | Relationship tracking, notification prioritization, `isLowValueClosing()` (verbose closing/acknowledgment detection), `shouldRespondTo()` (notification filtering with hard-block for closings) | Used by scheduler, multiple local-tools depend on it |
+| `self-bluesky-engagement.ts` | Bluesky conversation state | Essential for response loop |
+| `self-github-engagement.ts` | GitHub conversation state | Essential for response loop |
+| `self-expression.ts` | Expression scheduling (core parts) | Orchestration infrastructure |
+| `self-pacing.ts` | Rate limiting | Cross-cutting concern |
+| `self-post-log.ts` | Post logging (core parts) | Infrastructure for attribution local-tools |
 | `self-extract.ts` | SELF.md parsing | Foundational identity infrastructure |
-
-| `workspace-discovery.ts` | Poll workspaces for plan issues (up to 30 per workspace), manage watch list, three-tier auto-close (handled 24h, stale memo 3d, stale other 7d), `pollWorkspacesForApprovedPRs()` (up to 30 PRs) + `autoMergeApprovedPR()` for auto-merging approved PRs. **Merge-gated task completion:** tasks stay `in_progress` until PR merges — `completeTaskAfterMerge()` marks `completed` and checks plan closure. **PR recovery:** `handleMergeConflictPR()` closes conflicting/rejected/unreviewed PRs, deletes branch, resets task to `pending`. **Follow-up issues:** `createFollowUpIssueFromReviews()` creates issues from reviewer feedback after merge. **Auto-assignment:** `pollWorkspacesForOpenIssues()` assigns unassigned issues to their author but does NOT filter by assignee — all workspace issues visible to all SOULs. **Plan synthesis:** `getWorkspacesNeedingPlanSynthesis()` finds workspaces with zero open plans and cooldown expired (1h), `updateWorkspaceSynthesisTimestamp()` records attempt, `closeRolledUpIssues()` closes source issues with plan link comment. **Duplicate plan consolidation:** `PlanPollResult.allPlansByWorkspace` tracks all plan issue numbers per workspace — scheduler uses this to close older duplicate plans (superseded by newest). **"LIL INTDEV FINISHED" sentinel:** `createFinishedSentinel()` creates sentinel issue when workspace health check finds no remaining work. `isWorkspaceFinished()` checks local state (no API call). `verifyFinishedSentinel()` confirms sentinel still open (API check per cycle). Both `pollWorkspacesForPlans` and `getWorkspacesNeedingPlanSynthesis` skip finished workspaces. | Multi-SOUL collaboration infrastructure |
-| `commitment-queue.ts` | Track pending commitments with JSONL persistence, dedup, stale cleanup | Ensures follow-through on promises made in replies |
-| `commitment-extract.ts` | LLM-based extraction of action commitments from Bluesky replies | Feeds commitment queue from response mode |
-| `commitment-fulfill.ts` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) | Executes promised actions autonomously |
+| `self-github-workspace-discovery.ts` | Poll workspaces for plan issues (up to 30 per workspace), manage watch list, three-tier auto-close (handled 24h, stale memo 3d, stale other 7d), `pollWorkspacesForApprovedPRs()` (up to 30 PRs) + `autoMergeApprovedPR()` for auto-merging approved PRs. **Merge-gated task completion:** tasks stay `in_progress` until PR merges — `completeTaskAfterMerge()` marks `completed` and checks plan closure. **PR recovery:** `handleMergeConflictPR()` closes conflicting/rejected/unreviewed PRs, deletes branch, resets task to `pending`. **Follow-up issues:** `createFollowUpIssueFromReviews()` creates issues from reviewer feedback after merge. **Auto-assignment:** `pollWorkspacesForOpenIssues()` assigns unassigned issues to their author but does NOT filter by assignee — all workspace issues visible to all SOULs. **Plan synthesis:** `getWorkspacesNeedingPlanSynthesis()` finds workspaces with zero open plans and cooldown expired (1h), `updateWorkspaceSynthesisTimestamp()` records attempt, `closeRolledUpIssues()` closes source issues with plan link comment. **Duplicate plan consolidation:** `PlanPollResult.allPlansByWorkspace` tracks all plan issue numbers per workspace — scheduler uses this to close older duplicate plans (superseded by newest). **"LIL INTDEV FINISHED" sentinel:** `createFinishedSentinel()` creates sentinel issue when workspace health check finds no remaining work. `isWorkspaceFinished()` checks local state (no API call). `verifyFinishedSentinel()` confirms sentinel still open (API check per cycle). Both `pollWorkspacesForPlans` and `getWorkspacesNeedingPlanSynthesis` skip finished workspaces. | Multi-SOUL collaboration infrastructure |
+| `self-commitment-queue.ts` | Track pending commitments with JSONL persistence, dedup, stale cleanup | Ensures follow-through on promises made in replies |
+| `self-commitment-extract.ts` | LLM-based extraction of action commitments from Bluesky replies | Feeds commitment queue from response mode |
+| `self-commitment-fulfill.ts` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) | Executes promised actions autonomously |
 
 ### Moved to Local-Tools
 
@@ -183,7 +189,7 @@ Import from module entry points, not internal files:
 
 ```typescript
 // GOOD
-import { recordInteraction } from '@modules/self-engagement.js';
+import { recordInteraction } from '@modules/self-engagement.js';  // Uses self-* prefix (v8.6)
 
 // BAD
 import { recordInteraction } from '@modules/engagement/interactions.js';

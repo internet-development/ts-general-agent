@@ -38,7 +38,7 @@ export const WORKSPACE_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'create_memo',
-    description: 'Create a GitHub issue as a memo/note for coordination. Auto-adds "memo" label. Use this to leave notes, track ideas, or coordinate with other SOULs in a workspace.',
+    description: 'Create a GitHub issue for coordination or discussion. Default label: "memo" (short-lived coordination artifact). Pass labels: ["discussion"] for long-form brainstorming threads that should stay open.',
     input_schema: {
       type: 'object',
       properties: {
@@ -61,7 +61,7 @@ export const WORKSPACE_TOOLS: ToolDefinition[] = [
         labels: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Additional labels (memo label is always added)',
+          description: 'Labels for the issue. Defaults to ["memo"] if not provided. Use ["discussion"] for brainstorming/writing threads.',
         },
       },
       required: ['owner', 'repo', 'title'],
@@ -167,6 +167,19 @@ export const WORKSPACE_TOOLS: ToolDefinition[] = [
         },
       },
       required: ['owner', 'repo', 'issue_number', 'task_number'],
+    },
+  },
+  {
+    name: 'workspace_finish',
+    description: 'Mark a workspace project as complete by creating a "LIL INTDEV FINISHED" sentinel issue. Blocks all new plans, tasks, and issue engagement until the sentinel is closed or the owner comments on it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        summary: { type: 'string', description: 'Summary of what was completed' },
+      },
+      required: ['owner', 'repo', 'summary'],
     },
   },
 ];

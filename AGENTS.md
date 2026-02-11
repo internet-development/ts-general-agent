@@ -652,6 +652,30 @@ All checks use **effective peers** — on workspace repos these are registered p
 - On foreign repos: only the issue author counts as human (effective peers include everyone else)
 - 3 comments is generous for an external issue — if you haven't moved the needle in 3, a 4th won't help
 
+### Pile-On Prevention (v8.6)
+
+When multiple SOULs are directed to the same external issue, the system prevents pile-on — the anti-pattern where 3 SOULs post 23 overlapping comments in 47 minutes (see Scenario 25).
+
+**The principle:** One thoughtful comment per SOUL, then done. Quality over quantity. Silence over noise.
+
+**Two modes based on issue type:**
+
+| Issue Type | SOUL Behavior | Example |
+|-----------|--------------|---------|
+| **Discussion / writing** | 1 substantive comment per SOUL. The writing IS the contribution. If peers covered your angle, `graceful_exit` with a like. | "Draft: A Great Website Skill" — share unique perspective, don't restate peers |
+| **Implementation / draft** | 1 comment per SOUL + optionally one SOUL pivots to PR. Iterate through PR reviews, not comments. | "Add dark mode" — one SOUL comments on approach, another creates the PR |
+
+**What prevents pile-on:**
+
+1. **Deterministic jitter** (15-90s per SOUL) staggers initial responses
+2. **Thread refresh** after jitter catches concurrent comments — SOUL sees what peers wrote
+3. **Peer-aware formatting** makes peer comments unmissable: "READ CAREFULLY. Do not repeat what they said."
+4. **Round-robin prevention** blocks all SOULs after one round of SOUL-only replies
+5. **Comment saturation cap** (3 per SOUL) is a hard ceiling that code enforces
+6. **Skill prompt** instructs: "never restate what a peer already said," "one comment per cycle"
+
+**The observer test:** A human reading the issue should see 2-3 distinct perspectives that build on each other, not 23 variations of the same numbered list. If the thread looks like a meeting transcript, something is broken.
+
 ---
 
 ## How the SOUL Develops
@@ -835,15 +859,22 @@ When all plans are complete and no open issues remain in a workspace, the system
 **What the sentinel blocks:**
 
 - `pollWorkspacesForPlans()` skips the workspace entirely — no plan polling, no task claiming
+- `pollWorkspacesForOpenIssues()` skips the workspace — no issue engagement
 - `getWorkspacesNeedingPlanSynthesis()` skips the workspace — no new plans synthesized
 - `checkWorkspaceHealth()` skips the workspace — no redundant health checks
 
 **How to reactivate a workspace:**
 
-- Close the "LIL INTDEV FINISHED" issue on GitHub
+- **Close** the "LIL INTDEV FINISHED" issue on GitHub, OR
+- **Comment** on the sentinel issue (any non-SOUL user) — `verifyFinishedSentinel()` detects the human comment, auto-closes the sentinel, and reactivates
 - `verifyFinishedSentinel()` runs every plan awareness cycle (3 min) for finished workspaces
 - If the sentinel issue is no longer open → `finishedIssueNumber` is cleared → workspace becomes active
 - Open a new issue in the workspace → plan synthesis picks it up next cycle
+
+**How to create a sentinel:**
+
+- **Automatic:** `checkWorkspaceHealth()` creates it when LLM determines no work remains
+- **Explicit:** SOULs call `workspace_finish` tool (routed through `handleWorkspaceFinish()`)
 
 **Design:** A workspace with zero open issues is ambiguous — does it mean "project done" or "system forgot"? The sentinel makes the state explicit. Observers can look at the repo and immediately see whether the project is intentionally complete or stuck.
 
@@ -851,10 +882,11 @@ When all plans are complete and no open issues remain in a workspace, the system
 
 | Function | File | Purpose |
 |----------|------|---------|
-| `createFinishedSentinel()` | `modules/workspace-discovery.ts` | Create the sentinel issue |
-| `isWorkspaceFinished()` | `modules/workspace-discovery.ts` | Check local state (no API call) |
-| `verifyFinishedSentinel()` | `modules/workspace-discovery.ts` | Verify sentinel still open (API) |
-| `clearFinishedSentinel()` | `modules/workspace-discovery.ts` | Clear local state when closed |
+| `createFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Create the sentinel issue |
+| `isWorkspaceFinished()` | `modules/self-github-workspace-discovery.ts` | Check local state (no API call) |
+| `verifyFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Verify sentinel still open + check for human comments (API) |
+| `clearFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Clear local state when closed |
+| `handleWorkspaceFinish()` | `modules/self-workspace-handlers.ts` | Tool handler for `workspace_finish` |
 
 ### Project Thread Persistence (Bluesky)
 
@@ -926,7 +958,7 @@ When a SOUL finishes engaging with a workspace issue (via `graceful_exit` or `co
 
 - Agent's comment is the most recent (SOUL responded, no one followed up)
 - Last activity was > 24 hours ago (gave others time to respond)
-- Not a plan issue, not a PR
+- Not a plan issue, not a PR, not a `discussion`-labeled issue
 - This fixes the **one-shot engagement trap**: after a SOUL responds to a workspace issue, the consecutive reply check prevents re-engagement for closure. Without Tier 2, the issue stays open indefinitely.
 
 **Tier 3: Stale issue cleanup (3-7 days)**
@@ -934,9 +966,11 @@ When a SOUL finishes engaging with a workspace issue (via `graceful_exit` or `co
 
 - **Memo-labeled issues**: 3 days (memos are coordination artifacts — once read, they should be closed)
 - **All other issues**: 7 days
-- Not a plan issue, not a PR
+- Not a plan issue, not a PR, not a `discussion`-labeled issue
 
-The three tiers form a lifecycle: **immediate** (SOUL explicitly closes) → **handled** (SOUL responded, no follow-up) → **stale** (no one engaged at all). Together they ensure workspace issues don't linger.
+**Protected from auto-close:** Issues with the `discussion` label are excluded from both Tier 2 and Tier 3 — they stay open until a human closes them. This protects long-form brainstorming threads from being killed by automated cleanup.
+
+The three tiers form a lifecycle: **immediate** (SOUL explicitly closes) → **handled** (SOUL responded, no follow-up) → **stale** (no one engaged at all). Together they ensure workspace issues don't linger. Discussion-labeled issues are the exception — they persist for ongoing contribution.
 
 ### Plan Awareness Loop (6th Scheduler Loop)
 
@@ -1013,6 +1047,9 @@ Detailed instructions with acceptance criteria.
 
 - `plan` - identifies as a plan issue
 - `plan:active` / `plan:complete` / `plan:blocked`
+- `discussion` - long-lived brainstorming/writing thread; protected from plan synthesis and auto-close
+- `memo` - short-lived coordination artifact; auto-closes after 3 days if stale
+- `finished` - "LIL INTDEV FINISHED" sentinel; blocks all new work in workspace
 
 ### Task State Machine
 
@@ -1159,6 +1196,7 @@ Proceed.
 | `plan_create`         | Create a structured plan issue                                                                                                                                                                                                                                                    |
 | `plan_claim_task`     | Claim a task via assignee API                                                                                                                                                                                                                                                     |
 | `plan_execute_task`   | Execute claimed task via Claude Code                                                                                                                                                                                                                                              |
+| `workspace_finish`   | Mark a workspace project as complete by creating a "LIL INTDEV FINISHED" sentinel issue                                                                                                                                                                                          |
 | `arena_search`        | Search Are.na for channels matching a keyword/topic                                                                                                                                                                                                                               |
 | `arena_post_image`    | Complete workflow: fetch channel → select image → post to Bluesky. Accepts optional `text` param for custom commentary instead of auto-generated metadata                                                                                                                         |
 | `arena_fetch_channel` | Fetch blocks from an Are.na channel (metadata only)                                                                                                                                                                                                                               |
@@ -1167,7 +1205,7 @@ Proceed.
 
 | File                                           | Purpose                                                                                 |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `modules/workspace-discovery.ts`               | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
+| `modules/self-github-workspace-discovery.ts`    | Poll workspaces for plans, open issues, reviewable PRs; auto-close handled/stale issues |
 | `adapters/github/list-pull-request-reviews.ts` | List reviews on a PR (check if agent already reviewed)                                  |
 | `modules/peer-awareness.ts`                    | Dynamic peer SOUL discovery and cross-platform identity linking                         |
 | `modules/commitment-queue.ts`                  | Track pending commitments (JSONL persistence, dedup, stale cleanup)                     |
@@ -1433,12 +1471,23 @@ Deletes all posts and replies the SOUL has made on Bluesky. Rate-limited (500ms 
 ```
 ts-general-agent/
 ├── index.ts                    # Entry point (loads skills, authenticates, starts scheduler)
+├── walk.ts                     # Walk mode entry point (single-pass, all operations once)
+├── example-conversation.ts     # Definitive multi-SOUL collaboration template
 ├── AGENTS.md                   # System constraints (this file)
+├── SCENARIOS.md                # Required outcomes (source of truth for behavior)
 ├── SOUL.md                     # Immutable essence (read-only)
 ├── SELF.md                     # Agent's self-reflection (agent-owned)
+├── SELF.md.template            # Template for initializing SELF.md
 ├── voice-phrases.json          # Auto-generated operational phrases (from ## Voice)
-├── .memory/                    # Persistent memory (agent-writable)
+├── .memory/                    # Persistent runtime data (agent-writable)
 ├── .workrepos/                 # Cloned repos (agent-writable)
+│
+├── common/                     # Pure utilities (no domain logic)
+│   ├── strings.ts              # String manipulation helpers
+│   ├── exec.ts                 # Shell command execution
+│   ├── image-processor.ts      # Image processing for posts
+│   ├── design-catalog.ts       # Design inspiration source catalog
+│   └── index.ts                # Barrel export
 │
 ├── adapters/                   # Service adapters (see adapters/AGENTS.md)
 │   ├── atproto/                # Bluesky/ATProto
@@ -1450,28 +1499,37 @@ ts-general-agent/
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
 │   ├── skills.ts               # Skills framework (loads skills/*/SKILL.md)
-│   ├── openai.ts               # AI Gateway (streaming via ai module)
+│   ├── self-llm-gateway.ts     # AI Gateway (streaming via ai module)
 │   ├── loop.ts                 # Main loop (uses scheduler)
 │   ├── scheduler.ts            # Multi-loop scheduler
 │   ├── self-extract.ts         # SELF.md parsing
-│   ├── expression.ts           # Scheduled expression
-│   ├── executor.ts             # Tool execution
-│   ├── tools.ts                # Tool definitions
-│   ├── pacing.ts               # Rate limiting
-│   ├── engagement.ts           # Relationship tracking
-│   ├── bluesky-engagement.ts   # Bluesky conversation state
-│   ├── github-engagement.ts    # GitHub conversation state
-│   ├── peer-awareness.ts       # Dynamic peer SOUL discovery
-│   ├── workspace-discovery.ts  # Workspace polling for plans
-│   ├── commitment-queue.ts     # Commitment tracking (JSONL persistence)
-│   ├── commitment-extract.ts   # LLM-based commitment extraction from replies
-│   ├── commitment-fulfill.ts   # Commitment fulfillment dispatch
-│   ├── post-log.ts             # Post logging and attribution
-│   ├── voice-phrases.ts        # Voice phrase loading, interpolation, regeneration
+│   ├── self-expression.ts      # Scheduled expression
+│   ├── executor.ts             # Thin tool dispatcher (routes to domain handlers)
+│   ├── tools.ts                # Tool aggregator (imports domain tool arrays)
+│   ├── self-pacing.ts          # Rate limiting
+│   ├── self-engagement.ts      # Relationship tracking + shouldRespondTo + isLowValueClosing
+│   ├── self-bluesky-engagement.ts  # Bluesky conversation state
+│   ├── self-github-engagement.ts   # GitHub conversation state
+│   ├── self-peer-awareness.ts  # Dynamic peer SOUL discovery
+│   ├── self-github-workspace-discovery.ts  # Workspace polling for plans, issues, PRs
+│   ├── self-commitment-queue.ts    # Commitment tracking (JSONL persistence)
+│   ├── self-commitment-extract.ts  # LLM-based commitment extraction from replies
+│   ├── self-commitment-fulfill.ts  # Commitment fulfillment dispatch
+│   ├── self-post-log.ts        # Post logging and attribution
+│   ├── self-voice-phrases.ts   # Voice phrase loading, interpolation, regeneration
+│   ├── self-announcement.ts    # GitHub → Bluesky announcement decisions
 │   ├── sandbox.ts              # File system sandboxing
-│   ├── exec.ts                 # Shell command execution
-│   ├── image-processor.ts      # Image processing for posts
 │   ├── ui.ts                   # Terminal UI components
+│   ├── self-handlers.ts        # Core domain tool handlers
+│   ├── self-bluesky-handlers.ts    # Bluesky tool handlers
+│   ├── self-github-handlers.ts     # GitHub tool handlers
+│   ├── self-web-handlers.ts        # Web tool handlers
+│   ├── self-workspace-handlers.ts  # Workspace tool handlers
+│   ├── self-tools.ts           # Core domain tool definitions
+│   ├── self-bluesky-tools.ts   # Bluesky tool definitions
+│   ├── self-github-tools.ts    # GitHub tool definitions
+│   ├── self-web-tools.ts       # Web tool definitions
+│   ├── self-workspace-tools.ts # Workspace tool definitions
 │   └── index.ts                # Module exports
 │
 ├── skills/                     # Prompt templates (see skills/AGENTS.md)
@@ -1481,14 +1539,14 @@ ts-general-agent/
 │   ├── expression-prompts/     # Prompt templates for expression
 │   ├── deep-reflection/        # Experience integration and SELF.md reflection
 │   ├── self-improvement/       # Self-improvement prompts
+│   ├── self-improvement-decision/ # Friction-based improvement decisions
+│   ├── aspirational-growth/    # Proactive growth prompts
 │   ├── owner-communication/    # Owner interaction mode
 │   ├── grounding/              # Pre-action identity grounding
 │   ├── task-execution/         # Collaborative task execution
 │   ├── peer-awareness/         # Shared peer awareness blocks
 │   ├── workspace-decision/     # Workspace creation/usage reasoning
-│   ├── github-announcement/    # GitHub → Bluesky announcement decisions
-│   ├── aspirational-growth/    # Proactive growth prompts
-│   └── self-improvement-decision/ # Friction-based improvement decisions
+│   └── github-announcement/    # GitHub → Bluesky announcement decisions
 │
 └── local-tools/                # Capabilities (see local-tools/AGENTS.md)
     ├── self-bluesky-*.ts       # Bluesky platform local-tools

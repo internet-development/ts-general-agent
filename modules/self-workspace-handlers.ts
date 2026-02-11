@@ -5,7 +5,7 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import * as github from '@adapters/github/index.js';
 import { createWorkspace, findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 import { createMemo } from '@local-tools/self-github-create-issue.js';
-import { watchWorkspace, getWatchedWorkspaceForRepo } from '@modules/self-github-workspace-discovery.js';
+import { watchWorkspace, getWatchedWorkspaceForRepo, createFinishedSentinel } from '@modules/self-github-workspace-discovery.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName } from '@local-tools/self-task-execute.js';
@@ -430,4 +430,13 @@ export async function handlePlanExecuteTask(call: ToolCall): Promise<ToolResult>
       planComplete: completionReport.planComplete || false,
     }),
   };
+}
+
+export async function handleWorkspaceFinish(call: ToolCall): Promise<ToolResult> {
+  const { owner, repo, summary } = call.input as { owner: string; repo: string; summary: string };
+  const sentinelNumber = await createFinishedSentinel(owner, repo, summary);
+  if (sentinelNumber) {
+    return { tool_use_id: call.id, content: JSON.stringify({ success: true, issueNumber: sentinelNumber }) };
+  }
+  return { tool_use_id: call.id, content: JSON.stringify({ success: false, error: 'Failed to create sentinel' }), is_error: true };
 }

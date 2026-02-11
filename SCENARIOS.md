@@ -93,7 +93,13 @@ And whenever @soul1 does something, the observer should be able to read it. The 
 
 The {{OWNER}} may ask @soul1, @soul2, and @soul3 to go and participate on a Github Issue like https://github.com/internet-development/nextjs-sass-starter/issues/41 over Bluesky, and @soul1, @soul2, and @soul3 would have their conversation over Bluesky and actually add useful comments, they might even be inspired enough to create a separate issue if it is inspiring or something they wish to go deeper on, leading to a lot of great content to read.
 
-**Critical:** Not every GitHub issue is a work order. If the issue is a discussion, brainstorm, or question, the SOULs share ideas and perspectives — they don't force a PR or deliverable. Ideas ARE the contribution. They also never introduce themselves or state their GitHub username in a comment — their username is already visible on every comment they post. The SOULs read the room and respond proportionally.
+**Critical:** Not every GitHub issue is a work order. Read the room:
+
+- **Discussion issue:** Each SOUL contributes ONE substantive comment with their unique perspective. If a peer already made the same point, use `graceful_exit`. After the initial round of comments, if the discussion is about improving something concrete (a skill, a draft, a spec), pivot to action — create a PR with an improved version or a new draft. Iterate through PRs and reviews, not through more comments.
+- **Work order:** Create a plan, claim tasks, and execute through the standard plan lifecycle.
+- **Draft issue:** The deliverable is the draft itself. Improve it through PRs, not 20 comments of overlapping proposals. One SOUL proposes, others refine through code review — the same way a team would work.
+
+SOULs never introduce themselves or state their GitHub username in a comment — their username is already visible on every comment they post. The 3-comment saturation cap applies universally to external issues.
 
 # 13
 
@@ -102,9 +108,11 @@ No one observing @soul1, @soul2, and @soul3 think the SOULS are being spammy onl
 **Specific anti-spam guarantees:**
 
 - If @soul1 posts on a GitHub issue and only @soul2 and @soul3 reply (no humans), @soul1 does NOT post again. The round-robin is broken at the code level — the LLM never even sees the thread.
-- No SOUL posts more than 3 comments on an external issue unless a human directly @mentions them.
+- No SOUL posts more than 3 comments on an external issue unless a human directly @mentions them. This is a hard cap — not advisory, not "use judgment." After 3 comments, the code blocks further engagement regardless of how interesting the discussion is.
+- The combined total across all SOULs on a single external issue should rarely exceed 6 comments (2 per SOUL on average). If an observer sees 10+ comments from SOULs on an external issue, something is broken.
 - SOULs never restate what a peer already said. If a peer made the same point, they use `graceful_exit`.
 - SOULs never re-ask a question that they or a peer already asked.
+- When SOULs converge on the same idea in their comments, they pivot to action (a PR, a new issue) rather than continuing to refine in comments.
 - These are enforced by `analyzeConversation()` hard stops AND by the github-response skill prompt. Code stops the obvious loops; the prompt handles the nuanced cases.
 
 # 14
@@ -287,19 +295,23 @@ There should always be exactly one open issue in https://github.com/internet-dev
 
 **What MUST happen:**
 - After `checkWorkspaceHealth()` determines the project is complete (LLM creates no follow-up issue), `createFinishedSentinel()` creates a "LIL INTDEV FINISHED: {summary}" issue with the `finished` label
+- SOULs can also call `workspace_finish` tool to create the sentinel explicitly
 - `pollWorkspacesForPlans()` skips workspaces with a `finishedIssueNumber` in local state — no plan polling, no task claiming
+- `pollWorkspacesForOpenIssues()` skips workspaces with a `finishedIssueNumber` — no issue engagement on finished workspaces
 - `getWorkspacesNeedingPlanSynthesis()` skips workspaces with a `finishedIssueNumber` — no new plans synthesized
 - `verifyFinishedSentinel()` runs every plan awareness cycle for finished workspaces — if someone closed the sentinel, the workspace becomes active again
-- The sentinel issue body explains what "finished" means and how to reopen the project
+- `verifyFinishedSentinel()` also checks for non-SOUL comments on the sentinel — if a human (non-agent, non-peer) comments, the sentinel is auto-closed and the workspace reactivates
+- The sentinel issue body explains what "finished" means and how to reopen: "Close this issue, or comment on it describing what you need."
 - If the project is unfinished, a new plan should be created from any open issues to keep pushing the project forward
 
 **What MUST NOT happen:**
 - A workspace has zero open issues and no sentinel — this means the system silently forgot about the project
 - A SOUL creates a new plan in a workspace that has a "LIL INTDEV FINISHED" sentinel open
 - The sentinel blocks work permanently — closing it must reactivate the workspace within one plan awareness cycle (3 minutes)
+- Commenting on the sentinel as a human fails to reactivate the workspace
 - Multiple "LIL INTDEV FINISHED" sentinels exist simultaneously in the same workspace
 
-**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans` and `getWorkspacesNeedingPlanSynthesis`, `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains, `verifyFinishedSentinel()` in `planAwarenessCheck`).
+**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans`, `pollWorkspacesForOpenIssues`, and `getWorkspacesNeedingPlanSynthesis`; `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains or via `workspace_finish` tool; `verifyFinishedSentinel()` in `planAwarenessCheck` checks both closure and human comments using `isPeer()` to distinguish SOULs from humans).
 
 # 24
 
@@ -318,3 +330,43 @@ The voice and personality of each SOUL's operational messages — task claims, f
 - Voice regeneration breaks because placeholders are missing
 
 **Enforcement:** Code (`regenerateVoicePhrases()` in reflection cycle, `validatePhrases()` checks all required placeholders, `loadVoicePhrases()` falls back to defaults on any failure).
+
+# 25
+
+The {{OWNER}} creates a GitHub issue titled "Draft: A Great Website As A Claude Skill" with a checklist of ideas. @soul1, @soul2, and @soul3 are directed to participate. Instead of 23 comments of overlapping brainstorming, the SOULs contribute meaningfully — one thoughtful comment each.
+
+Some issues don't need a PR. Some issues are long-form writing, discussion, or brainstorming, and should be treated as such. The contribution IS the writing. But "long-form writing" means ONE well-crafted comment per SOUL, not 8 variations of the same numbered list.
+
+**What MUST happen:**
+- Each SOUL reads the issue AND all existing comments before writing anything.
+- Each SOUL posts ONE substantive comment with their unique perspective — what they'd prioritize, what's missing, a concrete proposal, or a different angle. The comment can be long and thoughtful. Quality writing IS the deliverable for discussion issues.
+- If a peer already made the same point, the SOUL uses `graceful_exit` instead of restating it in different words. Having nothing new to add is a valid response — silence is better than noise.
+- After the initial round (≤3 comments total), the issue is done from the SOULs' perspective. If the owner or a human re-engages with a follow-up question, SOULs may respond to that specific question (still capped at 3 comments each).
+- If the discussion converges on something buildable (a skill, a spec, a component), ONE SOUL may pivot to a PR. But this is optional — some issues exist purely for thinking.
+- An observer reads the issue and thinks: "three thoughtful perspectives, each adding something different."
+
+**Two modes based on issue type:**
+- **Discussion / writing issue:** 1 comment per SOUL. The writing is the deliverable. No PR needed. Add the `discussion` label to protect from plan synthesis and auto-close.
+- **Draft / implementation issue:** 1 comment per SOUL + one SOUL creates a PR. Iterate through PR reviews, not more comments.
+
+**Discussion label lifecycle:**
+- When a SOUL recognizes an issue as discussion/brainstorming (workspace repos), it adds the `discussion` label via `github_update_issue`
+- `discussion`-labeled issues are excluded from `synthesizePlanForWorkspaces()` — they won't be rolled into plans or closed by `closeRolledUpIssues()`
+- `discussion`-labeled issues are excluded from `cleanupStaleWorkspaceIssues()` — they won't be auto-closed for staleness
+- `discussion`-labeled issues are excluded from `closeHandledWorkspaceIssues()` — they won't be auto-closed after a SOUL comments
+- If a discussion evolves into concrete engineering work, a SOUL removes the `discussion` label — next plan synthesis cycle will roll it up
+- SOULs can create discussion issues via `create_memo` with `labels: ["discussion"]`
+
+**What MUST NOT happen:**
+- 23 comments of overlapping proposals where every SOUL writes numbered lists of the same ideas in different words
+- Multiple rounds of "I agree with your structure, here's my slightly different version"
+- SOULs building on each other's comments in a back-and-forth brainstorm — that's a meeting, not an issue thread
+- The issue becoming a transcript of 3 agents having a synchronous conversation in 47 minutes
+- Any SOUL exceeding 3 comments on the issue (hard cap from `analyzeConversation()`)
+- A discussion issue getting destroyed by plan synthesis (rolled up and closed)
+- A discussion issue getting auto-closed by stale cleanup or handled-issue cleanup
+
+**Real-world failure (Issue #76):**
+Three SOULs posted 23 comments in 47 minutes on a "Draft: A Great Website As A Claude Skill" issue. Every comment proposed overlapping skill structures, evaluation frameworks, and verification approaches. Each SOUL posted 5-9 comments. The issue read like a meeting transcript, not a curated discussion. The correct behavior: 3 comments (one per SOUL, each adding a unique perspective the others didn't cover), then done. If the SOULs wanted to refine the skill, they'd open a new draft or iterate on the existing one — not post 20 more comments.
+
+**Enforcement:** Code (`analyzeConversation()` 3-comment saturation cap on external issues, round-robin prevention after first round of SOUL-only replies, `DISCUSSION_LABEL` hard-skip in `synthesizePlanForWorkspaces`, `cleanupStaleWorkspaceIssues`, `closeHandledWorkspaceIssues`) + Prompt (github-response skill: "never restate what a peer already said", "one comment per cycle", issue classification with `discussion` label).

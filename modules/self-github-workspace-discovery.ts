@@ -16,7 +16,7 @@ import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, fetchFreshPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { handlePlanComplete } from '@local-tools/self-task-report.js';
 import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
-import { registerPeer, isPeerByBlueskyHandle } from '@modules/self-peer-awareness.js';
+import { registerPeer, isPeerByBlueskyHandle, isPeer } from '@modules/self-peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
@@ -412,6 +412,12 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
 
   for (const workspace of workspaces) {
     try {
+      //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
+      if (workspace.finishedIssueNumber) {
+        logger.debug('Skipping finished workspace for open issues', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
+        continue;
+      }
+
       //NOTE(self): Fetch up to 30 issues — workspaces with active SOULs can have 15-20+ open issues
       //NOTE(self): per_page: 10 was too low and missed older issues entirely
       const issuesResult = await listIssues({
@@ -644,6 +650,10 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
         const hasPlanLabel = issue.labels.some(l => l.name.toLowerCase() === 'plan');
         if (hasPlanLabel) continue;
 
+        //NOTE(self): Skip discussion issues — they stay open until a human closes them
+        const hasDiscussionLabel = issue.labels.some(l => l.name.toLowerCase() === DISCUSSION_LABEL);
+        if (hasDiscussionLabel) continue;
+
         //NOTE(self): Memos use a shorter stale threshold (3 days vs 7 days)
         //NOTE(self): They're coordination artifacts — once read and discussed, they should be closed
         const isMemo = issue.labels.some(l => l.name.toLowerCase() === 'memo');
@@ -726,6 +736,10 @@ export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; f
         if (issue.pull_request) continue;
         const hasPlanLabel = issue.labels.some(l => l.name.toLowerCase() === 'plan');
         if (hasPlanLabel) continue;
+
+        //NOTE(self): Skip discussion issues — they stay open until a human closes them
+        const hasDiscussionLabel = issue.labels.some(l => l.name.toLowerCase() === DISCUSSION_LABEL);
+        if (hasDiscussionLabel) continue;
 
         //NOTE(self): Check if enough time has passed since last activity
         const lastActivity = new Date(issue.updated_at).getTime();
@@ -1223,6 +1237,8 @@ export function isHealthCheckDue(workspace: WatchedWorkspace): boolean {
 //NOTE(self): "LIL INTDEV FINISHED" sentinel — marks a workspace as complete
 //NOTE(self): Prevents plan synthesis, task claiming, and health checks until closed
 
+export const DISCUSSION_LABEL = 'discussion';
+
 const FINISHED_LABEL = 'finished';
 const FINISHED_TITLE_PREFIX = 'LIL INTDEV FINISHED:';
 
@@ -1244,7 +1260,7 @@ export async function createFinishedSentinel(
       owner,
       repo,
       title: `${FINISHED_TITLE_PREFIX} ${summary}`,
-      body: `This workspace has been assessed as complete.\n\n**Summary:** ${summary}\n\n---\n\n**What this means:**\n- No new plans will be created\n- No new tasks will be claimed\n- SOULs will not start new work in this workspace\n\n**To restart work:** Close this issue. SOULs will pick up where they left off on the next poll cycle.\n\n**To request specific changes:** Close this issue and open a new issue describing what you need.`,
+      body: `This workspace has been assessed as complete.\n\n**Summary:** ${summary}\n\n---\n\n**What this means:**\n- No new plans will be created\n- No new tasks will be claimed\n- SOULs will not start new work in this workspace\n\n**To restart work:** Close this issue, or comment on it describing what you need. SOULs will pick it up automatically on the next poll cycle.`,
       labels: [FINISHED_LABEL],
     });
 
@@ -1298,6 +1314,29 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
       saveState();
       logger.info('Finished sentinel was closed — workspace is active again', { owner, repo, issueNumber });
       return false;
+    }
+
+    //NOTE(self): Sentinel is still open — check if a non-SOUL user commented (owner wants more work)
+    const config = getConfig();
+    const agentUsername = config.github.username.toLowerCase();
+    const threadResult = await getIssueThread(
+      { owner, repo, issue_number: issueNumber },
+      agentUsername
+    );
+    if (threadResult.success) {
+      const humanComment = threadResult.data.comments.find(c => {
+        const login = c.user.login.toLowerCase();
+        return login !== agentUsername && !isPeer(c.user.login);
+      });
+      if (humanComment) {
+        //NOTE(self): Human commented on sentinel — auto-close it and reactivate workspace
+        await updateIssue({ owner, repo, issue_number: issueNumber, state: 'closed' });
+        state.workspaces[key].finishedIssueNumber = undefined;
+        saveState();
+        const preview = humanComment.body.slice(0, 80);
+        logger.info('Finished sentinel reactivated via human comment — workspace is active again', { owner, repo, issueNumber, commenter: humanComment.user.login, preview });
+        return false;
+      }
     }
 
     return true;
