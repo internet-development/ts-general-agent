@@ -133,7 +133,6 @@ import {
   closeHandledWorkspaceIssues,
   threadHasWorkspaceContext,
   getWatchedWorkspaces,
-  getWorkspaceDiscoveryStats,
   getWorkspacesNeedingPlanSynthesis,
   updateWorkspaceSynthesisTimestamp,
   closeRolledUpIssues,
@@ -3443,6 +3442,17 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           //NOTE(self): Skip if workspace already has a finished sentinel
           if (!isWorkspaceFinished(workspace.owner, workspace.repo) && isHealthCheckDue(workspace)) {
             await this.checkWorkspaceHealth(workspace);
+          } else if (!isWorkspaceFinished(workspace.owner, workspace.repo)) {
+            //NOTE(self): Health check on cooldown but workspace still has no sentinel — create one directly
+            //NOTE(self): This means a previous health check ran but didn't result in a sentinel or issue
+            //NOTE(self): (Scenario 23: a workspace with zero open issues is a bug)
+            logger.info('Workspace has 0 issues, 0 plans, no sentinel — creating sentinel (health check on cooldown)', {
+              workspace: `${workspace.owner}/${workspace.repo}`,
+            });
+            const sentinelNumber = await createFinishedSentinel(workspace.owner, workspace.repo, 'All planned work complete — no open issues remain');
+            if (sentinelNumber) {
+              ui.stopSpinner(`Workspace finished — sentinel issue #${sentinelNumber} created`);
+            }
           }
           continue;
         }
@@ -3692,9 +3702,17 @@ Create a plan using \`plan_create\` that synthesizes all of the above issues int
       const agentsResult = await github.getFileContent(workspace.owner, workspace.repo, 'LIL-INTDEV-AGENTS.md');
       const agentsContent = agentsResult.success ? agentsResult.data : null;
 
-      //NOTE(self): If neither file exists, skip health check — nothing to assess against
+      //NOTE(self): If neither file exists, the workspace has nothing actionable — no docs, no issues, no plans
+      //NOTE(self): Create sentinel to prevent silent limbo (Scenario 23: zero open issues is a bug)
       if (!readmeContent && !agentsContent) {
-        logger.debug('No README or agents doc found, skipping health check', { workspace: workspaceKey });
+        logger.info('No README or agents doc found — creating finished sentinel', { workspace: workspaceKey });
+        const sentinelNumber = await createFinishedSentinel(workspace.owner, workspace.repo, 'No documentation or open issues — project appears complete');
+        if (sentinelNumber) {
+          ui.stopSpinner(`Workspace finished — sentinel issue #${sentinelNumber} created`);
+          logger.info('Workspace marked as finished (no docs)', { workspace: workspaceKey, sentinelIssue: sentinelNumber });
+        } else {
+          ui.stopSpinner();
+        }
         updateWorkspaceHealthCheckTimestamp(workspace.owner, workspace.repo);
         return;
       }

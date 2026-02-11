@@ -295,6 +295,8 @@ There should always be exactly one open issue in https://github.com/internet-dev
 
 **What MUST happen:**
 - After `checkWorkspaceHealth()` determines the project is complete (LLM creates no follow-up issue), `createFinishedSentinel()` creates a "LIL INTDEV FINISHED: {summary}" issue with the `finished` label
+- If `checkWorkspaceHealth()` finds no README.md AND no LIL-INTDEV-AGENTS.md, it creates a sentinel immediately — a workspace with no documentation and no open issues has nothing actionable
+- If the health check cooldown (24h) hasn't expired but the workspace still has 0 issues, 0 plans, and no sentinel, `synthesizePlanForWorkspaces()` creates a sentinel directly — the workspace must never silently remain in limbo
 - SOULs can also call `workspace_finish` tool to create the sentinel explicitly
 - `pollWorkspacesForPlans()` skips workspaces with a `finishedIssueNumber` in local state — no plan polling, no task claiming
 - `pollWorkspacesForOpenIssues()` skips workspaces with a `finishedIssueNumber` — no issue engagement on finished workspaces
@@ -306,12 +308,17 @@ There should always be exactly one open issue in https://github.com/internet-dev
 
 **What MUST NOT happen:**
 - A workspace has zero open issues and no sentinel — this means the system silently forgot about the project
+- A health check silently returns without creating a sentinel or issue — every health check must result in either a sentinel (project complete) or a new issue (work remains)
 - A SOUL creates a new plan in a workspace that has a "LIL INTDEV FINISHED" sentinel open
 - The sentinel blocks work permanently — closing it must reactivate the workspace within one plan awareness cycle (3 minutes)
 - Commenting on the sentinel as a human fails to reactivate the workspace
 - Multiple "LIL INTDEV FINISHED" sentinels exist simultaneously in the same workspace
+- The health check cooldown (24h) causes a workspace to sit in limbo with 0 issues, 0 plans, and no sentinel — the fallback sentinel creation in `synthesizePlanForWorkspaces()` prevents this
 
-**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans`, `pollWorkspacesForOpenIssues`, and `getWorkspacesNeedingPlanSynthesis`; `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains or via `workspace_finish` tool; `verifyFinishedSentinel()` in `planAwarenessCheck` checks both closure and human comments using `isPeer()` to distinguish SOULs from humans).
+**Real-world failure (portfolio-compare workspace):**
+A workspace had 0 open issues, 0 active plans, no README.md, and no LIL-INTDEV-AGENTS.md. The health check ran, found no docs, silently returned, and set the 24-hour cooldown. For the next 24 hours, the workspace was invisible — no sentinel, no plan, no action. The SOUL checked the workspace every 3 minutes but did nothing. The fix: `checkWorkspaceHealth()` now creates a sentinel when no docs exist, and `synthesizePlanForWorkspaces()` has a fallback that creates a sentinel when the health check is on cooldown but the workspace still has no sentinel.
+
+**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans`, `pollWorkspacesForOpenIssues`, and `getWorkspacesNeedingPlanSynthesis`; `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains OR when no docs exist; fallback sentinel creation in `synthesizePlanForWorkspaces()` when health check on cooldown; `verifyFinishedSentinel()` in `planAwarenessCheck` checks both closure and human comments using `isPeer()` to distinguish SOULs from humans).
 
 # 24
 

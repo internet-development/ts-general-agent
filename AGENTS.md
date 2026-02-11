@@ -851,10 +851,12 @@ When all plans are complete and no open issues remain in a workspace, the system
 **How the sentinel works:**
 
 1. `checkWorkspaceHealth()` runs when 0 open plans + 0 open issues + health check cooldown expired (24h)
-2. LLM assesses whether work remains by reading README.md + LIL-INTDEV-AGENTS.md + recent closed plans
-3. If LLM creates no follow-up issue → project is complete → `createFinishedSentinel()` is called
-4. Sentinel issue is created in the workspace repo with `finished` label
-5. `finishedIssueNumber` is stored in local workspace state
+2. If no README.md AND no LIL-INTDEV-AGENTS.md exist → sentinel created immediately (nothing to assess)
+3. Otherwise LLM assesses whether work remains by reading README.md + LIL-INTDEV-AGENTS.md + recent closed plans
+4. If LLM creates no follow-up issue → project is complete → `createFinishedSentinel()` is called
+5. Sentinel issue is created in the workspace repo with `finished` label
+6. `finishedIssueNumber` is stored in local workspace state
+7. **Fallback:** If health check cooldown hasn't expired but workspace has 0 issues, 0 plans, and no sentinel, `synthesizePlanForWorkspaces()` creates a sentinel directly — prevents silent limbo
 
 **What the sentinel blocks:**
 
@@ -873,7 +875,8 @@ When all plans are complete and no open issues remain in a workspace, the system
 
 **How to create a sentinel:**
 
-- **Automatic:** `checkWorkspaceHealth()` creates it when LLM determines no work remains
+- **Automatic (health check):** `checkWorkspaceHealth()` creates it when LLM determines no work remains, or when no docs exist
+- **Automatic (fallback):** `synthesizePlanForWorkspaces()` creates it when health check is on cooldown but workspace has 0 issues, 0 plans, and no sentinel
 - **Explicit:** SOULs call `workspace_finish` tool (routed through `handleWorkspaceFinish()`)
 
 **Design:** A workspace with zero open issues is ambiguous — does it mean "project done" or "system forgot"? The sentinel makes the state explicit. Observers can look at the repo and immediately see whether the project is intentionally complete or stuck.
@@ -882,11 +885,10 @@ When all plans are complete and no open issues remain in a workspace, the system
 
 | Function                   | File                                         | Purpose                                                     |
 | -------------------------- | -------------------------------------------- | ----------------------------------------------------------- |
-| `createFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Create the sentinel issue                                   |
-| `isWorkspaceFinished()`    | `modules/self-github-workspace-discovery.ts` | Check local state (no API call)                             |
-| `verifyFinishedSentinel()` | `modules/self-github-workspace-discovery.ts` | Verify sentinel still open + check for human comments (API) |
-| `clearFinishedSentinel()`  | `modules/self-github-workspace-discovery.ts` | Clear local state when closed                               |
-| `handleWorkspaceFinish()`  | `modules/self-workspace-handlers.ts`         | Tool handler for `workspace_finish`                         |
+| `createFinishedSentinel()` | `modules/github-workspace-discovery.ts` | Create the sentinel issue                                   |
+| `isWorkspaceFinished()`    | `modules/github-workspace-discovery.ts` | Check local state (no API call)                             |
+| `verifyFinishedSentinel()` | `modules/github-workspace-discovery.ts` | Verify sentinel still open + check for human comments (API) |
+| `handleWorkspaceFinish()`  | `local-tools/self-workspace-handlers.ts`| Tool handler for `workspace_finish`                         |
 
 ### Project Thread Persistence (Bluesky)
 

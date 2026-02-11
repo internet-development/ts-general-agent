@@ -478,49 +478,6 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
   return results;
 }
 
-//NOTE(self): Get the next claimable task across all workspaces
-export async function getNextClaimableTask(): Promise<{
-  workspace: WatchedWorkspace;
-  issueNumber: number;
-  task: ParsedTask;
-  plan: ParsedPlan;
-} | null> {
-  const { claimablePlans } = await pollWorkspacesForPlans();
-
-  for (const discoveredPlan of claimablePlans) {
-    if (discoveredPlan.claimableTasks.length > 0) {
-      //NOTE(self): Return the first claimable task (lowest number)
-      const task = discoveredPlan.claimableTasks.sort((a, b) => a.number - b.number)[0];
-      return {
-        workspace: discoveredPlan.workspace,
-        issueNumber: discoveredPlan.issueNumber,
-        task,
-        plan: discoveredPlan.plan,
-      };
-    }
-  }
-
-  return null;
-}
-
-//NOTE(self): Get workspace discovery stats
-export interface WorkspaceDiscoveryStats {
-  watchedWorkspaces: number;
-  lastFullPoll: string | null;
-  totalActivePlans: number;
-}
-
-export function getWorkspaceDiscoveryStats(): WorkspaceDiscoveryStats {
-  const state = loadState();
-  const workspaces = Object.values(state.workspaces);
-
-  return {
-    watchedWorkspaces: workspaces.length,
-    lastFullPoll: state.lastFullPoll,
-    totalActivePlans: workspaces.reduce((sum, w) => sum + w.activePlanIssues.length, 0),
-  };
-}
-
 //NOTE(self): A PR in a watched workspace that needs review
 export interface ReviewablePR {
   workspace: WatchedWorkspace;
@@ -1191,30 +1148,6 @@ export function getWorkspacesNeedingPlanSynthesis(): WatchedWorkspace[] {
 //NOTE(self): Much longer than plan synthesis (1h) because health checks are expensive (LLM call + file reads)
 const HEALTH_CHECK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
-//NOTE(self): Get workspaces that need a health check — no open plans, no open issues (handled in scheduler),
-//NOTE(self): and cooldown expired. The scheduler calls this after confirming 0 open issues.
-export function getWorkspacesNeedingHealthCheck(): WatchedWorkspace[] {
-  const state = loadState();
-  const workspaces = Object.values(state.workspaces);
-  const now = Date.now();
-
-  return workspaces.filter(ws => {
-    //NOTE(self): Must have zero active plan issues
-    if (ws.activePlanIssues.length > 0) return false;
-
-    //NOTE(self): Must have been polled at least once
-    if (!ws.lastPolled) return false;
-
-    //NOTE(self): Cooldown check — skip if last attempt was within 24 hours
-    if (ws.lastHealthCheckAttempt) {
-      const lastAttempt = new Date(ws.lastHealthCheckAttempt).getTime();
-      if (now - lastAttempt < HEALTH_CHECK_COOLDOWN_MS) return false;
-    }
-
-    return true;
-  });
-}
-
 //NOTE(self): Update the health check timestamp for a workspace (called after health check attempt)
 export function updateWorkspaceHealthCheckTimestamp(owner: string, repo: string): void {
   const state = loadState();
@@ -1342,16 +1275,6 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
     return true;
   } catch {
     return true; //NOTE(self): Assume still finished on error
-  }
-}
-
-//NOTE(self): Clear the finished sentinel for a workspace (called when sentinel is externally closed)
-export function clearFinishedSentinel(owner: string, repo: string): void {
-  const state = loadState();
-  const key = getWorkspaceKey(owner, repo);
-  if (state.workspaces[key]) {
-    state.workspaces[key].finishedIssueNumber = undefined;
-    saveState();
   }
 }
 
