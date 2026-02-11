@@ -289,9 +289,14 @@ The {{OWNER}} should be able to look at @soul1's recent image posts and say "oh,
 
 # 23
 
-When all plans in a workspace are complete and no open issues remain, the SOULs must create a "LIL INTDEV FINISHED: {{summary}}" sentinel issue. This issue prevents any SOUL from starting new work in the workspace until the issue is closed. The {{OWNER}} or any human can close the sentinel to reactivate the workspace.
+When all plans in a workspace are complete and no open issues remain, the SOULs must create a "LIL INTDEV FINISHED: {{summary}}" sentinel issue. This issue prevents any SOUL from starting new work in the workspace. The sentinel stays OPEN as a coordination point — only the SOUL that created it can close it (after processing any feedback into a plan).
 
 There should always be exactly one open issue in https://github.com/internet-development/www-lil-intdev-portfolio-compare/issues at any given time: either an active plan, an open work issue, or a "LIL INTDEV FINISHED" sentinel. A workspace with zero open issues is a bug — it means the system failed to signal completion.
+
+**Three valid sentinel outcomes:**
+1. Someone (human or SOUL) comments with work → sentinel **creator** extracts feedback into a follow-up issue → creator closes sentinel → workspace resumes → plan synthesis creates a plan
+2. Another SOUL agrees it's finished → nothing happens (sentinel stays open, workspace stays blocked)
+3. Sentinel is closed externally → non-creator SOULs detect no open work → reopen it; if creator closed it → workspace becomes active
 
 **What MUST happen:**
 - After `checkWorkspaceHealth()` determines the project is complete (LLM creates no follow-up issue), `createFinishedSentinel()` creates a "LIL INTDEV FINISHED: {summary}" issue with the `finished` label
@@ -299,21 +304,21 @@ There should always be exactly one open issue in https://github.com/internet-dev
 - If the health check cooldown (24h) hasn't expired but the workspace still has 0 issues, 0 plans, and no sentinel, `synthesizePlanForWorkspaces()` creates a sentinel directly — the workspace must never silently remain in limbo
 - SOULs can also call `workspace_finish` tool to create the sentinel explicitly
 - `pollWorkspacesForPlans()` skips workspaces with a `finishedIssueNumber` in local state — no plan polling, no task claiming
-- `pollWorkspacesForOpenIssues()` skips workspaces with a `finishedIssueNumber` — no issue engagement on finished workspaces
+- `pollWorkspacesForOpenIssues()` skips workspaces with a `finishedIssueNumber` AND filters out `finished`-labeled issues — no issue engagement on sentinel issues
 - `getWorkspacesNeedingPlanSynthesis()` skips workspaces with a `finishedIssueNumber` — no new plans synthesized
-- `verifyFinishedSentinel()` runs every plan awareness cycle for finished workspaces — if someone closed the sentinel, the workspace becomes active again
-- `verifyFinishedSentinel()` also checks for non-SOUL comments on the sentinel — if a human (non-agent, non-peer) comments, the sentinel is auto-closed and the workspace reactivates
-- When the sentinel is closed or reactivated via human comment, `extractSentinelFeedback()` checks for human comments and creates a new open issue from the feedback — this ensures plan synthesis picks up the owner's specific requests instead of losing them inside the closed sentinel
-- The sentinel issue body is generated from `voice-phrases.json` (key: `workspace_finished`) — it explains what "finished" means and how to reopen
+- `githubAwarenessCheck()` skips issues with the `finished` label — SOULs never enter github-response mode for sentinel issues
+- `verifyFinishedSentinel()` runs every plan awareness cycle (3 min) — only the creator SOUL processes comments and closes the sentinel
+- The creator uses `isAgreementComment()` to distinguish work requests from simple agreement — only work comments trigger plan creation
+- `extractSentinelFeedback()` creates a follow-up issue from ALL non-creator, non-agreement comments (human + peer SOULs)
+- The sentinel issue body is generated from `voice-phrases.json` (key: `workspace_finished`) — derived from SELF.md reflections
 - If the project is unfinished, a new plan should be created from any open issues to keep pushing the project forward
 
 **What MUST NOT happen:**
 - A workspace has zero open issues and no sentinel — this means the system silently forgot about the project
 - A health check silently returns without creating a sentinel or issue — every health check must result in either a sentinel (project complete) or a new issue (work remains)
 - A SOUL creates a new plan in a workspace that has a "LIL INTDEV FINISHED" sentinel open
-- The sentinel blocks work permanently — closing it must reactivate the workspace within one plan awareness cycle (3 minutes)
-- Commenting on the sentinel as a human fails to reactivate the workspace
-- Human feedback on a sentinel is lost when the sentinel is closed — `extractSentinelFeedback()` creates a follow-up issue so plan synthesis picks it up
+- **A non-creator SOUL closes the sentinel** (Issue #67: another SOUL closed it before the owner could comment) — 4 prevention layers: notification pipeline guard, workspace polling guard, skill prompt guard, recovery guard (reopen)
+- Human or SOUL feedback on a sentinel is lost — `extractSentinelFeedback()` creates a follow-up issue so plan synthesis picks it up
 - Multiple "LIL INTDEV FINISHED" sentinels exist simultaneously in the same workspace
 - The health check cooldown (24h) causes a workspace to sit in limbo with 0 issues, 0 plans, and no sentinel — the fallback sentinel creation in `synthesizePlanForWorkspaces()` prevents this
 
@@ -323,7 +328,9 @@ There should always be exactly one open issue in https://github.com/internet-dev
 
 2. The owner commented on the finished sentinel (#66) with specific feedback — "doesn't have current prices, no math, no graphs, missing comparisons to M2 and debt." The sentinel was closed but the feedback was trapped inside it. Plan synthesis only reads open issues, so the owner's requirements were invisible. Fix: `extractSentinelFeedback()` now creates a new open issue from human comments when the sentinel is closed or reactivated.
 
-**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans`, `pollWorkspacesForOpenIssues`, and `getWorkspacesNeedingPlanSynthesis`; `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains OR when no docs exist; fallback sentinel creation in `synthesizePlanForWorkspaces()` when health check on cooldown; `verifyFinishedSentinel()` in `planAwarenessCheck` checks both closure and human comments using `isPeer()` to distinguish SOULs from humans; `extractSentinelFeedback()` creates follow-up issues from human comments on closed sentinels).
+3. Another SOUL (sh-peterben) came to finished sentinel #67 and CLOSED it, preventing the owner from commenting. The SOUL followed the "close issues when you're done" instruction without understanding that sentinels are coordination points. Fix: 4 prevention layers — notification pipeline skips `finished`-labeled issues, workspace polling filters them out, skill prompts explicitly prohibit closing sentinels, and `verifyFinishedSentinel()` reopens improperly closed sentinels when no open work exists. Only the sentinel creator can close it after processing feedback.
+
+**Enforcement:** Code (4-layer prevention: `githubAwarenessCheck` skips `finished`-labeled issues, `pollWorkspacesForOpenIssues` filters `finished` label, github-response + workspace-decision skills prohibit closing sentinels, `verifyFinishedSentinel()` reopens improperly closed sentinels; creator-only processing via `issue.user.login` comparison with `config.github.username`; `isAgreementComment()` heuristic for agreement vs work; `extractSentinelFeedback()` creates follow-up issues from non-agreement comments).
 
 # 24
 

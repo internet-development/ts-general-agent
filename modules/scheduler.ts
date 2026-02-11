@@ -879,6 +879,16 @@ export class AgentScheduler {
         );
 
         if (threadResult.success) {
+          //NOTE(self): Skip FINISHED sentinel issues — only the creator processes them via verifyFinishedSentinel()
+          //NOTE(self): Without this guard, SOULs enter github-response mode and close the sentinel (Issue #67)
+          const isFinishedSentinel = threadResult.data.issue.labels.some(
+            l => l.name.toLowerCase() === 'finished'
+          );
+          if (isFinishedSentinel) {
+            logger.debug('Skipping finished sentinel issue in notification pipeline', { url });
+            continue;
+          }
+
           const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, {}, getPeerUsernames());
 
           if (analysis.shouldRespond) {
@@ -2980,8 +2990,8 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       ui.startSpinner(`Checking ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} for tasks`);
 
-      //NOTE(self): Verify finished sentinels — if someone closed a "LIL INTDEV FINISHED" issue,
-      //NOTE(self): the workspace becomes active again. Check once per plan awareness cycle.
+      //NOTE(self): Verify finished sentinels — creator-only processing of comments and closure
+      //NOTE(self): Non-creator SOULs just confirm sentinel is still open. Check every plan awareness cycle.
       for (const ws of workspaces) {
         if (ws.finishedIssueNumber) {
           await verifyFinishedSentinel(ws.owner, ws.repo);
@@ -3842,7 +3852,7 @@ Do NOT create an issue for minor polish, documentation-only gaps, or subjective 
 
       //NOTE(self): If LLM found no remaining work → project is complete → create "LIL INTDEV FINISHED" sentinel
       //NOTE(self): The sentinel prevents plan synthesis, task claiming, and further health checks
-      //NOTE(self): Anyone can close the sentinel to reactivate the workspace
+      //NOTE(self): Only the creator SOUL can close it (after processing feedback into a plan)
       if (!issueCreated) {
         const summary = response.text?.substring(0, 200) || 'All planned work complete';
         const sentinelNumber = await createFinishedSentinel(workspace.owner, workspace.repo, summary);

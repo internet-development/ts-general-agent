@@ -16,7 +16,7 @@ import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, fetchFreshPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { handlePlanComplete } from '@local-tools/self-task-report.js';
 import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
-import { registerPeer, isPeerByBlueskyHandle, isPeer } from '@modules/peer-awareness.js';
+import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
@@ -445,6 +445,10 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
 
         //NOTE(self): Filter out PRs (GitHub API returns them as issues too)
         if (issue.pull_request) continue;
+
+        //NOTE(self): Filter out FINISHED sentinel issues — only processed by verifyFinishedSentinel()
+        const hasFinishedLabel = issue.labels.some(l => l.name.toLowerCase() === 'finished');
+        if (hasFinishedLabel) continue;
 
         //NOTE(self): Auto-assign unassigned issues to the issue author (Scenario 14: every issue has an assignee)
         //NOTE(self): This ensures clean issue management — no orphaned unassigned issues
@@ -1222,28 +1226,41 @@ export async function createFinishedSentinel(
   }
 }
 
-//NOTE(self): Extract human feedback from a sentinel issue and create a follow-up issue
-//NOTE(self): Without this, the human's comment is trapped inside the closed sentinel
-//NOTE(self): and plan synthesis never sees it (it only reads open issues)
-async function extractSentinelFeedback(owner: string, repo: string, issueNumber: number): Promise<number | null> {
+//NOTE(self): Check if a comment is just agreement (vs a work request)
+//NOTE(self): Short, positive-only comments are treated as agreement and don't trigger plan creation
+function isAgreementComment(body: string): boolean {
+  const normalized = body.trim().toLowerCase().replace(/[.!?]+$/, '');
+  if (normalized.length > 120) return false; //NOTE(self): Long comments likely contain substantive feedback
+  const agreementPatterns = [
+    'agreed', 'agree', 'yes', 'yep', 'yeah', 'confirmed', 'looks good',
+    'lgtm', '+1', 'all done', 'done', 'complete', 'completed', 'finished',
+    'looks complete', 'looks finished', 'ship it', 'sounds good', 'all good',
+    'nothing else', 'no more work', 'no additional work', 'looks great',
+    'nice work', 'well done', 'good job', 'all set',
+  ];
+  return agreementPatterns.includes(normalized);
+}
+
+//NOTE(self): Extract feedback from sentinel comments and create a follow-up issue
+//NOTE(self): Includes ALL non-creator comments that contain work requests (human + peer)
+//NOTE(self): Agreement-only comments are filtered out — they don't trigger plan creation
+async function extractSentinelFeedback(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  sentinelCreator: string,
+  comments: import('@adapters/github/types.js').GitHubComment[],
+): Promise<number | null> {
   try {
-    const config = getConfig();
-    const agentUsername = config.github.username.toLowerCase();
-    const threadResult = await getIssueThread(
-      { owner, repo, issue_number: issueNumber },
-      agentUsername
-    );
-    if (!threadResult.success) return null;
-
-    //NOTE(self): Collect ALL human (non-agent, non-peer) comments — not just the first one
-    const humanComments = threadResult.data.comments.filter(c => {
-      const login = c.user.login.toLowerCase();
-      return login !== agentUsername && !isPeer(c.user.login);
+    //NOTE(self): Collect ALL non-creator comments that contain work (not just agreement)
+    const workComments = comments.filter(c => {
+      if (c.user.login.toLowerCase() === sentinelCreator.toLowerCase()) return false;
+      return !isAgreementComment(c.body);
     });
-    if (humanComments.length === 0) return null;
+    if (workComments.length === 0) return null;
 
-    //NOTE(self): Combine all human feedback into a single issue body
-    const feedbackBody = humanComments.map(c =>
+    //NOTE(self): Combine all feedback into a single issue body
+    const feedbackBody = workComments.map(c =>
       `**@${c.user.login}:**\n${c.body}`
     ).join('\n\n---\n\n');
 
@@ -1260,7 +1277,7 @@ async function extractSentinelFeedback(owner: string, repo: string, issueNumber:
         owner, repo,
         sentinelIssue: issueNumber,
         newIssue: result.data.number,
-        commentCount: humanComments.length,
+        commentCount: workComments.length,
       });
       return result.data.number;
     }
@@ -1272,9 +1289,12 @@ async function extractSentinelFeedback(owner: string, repo: string, issueNumber:
   }
 }
 
-//NOTE(self): Verify the finished sentinel is still open (called during plan awareness cycle)
-//NOTE(self): If someone closed it or commented on it, clear the local state so the workspace becomes active again
-//NOTE(self): If human feedback exists, extract it into a new open issue so plan synthesis picks it up
+//NOTE(self): Verify the finished sentinel — called every plan awareness cycle
+//NOTE(self): CREATOR-ONLY PROCESSING: only the SOUL that created the sentinel processes comments
+//NOTE(self): Three valid outcomes (from owner requirements, Issue #67):
+//NOTE(self):   1. Someone (human/SOUL) comments with work → creator creates follow-up issue → closes sentinel
+//NOTE(self):   2. Another SOUL agrees it's finished → nothing happens (sentinel stays open)
+//NOTE(self):   3. Sentinel is closed externally → if creator did it, clear state; if not, check for work
 export async function verifyFinishedSentinel(owner: string, repo: string): Promise<boolean> {
   const state = loadState();
   const key = getWorkspaceKey(owner, repo);
@@ -1283,52 +1303,98 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
   if (!issueNumber) return false;
 
   try {
-    const result = await listIssues({
-      owner,
-      repo,
-      state: 'open',
-      labels: [FINISHED_LABEL],
-      per_page: 5,
-    });
-
-    if (!result.success) return true; //NOTE(self): Assume still finished on API error
-
-    const stillOpen = result.data.some(i => i.number === issueNumber);
-    if (!stillOpen) {
-      //NOTE(self): Sentinel was closed — extract any human feedback into a new issue
-      //NOTE(self): then clear local state so workspace is active again
-      await extractSentinelFeedback(owner, repo, issueNumber);
-      state.workspaces[key].finishedIssueNumber = undefined;
-      saveState();
-      logger.info('Finished sentinel was closed — workspace is active again', { owner, repo, issueNumber });
-      return false;
-    }
-
-    //NOTE(self): Sentinel is still open — check if a non-SOUL user commented (owner wants more work)
     const config = getConfig();
     const agentUsername = config.github.username.toLowerCase();
+
+    //NOTE(self): Fetch full sentinel issue + comments to determine state and authorship
     const threadResult = await getIssueThread(
       { owner, repo, issue_number: issueNumber },
       agentUsername
     );
-    if (threadResult.success) {
-      const humanComment = threadResult.data.comments.find(c => {
-        const login = c.user.login.toLowerCase();
-        return login !== agentUsername && !isPeer(c.user.login);
-      });
-      if (humanComment) {
-        //NOTE(self): Human commented on sentinel — extract feedback, close sentinel, reactivate
-        await extractSentinelFeedback(owner, repo, issueNumber);
-        await updateIssue({ owner, repo, issue_number: issueNumber, state: 'closed' });
+
+    if (!threadResult.success) return true; //NOTE(self): Assume still finished on API error
+
+    const { issue, comments, isOpen } = threadResult.data;
+    const sentinelCreator = issue.user.login.toLowerCase();
+    const iAmCreator = agentUsername === sentinelCreator;
+
+    if (!isOpen) {
+      //NOTE(self): Sentinel was closed
+
+      if (iAmCreator) {
+        //NOTE(self): Creator closed it (expected after processing feedback into a plan)
         state.workspaces[key].finishedIssueNumber = undefined;
         saveState();
-        const preview = humanComment.body.slice(0, 80);
-        logger.info('Finished sentinel reactivated via human comment — workspace is active again', { owner, repo, issueNumber, commenter: humanComment.user.login, preview });
+        logger.info('Creator closed finished sentinel — workspace is active', { owner, repo, issueNumber });
         return false;
       }
+
+      //NOTE(self): Non-creator found sentinel closed — check if creator already handled it
+      //NOTE(self): If open work exists (follow-up issue or plan), the creator processed feedback properly
+      const openIssuesResult = await listIssues({ owner, repo, state: 'open', per_page: 10 });
+      const hasOpenWork = openIssuesResult.success && openIssuesResult.data.some(i =>
+        !i.pull_request &&
+        !i.labels.some(l => l.name.toLowerCase() === 'finished')
+      );
+
+      if (hasOpenWork) {
+        //NOTE(self): Creator processed feedback — workspace has open work
+        state.workspaces[key].finishedIssueNumber = undefined;
+        saveState();
+        logger.info('Finished sentinel closed with open work — workspace is active', { owner, repo, issueNumber });
+        return false;
+      }
+
+      //NOTE(self): No open work — sentinel was improperly closed (Issue #67: another SOUL closed it)
+      //NOTE(self): Reopen to protect the coordination point
+      await updateIssue({ owner, repo, issue_number: issueNumber, state: 'open' });
+      logger.warn('Reopened finished sentinel — closed without open work (non-creator closure)', { owner, repo, issueNumber });
+      return true;
     }
 
-    return true;
+    //NOTE(self): Sentinel is open — only the creator processes comments
+    if (!iAmCreator) {
+      //NOTE(self): Non-creator: don't process, just confirm sentinel is open
+      return true;
+    }
+
+    //NOTE(self): Creator: check for comments with work requests
+    const nonCreatorComments = comments.filter(c =>
+      c.user.login.toLowerCase() !== sentinelCreator
+    );
+
+    if (nonCreatorComments.length === 0) {
+      return true; //NOTE(self): No comments, workspace is still finished
+    }
+
+    //NOTE(self): Check if any comments contain work requests (vs just agreement)
+    const hasWorkComments = nonCreatorComments.some(c => !isAgreementComment(c.body));
+    if (!hasWorkComments) {
+      logger.debug('Sentinel has only agreement comments — staying finished', { owner, repo, issueNumber });
+      return true;
+    }
+
+    //NOTE(self): Work requested — extract feedback into a follow-up issue, then close sentinel
+    const feedbackIssueNumber = await extractSentinelFeedback(owner, repo, issueNumber, sentinelCreator, comments);
+    if (feedbackIssueNumber) {
+      //NOTE(self): Comment on sentinel explaining the closure
+      await createIssueComment({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body: `Feedback extracted into #${feedbackIssueNumber} — closing sentinel to resume work.`,
+      });
+      await updateIssue({ owner, repo, issue_number: issueNumber, state: 'closed' });
+      state.workspaces[key].finishedIssueNumber = undefined;
+      saveState();
+      logger.info('Creator processed sentinel feedback — workspace reactivated', {
+        owner, repo, issueNumber,
+        feedbackIssue: feedbackIssueNumber,
+      });
+      return false;
+    }
+
+    return true; //NOTE(self): Extraction failed, stay finished for now
   } catch {
     return true; //NOTE(self): Assume still finished on error
   }

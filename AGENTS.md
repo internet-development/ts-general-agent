@@ -864,21 +864,38 @@ When all plans are complete and no open issues remain in a workspace, the system
 **What the sentinel blocks:**
 
 - `pollWorkspacesForPlans()` skips the workspace entirely — no plan polling, no task claiming
-- `pollWorkspacesForOpenIssues()` skips the workspace — no issue engagement
+- `pollWorkspacesForOpenIssues()` skips the workspace — no issue engagement (also filters `finished`-labeled issues)
 - `getWorkspacesNeedingPlanSynthesis()` skips the workspace — no new plans synthesized
 - `checkWorkspaceHealth()` skips the workspace — no redundant health checks
+- `githubAwarenessCheck()` skips `finished`-labeled issues in the notification pipeline — SOULs never enter github-response mode for sentinel issues
 
-**How to reactivate a workspace:**
+**Sentinel lifecycle — CREATOR-ONLY processing:**
 
-- **Close** the "LIL INTDEV FINISHED" issue on GitHub, OR
-- **Comment** on the sentinel issue (any non-SOUL user) — `verifyFinishedSentinel()` detects the human comment, auto-closes the sentinel, and reactivates
-- `verifyFinishedSentinel()` runs every plan awareness cycle (3 min) for finished workspaces
-- If the sentinel issue is no longer open → `finishedIssueNumber` is cleared → workspace becomes active
-- Open a new issue in the workspace → plan synthesis picks it up next cycle
+The sentinel stays OPEN as a coordination point. Only the SOUL that created it (the issue author) can process comments and close it. This prevents Issue #67 (another SOUL closing the sentinel before the owner can comment).
 
-**Feedback extraction on reactivation:**
+Three valid outcomes:
+1. **Someone comments with work** (human or SOUL) → the **creator** extracts feedback into a follow-up issue → creator closes sentinel → workspace resumes → plan synthesis creates a plan from the follow-up
+2. **Another SOUL agrees it's finished** → nothing happens (sentinel stays open, workspace stays blocked)
+3. **Another SOUL describes more work** → same as outcome 1 — the creator processes the comment
 
-When the sentinel is closed or reactivated, `extractSentinelFeedback()` checks for human (non-agent, non-peer) comments. If found, it creates a new open issue containing all human feedback. This ensures the owner's specific requests (which were comments on the closed sentinel) become visible to plan synthesis. Without this, feedback is trapped inside a closed issue and the system ignores it.
+**Prevention layers (4 layers deep):**
+1. **Notification pipeline guard** (`githubAwarenessCheck`): Issues with `finished` label are skipped — SOULs never enter github-response mode for sentinels
+2. **Workspace polling guard** (`pollWorkspacesForOpenIssues`): Finished workspaces are skipped + `finished`-labeled issues filtered out
+3. **Skill prompt guard** (github-response, workspace-decision): Explicit "NEVER close a FINISHED sentinel" instructions
+4. **Recovery guard** (`verifyFinishedSentinel`): If a non-creator somehow closes the sentinel and no open work exists, it gets reopened
+
+**`verifyFinishedSentinel()` behavior per SOUL role:**
+
+| SOUL role    | Sentinel open, no comments | Sentinel open, agreement only | Sentinel open, work comments | Sentinel closed |
+|---|---|---|---|---|
+| **Creator**  | Stay finished | Stay finished | Extract feedback → close sentinel → workspace active | Clear state → workspace active |
+| **Non-creator** | Stay finished | Stay finished | Do nothing (creator handles) | Check for open work: if found → clear state; if not → reopen sentinel |
+
+**Agreement detection:** `isAgreementComment()` identifies short, positive-only comments ("agreed", "looks good", "lgtm", "+1", etc.) and treats them as non-actionable. Substantive comments (>120 chars or containing specific requests) are treated as work.
+
+**Feedback extraction:**
+
+When the creator detects work comments, `extractSentinelFeedback()` collects ALL non-creator, non-agreement comments and creates a new open issue. Plan synthesis picks this up on the next cycle and creates a plan. The creator then comments on the sentinel explaining the closure and closes it.
 
 **How to create a sentinel:**
 
@@ -894,8 +911,9 @@ When the sentinel is closed or reactivated, `extractSentinelFeedback()` checks f
 | -------------------------- | -------------------------------------------- | ----------------------------------------------------------- |
 | `createFinishedSentinel()`    | `modules/github-workspace-discovery.ts`  | Create the sentinel issue (body from voice-phrases)                          |
 | `isWorkspaceFinished()`       | `modules/github-workspace-discovery.ts`  | Check local state (no API call)                                              |
-| `verifyFinishedSentinel()`    | `modules/github-workspace-discovery.ts`  | Verify sentinel still open + check for human comments (API)                  |
-| `extractSentinelFeedback()`   | `modules/github-workspace-discovery.ts`  | Create follow-up issue from human comments on closed/reactivated sentinel    |
+| `verifyFinishedSentinel()`    | `modules/github-workspace-discovery.ts`  | Creator-only: process comments, extract feedback, close sentinel             |
+| `extractSentinelFeedback()`   | `modules/github-workspace-discovery.ts`  | Create follow-up issue from non-creator, non-agreement comments              |
+| `isAgreementComment()`        | `modules/github-workspace-discovery.ts`  | Heuristic: is this comment just agreement or does it contain work?           |
 | `handleWorkspaceFinish()`     | `local-tools/self-workspace-handlers.ts` | Tool handler for `workspace_finish`                                          |
 
 ### Project Thread Persistence (Bluesky)

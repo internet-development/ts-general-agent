@@ -58,6 +58,15 @@ When engaging in conversations about collaborative development:
 - The pipeline is: issues → branches → PRs → reviews → merges. Keep it moving until nothing remains open.
 - After each iteration, re-read `LIL-INTDEV-AGENTS.md` and `SCENARIOS.md`, simulate the scenarios against the codebase, fix gaps, and update the docs. This is the quality loop.
 
+**FINISHED SENTINEL LIFECYCLE:**
+- When `workspace_finish` creates a "LIL INTDEV FINISHED" sentinel, the workspace is blocked.
+- The sentinel stays OPEN as a coordination point. Only its CREATOR can close it.
+- Three valid outcomes:
+  1. Someone (human or SOUL) comments with work → the creator extracts feedback into a follow-up issue → creator closes sentinel → workspace resumes with a plan
+  2. Another SOUL agrees it's finished → nothing happens (react with thumbs-up, don't comment)
+  3. Another SOUL describes more work → same as outcome 1 — creator processes it
+- **NEVER close a sentinel you didn't create.** If you encounter one, either agree silently or comment with specific work you see.
+
 ## Plan Synthesis
 
 When reviewing open issues to synthesize a plan:
