@@ -1222,8 +1222,59 @@ export async function createFinishedSentinel(
   }
 }
 
-//NOTE(self): Verify the finished sentinel is still open (called during health check cooldown)
-//NOTE(self): If someone closed it, clear the local state so the workspace becomes active again
+//NOTE(self): Extract human feedback from a sentinel issue and create a follow-up issue
+//NOTE(self): Without this, the human's comment is trapped inside the closed sentinel
+//NOTE(self): and plan synthesis never sees it (it only reads open issues)
+async function extractSentinelFeedback(owner: string, repo: string, issueNumber: number): Promise<number | null> {
+  try {
+    const config = getConfig();
+    const agentUsername = config.github.username.toLowerCase();
+    const threadResult = await getIssueThread(
+      { owner, repo, issue_number: issueNumber },
+      agentUsername
+    );
+    if (!threadResult.success) return null;
+
+    //NOTE(self): Collect ALL human (non-agent, non-peer) comments — not just the first one
+    const humanComments = threadResult.data.comments.filter(c => {
+      const login = c.user.login.toLowerCase();
+      return login !== agentUsername && !isPeer(c.user.login);
+    });
+    if (humanComments.length === 0) return null;
+
+    //NOTE(self): Combine all human feedback into a single issue body
+    const feedbackBody = humanComments.map(c =>
+      `**@${c.user.login}:**\n${c.body}`
+    ).join('\n\n---\n\n');
+
+    //NOTE(self): Create a new open issue with the feedback — plan synthesis picks this up
+    const result = await createIssue({
+      owner,
+      repo,
+      title: `Feedback from #${issueNumber}: remaining work identified`,
+      body: `Feedback from the finished sentinel issue #${issueNumber}:\n\n---\n\n${feedbackBody}`,
+    });
+
+    if (result.success) {
+      logger.info('Created follow-up issue from sentinel feedback', {
+        owner, repo,
+        sentinelIssue: issueNumber,
+        newIssue: result.data.number,
+        commentCount: humanComments.length,
+      });
+      return result.data.number;
+    }
+
+    return null;
+  } catch (err) {
+    logger.warn('Failed to extract sentinel feedback', { owner, repo, issueNumber, error: String(err) });
+    return null;
+  }
+}
+
+//NOTE(self): Verify the finished sentinel is still open (called during plan awareness cycle)
+//NOTE(self): If someone closed it or commented on it, clear the local state so the workspace becomes active again
+//NOTE(self): If human feedback exists, extract it into a new open issue so plan synthesis picks it up
 export async function verifyFinishedSentinel(owner: string, repo: string): Promise<boolean> {
   const state = loadState();
   const key = getWorkspaceKey(owner, repo);
@@ -1244,7 +1295,9 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
 
     const stillOpen = result.data.some(i => i.number === issueNumber);
     if (!stillOpen) {
-      //NOTE(self): Sentinel was closed — clear local state, workspace is active again
+      //NOTE(self): Sentinel was closed — extract any human feedback into a new issue
+      //NOTE(self): then clear local state so workspace is active again
+      await extractSentinelFeedback(owner, repo, issueNumber);
       state.workspaces[key].finishedIssueNumber = undefined;
       saveState();
       logger.info('Finished sentinel was closed — workspace is active again', { owner, repo, issueNumber });
@@ -1264,7 +1317,8 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
         return login !== agentUsername && !isPeer(c.user.login);
       });
       if (humanComment) {
-        //NOTE(self): Human commented on sentinel — auto-close it and reactivate workspace
+        //NOTE(self): Human commented on sentinel — extract feedback, close sentinel, reactivate
+        await extractSentinelFeedback(owner, repo, issueNumber);
         await updateIssue({ owner, repo, issue_number: issueNumber, state: 'closed' });
         state.workspaces[key].finishedIssueNumber = undefined;
         saveState();

@@ -303,7 +303,8 @@ There should always be exactly one open issue in https://github.com/internet-dev
 - `getWorkspacesNeedingPlanSynthesis()` skips workspaces with a `finishedIssueNumber` — no new plans synthesized
 - `verifyFinishedSentinel()` runs every plan awareness cycle for finished workspaces — if someone closed the sentinel, the workspace becomes active again
 - `verifyFinishedSentinel()` also checks for non-SOUL comments on the sentinel — if a human (non-agent, non-peer) comments, the sentinel is auto-closed and the workspace reactivates
-- The sentinel issue body explains what "finished" means and how to reopen: "Close this issue, or comment on it describing what you need."
+- When the sentinel is closed or reactivated via human comment, `extractSentinelFeedback()` checks for human comments and creates a new open issue from the feedback — this ensures plan synthesis picks up the owner's specific requests instead of losing them inside the closed sentinel
+- The sentinel issue body is generated from `voice-phrases.json` (key: `workspace_finished`) — it explains what "finished" means and how to reopen
 - If the project is unfinished, a new plan should be created from any open issues to keep pushing the project forward
 
 **What MUST NOT happen:**
@@ -312,13 +313,17 @@ There should always be exactly one open issue in https://github.com/internet-dev
 - A SOUL creates a new plan in a workspace that has a "LIL INTDEV FINISHED" sentinel open
 - The sentinel blocks work permanently — closing it must reactivate the workspace within one plan awareness cycle (3 minutes)
 - Commenting on the sentinel as a human fails to reactivate the workspace
+- Human feedback on a sentinel is lost when the sentinel is closed — `extractSentinelFeedback()` creates a follow-up issue so plan synthesis picks it up
 - Multiple "LIL INTDEV FINISHED" sentinels exist simultaneously in the same workspace
 - The health check cooldown (24h) causes a workspace to sit in limbo with 0 issues, 0 plans, and no sentinel — the fallback sentinel creation in `synthesizePlanForWorkspaces()` prevents this
 
-**Real-world failure (portfolio-compare workspace):**
-A workspace had 0 open issues, 0 active plans, no README.md, and no LIL-INTDEV-AGENTS.md. The health check ran, found no docs, silently returned, and set the 24-hour cooldown. For the next 24 hours, the workspace was invisible — no sentinel, no plan, no action. The SOUL checked the workspace every 3 minutes but did nothing. The fix: `checkWorkspaceHealth()` now creates a sentinel when no docs exist, and `synthesizePlanForWorkspaces()` has a fallback that creates a sentinel when the health check is on cooldown but the workspace still has no sentinel.
+**Real-world failures (portfolio-compare workspace):**
 
-**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans`, `pollWorkspacesForOpenIssues`, and `getWorkspacesNeedingPlanSynthesis`; `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains OR when no docs exist; fallback sentinel creation in `synthesizePlanForWorkspaces()` when health check on cooldown; `verifyFinishedSentinel()` in `planAwarenessCheck` checks both closure and human comments using `isPeer()` to distinguish SOULs from humans).
+1. A workspace had 0 open issues, 0 active plans, no README.md, and no LIL-INTDEV-AGENTS.md. The health check ran, found no docs, silently returned, and set the 24-hour cooldown. For the next 24 hours, the workspace was invisible — no sentinel, no plan, no action. Fix: `checkWorkspaceHealth()` now creates a sentinel when no docs exist, and `synthesizePlanForWorkspaces()` has a fallback sentinel when health check is on cooldown.
+
+2. The owner commented on the finished sentinel (#66) with specific feedback — "doesn't have current prices, no math, no graphs, missing comparisons to M2 and debt." The sentinel was closed but the feedback was trapped inside it. Plan synthesis only reads open issues, so the owner's requirements were invisible. Fix: `extractSentinelFeedback()` now creates a new open issue from human comments when the sentinel is closed or reactivated.
+
+**Enforcement:** Code (`isWorkspaceFinished()` check in `pollWorkspacesForPlans`, `pollWorkspacesForOpenIssues`, and `getWorkspacesNeedingPlanSynthesis`; `createFinishedSentinel()` called from `checkWorkspaceHealth` when no work remains OR when no docs exist; fallback sentinel creation in `synthesizePlanForWorkspaces()` when health check on cooldown; `verifyFinishedSentinel()` in `planAwarenessCheck` checks both closure and human comments using `isPeer()` to distinguish SOULs from humans; `extractSentinelFeedback()` creates follow-up issues from human comments on closed sentinels).
 
 # 24
 

@@ -876,6 +876,10 @@ When all plans are complete and no open issues remain in a workspace, the system
 - If the sentinel issue is no longer open → `finishedIssueNumber` is cleared → workspace becomes active
 - Open a new issue in the workspace → plan synthesis picks it up next cycle
 
+**Feedback extraction on reactivation:**
+
+When the sentinel is closed or reactivated, `extractSentinelFeedback()` checks for human (non-agent, non-peer) comments. If found, it creates a new open issue containing all human feedback. This ensures the owner's specific requests (which were comments on the closed sentinel) become visible to plan synthesis. Without this, feedback is trapped inside a closed issue and the system ignores it.
+
 **How to create a sentinel:**
 
 - **Automatic (health check):** `checkWorkspaceHealth()` creates it when LLM determines no work remains, or when no docs exist
@@ -888,10 +892,11 @@ When all plans are complete and no open issues remain in a workspace, the system
 
 | Function                   | File                                         | Purpose                                                     |
 | -------------------------- | -------------------------------------------- | ----------------------------------------------------------- |
-| `createFinishedSentinel()` | `modules/github-workspace-discovery.ts` | Create the sentinel issue                                   |
-| `isWorkspaceFinished()`    | `modules/github-workspace-discovery.ts` | Check local state (no API call)                             |
-| `verifyFinishedSentinel()` | `modules/github-workspace-discovery.ts` | Verify sentinel still open + check for human comments (API) |
-| `handleWorkspaceFinish()`  | `local-tools/self-workspace-handlers.ts`| Tool handler for `workspace_finish`                         |
+| `createFinishedSentinel()`    | `modules/github-workspace-discovery.ts`  | Create the sentinel issue (body from voice-phrases)                          |
+| `isWorkspaceFinished()`       | `modules/github-workspace-discovery.ts`  | Check local state (no API call)                                              |
+| `verifyFinishedSentinel()`    | `modules/github-workspace-discovery.ts`  | Verify sentinel still open + check for human comments (API)                  |
+| `extractSentinelFeedback()`   | `modules/github-workspace-discovery.ts`  | Create follow-up issue from human comments on closed/reactivated sentinel    |
+| `handleWorkspaceFinish()`     | `local-tools/self-workspace-handlers.ts` | Tool handler for `workspace_finish`                                          |
 
 ### Project Thread Persistence (Bluesky)
 
