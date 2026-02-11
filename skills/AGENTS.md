@@ -25,7 +25,7 @@ Each skill is a folder with a `SKILL.md` file:
 - `areSkillsLoaded()` — guard check, used by `getScheduler()` to prevent empty prompts
 - `parseSubsections()` — handles `###` within `##` sections for nested skill content
 
-## Skills (15 total)
+## Skills (14 total)
 
 | Folder | Callsite ID | Purpose |
 |---|---|---|

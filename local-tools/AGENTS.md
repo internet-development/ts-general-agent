@@ -132,10 +132,44 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | `task-verify` | PRE-GATE + four-gate quality check: `verifyBranch()` confirms Claude Code stayed on the correct feature branch, then verify git changes exist, run tests if present, push to remote, verify push success |
 | `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes. `handlePlanComplete` posts quality loop review checklist (Scenario 10), checks `updatePlanStatus` and `closePlan` results for silent failures |
 
+### Commitment Tracking (`self-commitment-*`)
+| Local Tool | Purpose |
+|-------|---------|
+| `commitment-extract` | LLM-based extraction of action commitments from Bluesky replies (feeds commitment queue from response mode) |
+| `commitment-fulfill` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) |
+
+### Identity & Extraction (`self-extract`)
+| Local Tool | Purpose |
+|-------|---------|
+| `extract` | SELF.md parsing — `extractFromSelf()` returns structured sections (voice, interests, etc.) for use in skills and reflection |
+
+### Announcement (`self-announcement`)
+| Local Tool | Purpose |
+|-------|---------|
+| `announcement` | Announcement guard shared by scheduler + executor for dual enforcement (`announceIfWorthy`) — decides whether PRs/plans warrant a Bluesky post |
+
 ### Workspace Management (`self-workspace-*`)
 | Local Tool | Purpose |
 |-------|---------|
 | `workspace-watch` | Add/remove workspaces from watch list, extract workspace URLs from text and Bluesky records (facets, embeds, text) |
+
+### Domain Handlers (imported by `modules/executor.ts`)
+| Local Tool | Purpose |
+|-------|---------|
+| `self-handlers.ts` | Core domain tool handlers (self_read, self_write, etc.) |
+| `self-bluesky-handlers.ts` | Bluesky tool handlers (bluesky_post, bluesky_reply, etc.) |
+| `self-github-handlers.ts` | GitHub tool handlers (github_create_issue, github_comment, etc.) |
+| `self-web-handlers.ts` | Web tool handlers (web_browse, curl_fetch, etc.) |
+| `self-workspace-handlers.ts` | Workspace tool handlers (workspace_create, plan_create, etc.) |
+
+### Domain Tool Definitions (imported by `modules/tools.ts`)
+| Local Tool | Purpose |
+|-------|---------|
+| `self-tools.ts` | Core domain tool definitions (SELF_TOOLS) |
+| `self-bluesky-tools.ts` | Bluesky tool definitions (BLUESKY_TOOLS) |
+| `self-github-tools.ts` | GitHub tool definitions (GITHUB_TOOLS) |
+| `self-web-tools.ts` | Web tool definitions (WEB_TOOLS) |
+| `self-workspace-tools.ts` | Workspace tool definitions (WORKSPACE_TOOLS) |
 
 ## Design Principles
 

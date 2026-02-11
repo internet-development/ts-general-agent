@@ -5,7 +5,7 @@ The {{OWNER}} and another person could post on Bluesky:
 
 # 2
 
-A human could check for one of the projects by a group of arbitrary {{SOUL}}, such as `www-lil-intdev-*`, and make sure that it's actually a completed project based on a conversation between @soul1, @soul2, and @soul3 on Bluesky. A full and accurate conversation exists in example-conversation.ts and any one can observe that file.
+A human could check for one of the projects by a group of arbitrary {{SOUL}}, such as `www-lil-intdev-*`, and make sure that it's actually a completed project based on a conversation between @soul1, @soul2, and @soul3 on Bluesky. A full and accurate conversation exists in example-conversation.ts and any one can observe that file. The example conversation covers all 29 scenarios — Bluesky threads, GitHub plans, PR workflows, owner terminal interaction, self-improvement, write-ups, sentinel completion, and adversarial failure modes.
 
 # 3
 
@@ -439,3 +439,23 @@ Three SOULs posted 23 comments in 47 minutes on a "Draft: A Great Website As A C
 - The SOUL enters an infinite self-improvement loop — 24h minimum between cycles
 
 **Enforcement:** Code (`getFrictionReadyForImprovement` 3-occurrence threshold, 48h burn-in check in scheduler, `reloadSkills` validate-and-restore pattern, `self-improvement-decision` LLM gate before execution, 24h cooldown between cycles).
+
+# 29
+
+The {{OWNER}} pushes a new version of the codebase to GitHub (e.g., bumps `package.json` from 8.6.2 to 8.7.0). Within 5 minutes, every running SOUL detects the version mismatch and shuts down gracefully. The {{OWNER}} can then reboot each SOUL on the new version. No SOUL continues running stale code after an update — they all notice and stop themselves.
+
+**What MUST happen:**
+- `startVersionCheckLoop()` runs every ~5 minutes (with deterministic jitter per agent) and compares `LOCAL_VERSION` from `package.json` against the remote `main` branch on GitHub
+- An initial check fires 30 seconds after startup (lets other systems settle)
+- When a version mismatch is detected: `ui.error()` displays the mismatch clearly in the terminal, `this.stop()` triggers graceful shutdown, `process.exit(0)` fires after a 2-second delay
+- The terminal message tells the {{OWNER}} exactly what happened: "Local: X.Y.Z, Remote: A.B.C. A new version is available. Shutting down gracefully — please update and reboot."
+- Network errors during version check are non-fatal — logged as warnings and retried next interval
+- Missing or malformed remote `package.json` is non-fatal — logged as warning and retried
+
+**What MUST NOT happen:**
+- A SOUL continues running on version 8.6.2 after the {{OWNER}} pushed 8.7.0 to main
+- A version check network failure crashes the agent (must be non-fatal)
+- Version check fires too frequently (base interval is 5 minutes with jitter)
+- The shutdown is abrupt — `this.stop()` must drain in-progress work before exiting
+
+**Enforcement:** Code (`startVersionCheckLoop` in scheduler with ~5m jitter interval, `checkRemoteVersion` compares `LOCAL_VERSION` against `REMOTE_PACKAGE_JSON_URL`, graceful shutdown via `this.stop()` + `process.exit(0)` with 2s delay).
