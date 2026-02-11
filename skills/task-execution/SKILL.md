@@ -35,6 +35,7 @@ You are executing a task from a collaborative multi-SOUL plan.
 7. **If blocked**, explain clearly what's preventing completion
 8. **Test your changes** if tests exist — but if the test runner is not installed (e.g. `vitest: command not found`, `jest: not found`), that is NOT a task failure. Skip tests and continue. The verification system handles this separately.
 9. **Keep changes minimal** - only what's needed for this task
+10. **You MUST produce at least one git commit with file changes.** The verification system requires git changes on the feature branch. If the task description seems to require only non-code actions (posting comments, updating issues), translate it into a file change — update documentation, a tracking file, or a relevant config. A task with zero git changes will fail.
 
 ## Process
 

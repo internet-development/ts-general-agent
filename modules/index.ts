@@ -66,22 +66,3 @@ export {
   type Experience,
 } from '@local-tools/self-capture-experiences.js';
 
-export {
-  getAttributionBacklogStats,
-  getAttributionReflectionPrompt,
-  shouldSuggestAttributionWork,
-  type AttributionBacklogStats,
-} from '@local-tools/self-manage-attribution.js';
-
-export {
-  extractHandles,
-  extractMentionedEntities,
-  loadCachedProfile,
-  cacheProfile,
-  enrichMentionedEntities,
-  formatEnrichedContext,
-  buildSocialContext,
-  type MentionedEntity,
-  type EnrichedProfile,
-  type SocialGraphData,
-} from '@local-tools/self-enrich-social-context.js';

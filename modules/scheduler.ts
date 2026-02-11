@@ -57,14 +57,12 @@ import {
 } from '@local-tools/self-capture-experiences.js';
 import {
   loadExpressionSchedule,
-  saveExpressionSchedule,
   generateExpressionPrompt,
   scheduleNextExpression,
   shouldExpress,
   getPendingPrompt,
   generateDesignInspirationPrompt,
   recordExpression,
-  getExpressionStats,
   updateExpressionEngagement,
   getExpressionsNeedingEngagementCheck,
   getEngagementPatterns,
@@ -88,7 +86,6 @@ import {
   markAspirationAttempted,
   recordGrowthOutcome,
   buildGrowthPrompt,
-  getAspirationStats,
 } from '@local-tools/self-identify-aspirations.js';
 import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import { buildSystemPrompt, renderSkillSection, areSkillsLoaded, reloadSkills } from '@modules/skills.js';
@@ -115,11 +112,9 @@ import {
   updateGitHubSeenAt,
   updateLastNotificationCheck,
   trackConversation as trackGitHubConversation,
-  getConversation as getGitHubConversation,
   recordOurComment,
   updateConversationState as updateGitHubConversationState,
   markConversationConcluded as markGitHubConversationConcluded,
-  getConversationsNeedingAttention as getGitHubConversationsNeedingAttention,
   cleanupOldConversations as cleanupOldGitHubConversations,
 } from '@modules/github-engagement.js';
 import {
@@ -145,8 +140,8 @@ import {
   type ReviewablePR,
   DISCUSSION_LABEL,
 } from '@modules/github-workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, linkPeerIdentities, getPeerGithubUsername } from '@modules/peer-awareness.js';
-import { processTextForWorkspaces, processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, getPeerGithubUsername } from '@modules/peer-awareness.js';
+import { processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
 import { verifyGitChanges, runTestsIfPresent, verifyPushSuccess, verifyBranch } from '@local-tools/self-task-verify.js';
@@ -154,10 +149,6 @@ import { findExistingWorkspace } from '@local-tools/self-github-create-workspace
 import { reportTaskComplete, reportTaskBlocked, reportTaskFailed } from '@local-tools/self-task-report.js';
 import { parsePlan, fetchFreshPlan, getClaimableTasks, freshUpdateTaskInPlan } from '@local-tools/self-plan-parse.js';
 import {
-  trackConversation as trackBlueskyConversation,
-  recordParticipantActivity,
-  recordOurReply,
-  updateThreadDepth,
   analyzeConversation as analyzeBlueskyConversation,
   shouldRespondInConversation,
   getConversation as getBlueskyConversation,
@@ -3135,35 +3126,91 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         }
 
         //NOTE(self): Pick the first claimable task (lowest number) that hasn't exceeded retry limit
+        //NOTE(self): Uses BOTH in-memory tracker AND issue comment counting for cross-SOUL awareness
+        //NOTE(self): Issue comments survive restarts and are visible to all SOULs
         const sortedClaimable = freshClaimable.sort((a, b) => a.number - b.number);
         let task = null;
+
+        //NOTE(self): Fetch issue comments once for all candidates (avoid N+1 API calls)
+        //NOTE(self): Uses getIssueThread which is already used throughout the scheduler
+        let issueComments: Array<{ body?: string }> = [];
+        if (sortedClaimable.some(c => c.status === 'blocked')) {
+          try {
+            const threadResult = await getIssueThread({
+              owner: discovered.workspace.owner,
+              repo: discovered.workspace.repo,
+              issue_number: discovered.issueNumber,
+            });
+            if (threadResult.success && threadResult.data) {
+              issueComments = threadResult.data.comments;
+            }
+          } catch (err) {
+            logger.debug('Failed to fetch issue comments for retry counting (non-fatal)', { error: String(err) });
+          }
+        }
+
         for (const candidate of sortedClaimable) {
           const taskKey = `${discovered.workspace.owner}/${discovered.workspace.repo}#${discovered.issueNumber}/task-${candidate.number}`;
           const tracked = this.stuckTaskTracker.get(taskKey);
-          if (tracked && tracked.retryCount >= AgentScheduler.MAX_TASK_RETRIES) {
-            logger.warn('Skipping task — retry limit reached', {
+
+          //NOTE(self): Cross-SOUL failure counting — count "Task N Failed" and "Task N Blocked" comments
+          //NOTE(self): from ALL SOULs on this plan issue. This survives restarts and works across agents.
+          let totalFailures = 0;
+          if (candidate.status === 'blocked') {
+            const taskFailurePattern = new RegExp(`\\*\\*Task ${candidate.number}\\b.*(?:Failed|Blocked)`, 'i');
+            const taskAbandonPattern = new RegExp(`\\*\\*Task ${candidate.number}\\*\\*.*has failed.*times.*will not be retried`, 'i');
+            for (const comment of issueComments) {
+              if (!comment.body) continue;
+              if (taskAbandonPattern.test(comment.body)) {
+                //NOTE(self): Another SOUL already posted the abandon notice — skip immediately
+                totalFailures = AgentScheduler.MAX_TASK_RETRIES;
+                break;
+              }
+              if (taskFailurePattern.test(comment.body)) {
+                totalFailures++;
+              }
+            }
+          }
+
+          //NOTE(self): Use the HIGHER of in-memory tracker and comment-based count
+          const effectiveRetries = Math.max(tracked?.retryCount || 0, totalFailures);
+
+          if (effectiveRetries >= AgentScheduler.MAX_TASK_RETRIES) {
+            logger.warn('Skipping task — retry limit reached (cross-SOUL)', {
               taskKey,
-              retryCount: tracked.retryCount,
+              inMemoryRetries: tracked?.retryCount || 0,
+              commentBasedFailures: totalFailures,
               maxRetries: AgentScheduler.MAX_TASK_RETRIES,
             });
+            //NOTE(self): Sync in-memory tracker with comment-based count
+            if (!tracked || tracked.retryCount < effectiveRetries) {
+              this.stuckTaskTracker.set(taskKey, {
+                firstSeen: 0,
+                retryCount: effectiveRetries,
+                abandonNotified: tracked?.abandonNotified || totalFailures >= AgentScheduler.MAX_TASK_RETRIES,
+              });
+            }
             //NOTE(self): Notify on the plan issue so the failure is visible to observers
-            if (!tracked.abandonNotified) {
-              tracked.abandonNotified = true;
+            if (!tracked?.abandonNotified && totalFailures < AgentScheduler.MAX_TASK_RETRIES) {
+              const updatedTracked = this.stuckTaskTracker.get(taskKey)!;
+              updatedTracked.abandonNotified = true;
               const task = freshPlan.tasks.find(t => t.number === candidate.number);
               github.createIssueComment({
                 owner: discovered.workspace.owner,
                 repo: discovered.workspace.repo,
                 issue_number: discovered.issueNumber,
-                body: `**Task ${candidate.number}** (${task?.title || 'Unknown'}) has failed ${AgentScheduler.MAX_TASK_RETRIES} times and will not be retried automatically. Manual intervention may be needed.`,
+                body: `**Task ${candidate.number}** (${task?.title || 'Unknown'}) has failed ${effectiveRetries} times across all SOULs and will not be retried automatically. Manual intervention may be needed.`,
               }).catch(err => logger.warn('Failed to post retry-limit comment', { error: String(err) }));
             }
             continue;
           }
           //NOTE(self): Track retry count for blocked tasks being retried
-          if (candidate.status === 'blocked' && tracked) {
-            this.stuckTaskTracker.set(taskKey, { ...tracked, retryCount: tracked.retryCount + 1 });
-          } else if (candidate.status === 'blocked' && !tracked) {
-            this.stuckTaskTracker.set(taskKey, { firstSeen: 0, retryCount: 1 });
+          if (candidate.status === 'blocked') {
+            this.stuckTaskTracker.set(taskKey, {
+              firstSeen: 0,
+              retryCount: effectiveRetries + 1,
+              abandonNotified: tracked?.abandonNotified,
+            });
           }
           task = candidate;
           break;
@@ -3532,6 +3579,9 @@ This workspace has open issues but no active plan. Review these issues and creat
 - Actionable issues (bugs, features, implementation) become tasks
 - Memos and decisions become context in the plan's Context section
 - Reference issues by number: "See #N for details"
+- **Every task MUST produce file/code changes that go through a Pull Request.** The execution pipeline creates a branch, runs Claude Code, and requires git commits. A task with zero file changes will fail.
+- **Non-code actions (posting comments, updating issue labels, restating checklists) must NOT be tasks.** Handle them here during synthesis, or fold them into a code task (e.g., "Update tracking.md with the restated checklist").
+- If an issue's work is purely administrative, absorb it into the plan's Context section — do not create a task for it
 - Tasks should be concrete, executable units of work
 - Include file paths and acceptance criteria where possible
 - Order tasks by dependencies (foundational work first)

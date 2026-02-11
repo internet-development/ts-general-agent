@@ -1,3 +1,5 @@
+//NOTE(self): All comments in this file follow the //NOTE(self): convention
+
 interface Action {
   description: string;
   location: 'GITHUB' | 'BLUESKY' | 'LOCAL';

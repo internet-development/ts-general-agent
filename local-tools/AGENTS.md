@@ -76,25 +76,12 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | `create-workspace` | Create collaborative development workspace from template |
 | `create-issue` | Create issues/memos in repositories |
 
-### Self-Reflection (`self-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `read` | Read SELF.md |
-| `write` | Write SELF.md |
-| `append` | Append to SELF.md |
-| `record-reflection` | Record a reflection entry |
-| `get-reflections` | Get recent reflections |
-| `record-observation` | Record an observation |
-| `record-relationship` | Record relationship notes |
-
 ### Self-Improvement (`self-improve-*`)
 | Local Tool | Purpose |
 |-------|---------|
 | `find-claude` | Locate Claude binary |
-| `check-installed` | Verify Claude Code installed |
 | `install` | Install Claude Code |
 | `run` | Execute Claude Code with prompt |
-| `request` | Request a self-improvement |
 | `types` | Shared type definitions |
 
 ### Detection & Analysis (`self-detect-*`, `self-identify-*`)
@@ -107,16 +94,6 @@ All local-tool files use a **flat structure** with semantic prefixes:
 | Local Tool | Purpose | Migrated From |
 |-------|---------|---------------|
 | `capture-experiences` | Record meaningful experiences | `modules/experiences.ts` |
-
-### Enrichment (`self-enrich-*`)
-| Local Tool | Purpose | Migrated From |
-|-------|---------|---------------|
-| `enrich-social-context` | Build social graph context | `modules/social-graph.ts` |
-
-### Management (`self-manage-*`)
-| Local Tool | Purpose | Migrated From |
-|-------|---------|---------------|
-| `manage-attribution` | Track and manage post attribution | `modules/attribution.ts` |
 
 ### Plan Management (`self-plan-*`)
 | Local Tool | Purpose |

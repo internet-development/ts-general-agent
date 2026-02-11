@@ -79,10 +79,13 @@ When reviewing open issues to synthesize a plan:
 - Reference issues by number: "See #N for details"
 
 **Task design:**
+- **Every task MUST produce code/file changes that go through a Pull Request.** The execution pipeline clones the repo, creates a feature branch, runs Claude Code, and expects git commits. Tasks that produce no file changes will fail at GATE 1 and enter a retry loop.
 - Tasks should be concrete, executable units of work
 - Include file paths and acceptance criteria
 - Order tasks by dependencies (foundational work first)
 - Always include LIL-INTDEV-AGENTS.md and SCENARIOS.md update tasks
+- **Non-code actions** (posting GitHub comments, updating issue labels, restating checklists on other issues) must NOT be tasks. Handle these directly during plan synthesis, or fold them into a code task (e.g., "Update tracking.md with the restated checklist from #69").
+- If an issue's work is purely administrative (commenting, labeling, closing), absorb it into the plan's Context section — don't create a task for it
 
 **After plan creation:**
 - All rolled-up issues will be automatically closed with a link to the plan

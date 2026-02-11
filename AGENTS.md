@@ -959,6 +959,7 @@ When a watched workspace has open issues but no active plan (all plans closed/co
 - If LLM doesn't create a plan, timestamp still updates (avoids repeated attempts)
 - Closed issues link to the plan — plan becomes the single source of truth
 - Next poll cycle discovers the new plan and SOULs start claiming tasks
+- **Every task MUST produce file/code changes** that go through a Pull Request (Scenario 30). Non-code actions (posting comments, updating labels, restating checklists) must NOT be tasks — handle them during synthesis or fold into code tasks. Purely administrative issues are absorbed into the plan's Context section.
 
 ### Duplicate Plan Consolidation
 
@@ -1096,6 +1097,8 @@ pending → claimed → in_progress → completed
 6. If `discoveredInThread` exists, announce claim on Bluesky (reply in originating thread)
 
 **Task-level safety:** The plan body is the source of truth for task ownership. `task.assignee` prevents two SOULs from claiming the same task. `freshUpdateTaskInPlan()` re-fetches the latest plan body before writing, preventing clobbering.
+
+**Cross-SOUL failure counting (v8.6.9):** When evaluating `blocked` tasks for retry, the scheduler reads plan issue comments via `getIssueThread()` and counts `**Task N Failed` and `**Task N Blocked` comments from ALL SOULs — not just the current SOUL's in-memory `stuckTaskTracker`. The higher of the in-memory count and the comment-based count is used. This prevents the failure where each SOUL independently retries a doomed task 3 times (9+ total attempts). After `MAX_TASK_RETRIES` (3) cumulative failures, an abandon notice is posted and the task is skipped. Existing abandon notices (`has failed.*times.*will not be retried`) are also detected to avoid re-posting.
 
 **Timeout:** If no progress comment within 30 minutes, task is unclaimed automatically.
 
@@ -1527,37 +1530,23 @@ ts-general-agent/
 │   ├── logger.ts               # Logging
 │   ├── memory.ts               # Memory persistence
 │   ├── skills.ts               # Skills framework (loads skills/*/SKILL.md)
-│   ├── self-llm-gateway.ts     # AI Gateway (streaming via ai module)
+│   ├── llm-gateway.ts          # AI Gateway (streaming via ai module)
 │   ├── loop.ts                 # Main loop (uses scheduler)
 │   ├── scheduler.ts            # Multi-loop scheduler
-│   ├── self-extract.ts         # SELF.md parsing
-│   ├── self-expression.ts      # Scheduled expression
 │   ├── executor.ts             # Thin tool dispatcher (routes to domain handlers)
 │   ├── tools.ts                # Tool aggregator (imports domain tool arrays)
-│   ├── self-pacing.ts          # Rate limiting
-│   ├── self-engagement.ts      # Relationship tracking + shouldRespondTo + isLowValueClosing
-│   ├── self-bluesky-engagement.ts  # Bluesky conversation state
-│   ├── self-github-engagement.ts   # GitHub conversation state
-│   ├── self-peer-awareness.ts  # Dynamic peer SOUL discovery
-│   ├── self-github-workspace-discovery.ts  # Workspace polling for plans, issues, PRs
-│   ├── self-commitment-queue.ts    # Commitment tracking (JSONL persistence)
-│   ├── self-commitment-extract.ts  # LLM-based commitment extraction from replies
-│   ├── self-commitment-fulfill.ts  # Commitment fulfillment dispatch
-│   ├── self-post-log.ts        # Post logging and attribution
-│   ├── self-voice-phrases.ts   # Voice phrase loading, interpolation, regeneration
-│   ├── self-announcement.ts    # GitHub → Bluesky announcement decisions
+│   ├── expression.ts           # Scheduled expression
+│   ├── pacing.ts               # Rate limiting
+│   ├── engagement.ts           # Relationship tracking + shouldRespondTo + isLowValueClosing
+│   ├── bluesky-engagement.ts   # Bluesky conversation state
+│   ├── github-engagement.ts    # GitHub conversation state
+│   ├── peer-awareness.ts       # Dynamic peer SOUL discovery
+│   ├── github-workspace-discovery.ts  # Workspace polling for plans, issues, PRs
+│   ├── commitment-queue.ts     # Commitment tracking (JSONL persistence)
+│   ├── post-log.ts             # Post logging and attribution
+│   ├── voice-phrases.ts        # Voice phrase loading, interpolation, regeneration
 │   ├── sandbox.ts              # File system sandboxing
 │   ├── ui.ts                   # Terminal UI components
-│   ├── self-handlers.ts        # Core domain tool handlers
-│   ├── self-bluesky-handlers.ts    # Bluesky tool handlers
-│   ├── self-github-handlers.ts     # GitHub tool handlers
-│   ├── self-web-handlers.ts        # Web tool handlers
-│   ├── self-workspace-handlers.ts  # Workspace tool handlers
-│   ├── self-tools.ts           # Core domain tool definitions
-│   ├── self-bluesky-tools.ts   # Bluesky tool definitions
-│   ├── self-github-tools.ts    # GitHub tool definitions
-│   ├── self-web-tools.ts       # Web tool definitions
-│   ├── self-workspace-tools.ts # Workspace tool definitions
 │   └── index.ts                # Module exports
 │
 ├── skills/                     # Prompt templates (see skills/AGENTS.md)
@@ -1577,19 +1566,33 @@ ts-general-agent/
 │   └── github-announcement/    # GitHub → Bluesky announcement decisions
 │
 └── local-tools/                # Capabilities (see local-tools/AGENTS.md)
-    ├── self-bluesky-*.ts       # Bluesky platform local-tools
-    ├── self-github-*.ts        # GitHub platform local-tools
-    ├── self-*.ts               # Self-reflection local-tools
-    ├── self-improve-*.ts       # Self-improvement local-tools
-    ├── self-plan-*.ts          # Plan management local-tools
-    ├── self-task-*.ts          # Task execution and verification local-tools
-    ├── self-workspace-*.ts     # Workspace management local-tools
-    ├── self-detect-*.ts        # Detection local-tools (friction, etc.)
-    ├── self-identify-*.ts      # Identification local-tools (aspirations, etc.)
-    ├── self-capture-*.ts       # Capture local-tools (experiences, etc.)
-    ├── self-enrich-*.ts        # Enrichment local-tools (social context, etc.)
-    ├── self-manage-*.ts        # Management local-tools (attribution, etc.)
-    └── index.ts                # Local-tool exports
+    ├── self-handlers.ts            # Core domain tool handlers
+    ├── self-bluesky-handlers.ts    # Bluesky tool handlers
+    ├── self-github-handlers.ts     # GitHub tool handlers
+    ├── self-web-handlers.ts        # Web tool handlers
+    ├── self-workspace-handlers.ts  # Workspace tool handlers
+    ├── self-tools.ts               # Core domain tool definitions
+    ├── self-bluesky-tools.ts       # Bluesky tool definitions
+    ├── self-github-tools.ts        # GitHub tool definitions
+    ├── self-web-tools.ts           # Web tool definitions
+    ├── self-workspace-tools.ts     # Workspace tool definitions
+    ├── self-extract.ts             # SELF.md parsing
+    ├── self-announcement.ts        # GitHub → Bluesky announcement decisions
+    ├── self-commitment-extract.ts  # LLM-based commitment extraction from replies
+    ├── self-commitment-fulfill.ts  # Commitment fulfillment dispatch
+    ├── self-plan-create.ts         # Plan creation with auto-injected docs tasks
+    ├── self-plan-parse.ts          # Plan markdown parsing
+    ├── self-task-claim.ts          # Task claiming via GitHub assignee API
+    ├── self-task-execute.ts        # Task execution via Claude Code
+    ├── self-task-verify.ts         # PRE-GATE + four-gate verification
+    ├── self-task-report.ts         # Task progress/completion reporting
+    ├── self-workspace-watch.ts     # Workspace watch list management
+    ├── self-improve-*.ts           # Self-improvement (find-claude, install, run, types)
+    ├── self-detect-friction.ts     # Friction tracking for self-improvement
+    ├── self-identify-aspirations.ts # Growth goal extraction from SELF.md
+    ├── self-capture-experiences.ts  # Meaningful experience recording
+    ├── self-github-*.ts            # GitHub platform local-tools
+    └── index.ts                    # Local-tool exports
 ```
 
 ---

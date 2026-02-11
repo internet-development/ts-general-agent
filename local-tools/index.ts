@@ -16,21 +16,10 @@ export {
   type MemoResult,
 } from '@local-tools/self-github-create-issue.js';
 
-// Self-reflection local-tools
-export { readSelf } from '@local-tools/self-read.js';
-export { writeSelf } from '@local-tools/self-write.js';
-export { appendToSelf } from '@local-tools/self-append.js';
-export { recordReflection, type Reflection } from '@local-tools/self-record-reflection.js';
-export { getRecentReflections } from '@local-tools/self-get-reflections.js';
-export { recordObservation } from '@local-tools/self-record-observation.js';
-export { recordRelationship } from '@local-tools/self-record-relationship.js';
-
 // Self-improvement local-tools
 export { findClaudeBinary } from '@local-tools/self-improve-find-claude.js';
-export { checkClaudeCodeInstalled } from '@local-tools/self-improve-check-installed.js';
 export { installClaudeCode } from '@local-tools/self-improve-install.js';
 export { runClaudeCode } from '@local-tools/self-improve-run.js';
-export { requestSelfImprovement } from '@local-tools/self-improve-request.js';
 export type { ClaudeCodeResult } from '@local-tools/self-improve-types.js';
 
 // Detection & Analysis local-tools
@@ -76,28 +65,6 @@ export {
   type ExperienceType,
   type Experience,
 } from '@local-tools/self-capture-experiences.js';
-
-// Management local-tools
-export {
-  getAttributionBacklogStats,
-  getAttributionReflectionPrompt,
-  shouldSuggestAttributionWork,
-  type AttributionBacklogStats,
-} from '@local-tools/self-manage-attribution.js';
-
-// Enrichment local-tools
-export {
-  extractHandles,
-  extractMentionedEntities,
-  loadCachedProfile,
-  cacheProfile,
-  enrichMentionedEntities,
-  formatEnrichedContext,
-  buildSocialContext,
-  type MentionedEntity,
-  type EnrichedProfile,
-  type SocialGraphData,
-} from '@local-tools/self-enrich-social-context.js';
 
 // Plan coordination local-tools (multi-SOUL collaboration)
 export {

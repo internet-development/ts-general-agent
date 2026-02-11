@@ -54,8 +54,10 @@ The github-response skill is the primary prompt-level defense against pile-on be
 - "If you've commented 2+ times, consider if you're adding value"
 - Combined with code-level defenses (analyzeConversation 3-comment cap, round-robin prevention), this prevents the 23-comment pile-on anti-pattern.
 
-### task-execution — Branch Hygiene (Scenario 21)
+### task-execution — Branch Hygiene (Scenario 21) + Code-Only Tasks (Scenario 30)
 The task-execution skill explicitly tells Claude Code to never run `git merge`, `git rebase`, `git pull`, `git fetch`, or switch branches. This is prompt-level enforcement, backed by code-level `verifyBranch()` PRE-GATE check.
+
+Constraint #10 requires Claude Code to produce at least one git commit with file changes. If a task seems to require only non-code actions (posting comments, updating issues), Claude Code must translate it into a file change (update documentation, a tracking file, or a config). Tasks with zero git changes fail at GATE 1. This prevents the non-code task retry loop described in Scenario 30.
 
 ## Adding a Skill
 

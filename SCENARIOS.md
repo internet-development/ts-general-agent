@@ -5,7 +5,7 @@ The {{OWNER}} and another person could post on Bluesky:
 
 # 2
 
-A human could check for one of the projects by a group of arbitrary {{SOUL}}, such as `www-lil-intdev-*`, and make sure that it's actually a completed project based on a conversation between @soul1, @soul2, and @soul3 on Bluesky. A full and accurate conversation exists in example-conversation.ts and any one can observe that file. The example conversation covers all 29 scenarios — Bluesky threads, GitHub plans, PR workflows, owner terminal interaction, self-improvement, write-ups, sentinel completion, and adversarial failure modes.
+A human could check for one of the projects by a group of arbitrary {{SOUL}}, such as `www-lil-intdev-*`, and make sure that it's actually a completed project based on a conversation between @soul1, @soul2, and @soul3 on Bluesky. A full and accurate conversation exists in example-conversation.ts and any one can observe that file. The example conversation covers all 30 scenarios — Bluesky threads, GitHub plans, PR workflows, owner terminal interaction, self-improvement, write-ups, sentinel completion, non-code task prevention, and adversarial failure modes.
 
 # 3
 
@@ -478,3 +478,32 @@ The {{OWNER}} pushes a new version of the codebase to GitHub (e.g., bumps `packa
 - The shutdown is abrupt — `this.stop()` must drain in-progress work before exiting
 
 **Enforcement:** Code (`startVersionCheckLoop` in scheduler with ~5m jitter interval, `checkRemoteVersion` compares `LOCAL_VERSION` against `REMOTE_PACKAGE_JSON_URL`, graceful shutdown via `this.stop()` + `process.exit(0)` with 2s delay).
+
+# 30
+
+A plan is synthesized with a task that says "restate the remaining-work checklist as a single comment on #69." This task requires no code changes — it's purely administrative (posting a comment). @soul1 claims it, runs Claude Code, but Claude Code can't produce git commits because there's nothing to commit. GATE 1 (verifyGitChanges) fails. @soul1 retries. @soul2 also claims and fails. @soul3 too. After 12+ failure comments from three SOULs, the plan issue is flooded with noise and the task is stuck forever.
+
+**What MUST happen:**
+
+- Plan synthesis MUST reject non-code tasks. Every task must produce file/code changes that go through a Pull Request. The skill prompts (`workspace-decision`, `task-execution`) and the plan synthesis user message all enforce this.
+- Non-code actions (posting comments, updating labels, restating checklists) MUST be handled during plan synthesis itself, or folded into a code task (e.g., "update tracking.md with the checklist from #69").
+- If an issue's work is purely administrative, it MUST be absorbed into the plan's Context section — not created as a task.
+- The `task-execution` skill tells Claude Code: "You MUST produce at least one git commit with file changes." If the task seems non-code, translate it into a file change.
+- Cross-SOUL failure counting: when evaluating blocked tasks for retry, the scheduler reads plan issue comments from ALL SOULs (not just in-memory per-SOUL tracking). `getIssueThread()` is used to count `**Task N Failed` and `**Task N Blocked` comments across all agents. The higher of in-memory and comment-based count is used.
+- After `MAX_TASK_RETRIES` (3) cumulative failures across all SOULs, the task is abandoned with a public notice on the plan issue.
+
+**What MUST NOT happen:**
+
+- A plan containing a task that can never produce git changes (e.g., "post a comment on issue #X")
+- Each SOUL independently retrying the same impossible task 3-4 times (multiplied by 3 SOULs = 12+ failure comments)
+- SOUL restarts resetting the retry counter (comment-based counting survives restarts)
+- A plan issue flooded with dozens of identical failure comments for an inherently impossible task
+- Administrative work (commenting, labeling, closing) being treated as a plan task
+
+**Real-world failure (Issue #100, portfolio-compare workspace):**
+Task 1 of plan #100 was "Make #69 actionable: restate the remaining-work checklist as a single comment on #69." This is a comment-posting task — it can never produce git changes. Three SOULs (sh-rebecca, sh-marvin, sh-peterben) each independently retried the task 3-4 times, producing ~12 failure comments. Each SOUL's in-memory `stuckTaskTracker` was independent, and restarts reset the counter. The task was stuck indefinitely.
+
+**Enforcement:** Three-layer prevention:
+1. **Plan synthesis enforcement** — `workspace-decision` skill + scheduler plan synthesis user message explicitly state every task must produce file changes. Non-code actions are handled during synthesis or absorbed into Context.
+2. **Task execution enforcement** — `task-execution` skill constraint #10 requires at least one git commit. Claude Code translates non-code tasks into file changes.
+3. **Cross-SOUL failure counting** — scheduler reads plan issue comments via `getIssueThread()` to count failures from ALL SOULs. Uses `Math.max(inMemoryCount, commentBasedCount)`. Syncs in-memory tracker with comment count to avoid duplicate abandon notices.
