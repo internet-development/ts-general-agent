@@ -28,9 +28,11 @@ export async function updateIssue(
   }
 
   //NOTE(self): Build the update payload - only include provided fields
+  //NOTE(self): Guard against LLM sending empty strings for body/title — this would blank the issue
+  //NOTE(self): The LLM sometimes fills in "" for optional fields instead of omitting them
   const payload: Record<string, unknown> = {};
-  if (params.title !== undefined) payload.title = params.title;
-  if (params.body !== undefined) payload.body = params.body;
+  if (params.title !== undefined && params.title !== '') payload.title = params.title;
+  if (params.body !== undefined && params.body !== '') payload.body = params.body;
   if (params.state !== undefined) payload.state = params.state;
   if (params.labels !== undefined) payload.labels = params.labels;
   if (params.assignees !== undefined) payload.assignees = params.assignees;
