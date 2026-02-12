@@ -103,7 +103,7 @@ function loadState(): WorkspaceDiscoveryState {
         workspaces: data.workspaces || {},
         lastFullPoll: data.lastFullPoll || null,
       };
-      logger.debug('Loaded workspace discovery state', {
+      logger.info('Loaded workspace discovery state', {
         workspaceCount: Object.keys(discoveryState.workspaces).length,
       });
     } else {
@@ -156,7 +156,7 @@ export function watchWorkspace(
       saveState();
       logger.info('Updated workspace with thread URI', { key, threadUri });
     } else {
-      logger.debug('Workspace already being watched', { key });
+      logger.info('Workspace already being watched', { key });
     }
     return;
   }
@@ -270,7 +270,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   const summary = { plansFound: 0, totalTasks: 0, completed: 0, inProgress: 0, claimed: 0, blocked: 0, pending: 0, claimable: 0, pendingBlockedByDeps: 0, pendingHasAssignee: 0 };
 
   if (workspaces.length === 0) {
-    logger.debug('No workspaces to poll');
+    logger.info('No workspaces to poll for plans');
     return { claimablePlans, allPlansByWorkspace, summary };
   }
 
@@ -280,7 +280,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
     try {
       //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
       if (workspace.finishedIssueNumber) {
-        logger.debug('Skipping finished workspace', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
+        logger.info('Skipping finished workspace', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
         continue;
       }
 
@@ -409,13 +409,13 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
   const config = getConfig();
   const agentUsername = config.github.username.toLowerCase();
 
-  logger.debug('Polling workspaces for open issues', { workspaceCount: workspaces.length });
+  logger.info('Polling workspaces for open issues', { workspaceCount: workspaces.length });
 
   for (const workspace of workspaces) {
     try {
       //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
       if (workspace.finishedIssueNumber) {
-        logger.debug('Skipping finished workspace for open issues', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
+        logger.info('Skipping finished workspace for open issues', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
         continue;
       }
 
@@ -496,14 +496,14 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
   const results: ReviewablePR[] = [];
 
   if (workspaces.length === 0) {
-    logger.debug('No workspaces to poll for reviewable PRs');
+    logger.info('No workspaces to poll for reviewable PRs');
     return [];
   }
 
   const config = getConfig();
   const agentUsername = config.github.username.toLowerCase();
 
-  logger.debug('Polling workspaces for reviewable PRs', { workspaceCount: workspaces.length });
+  logger.info('Polling workspaces for reviewable PRs', { workspaceCount: workspaces.length });
 
   for (const workspace of workspaces) {
     try {
@@ -1370,7 +1370,7 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
     //NOTE(self): Check if any comments contain work requests (vs just agreement)
     const hasWorkComments = nonCreatorComments.some(c => !isAgreementComment(c.body));
     if (!hasWorkComments) {
-      logger.debug('Sentinel has only agreement comments — staying finished', { owner, repo, issueNumber });
+      logger.info('Sentinel has only agreement comments — staying finished', { owner, repo, issueNumber });
       return true;
     }
 

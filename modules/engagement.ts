@@ -342,12 +342,6 @@ export function recordOriginalPost(): void {
   saveState(state);
 }
 
-function boostInspiration(amount: number = 10, source?: string): void {
-  const state = loadState();
-  state.posting.inspirationLevel = Math.min(100, state.posting.inspirationLevel + amount);
-  saveState(state);
-}
-
 
 //NOTE(self): Notification Priority
 

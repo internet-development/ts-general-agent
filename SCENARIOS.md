@@ -5,7 +5,7 @@ The {{OWNER}} and another person could post on Bluesky:
 
 # 2
 
-A human could check for one of the projects by a group of arbitrary {{SOUL}}, such as `www-lil-intdev-*`, and make sure that it's actually a completed project based on a conversation between @soul1, @soul2, and @soul3 on Bluesky. A full and accurate conversation exists in example-conversation.ts and any one can observe that file. The example conversation covers all 30 scenarios — Bluesky threads, GitHub plans, PR workflows, owner terminal interaction, self-improvement, write-ups, sentinel completion, non-code task prevention, and adversarial failure modes.
+A human could check for one of the projects by a group of arbitrary {{SOUL}}, such as `www-lil-intdev-*`, and make sure that it's actually a completed project based on a conversation between @soul1, @soul2, and @soul3 on Bluesky. A full and accurate conversation exists in example-conversation.ts and any one can observe that file. The example conversation covers all 36 scenarios — Bluesky threads, GitHub plans, PR workflows, owner terminal interaction, self-improvement, write-ups, sentinel completion, non-code task prevention, adversarial failure modes, and infrastructure resilience (session refresh, rate limiting, stale cleanup, peer identity, issue lifecycle).
 
 # 3
 
@@ -409,8 +409,10 @@ Three SOULs posted 23 comments in 47 minutes on a "Draft: A Great Website As A C
 - Fulfillment replies feel robotic — they should match the SOUL's voice from ## Voice in SELF.md
 - Commitments linger forever — auto-abandoned after 24h or 3 failed attempts
 - The commitment loop consumes excessive tokens (~500 tokens per extraction, 0 for fulfillment)
+- A broken commitment retries forever — after 3 failed fulfillment attempts, the commitment is abandoned and logged
+- Stale commitments accumulate — `abandonStaleCommitments()` runs every cycle and removes commitments older than 24 hours
 
-**Enforcement:** Code (`self-commitment-extract.ts` pattern matching via LLM, `self-commitment-fulfill.ts` tool execution, JSONL persistence + hash dedup, 24h/3-failure auto-abandon, `getFulfillmentPhrase()` for voice-consistent replies).
+**Enforcement:** Code (`self-commitment-extract.ts` pattern matching via LLM, `self-commitment-fulfill.ts` tool execution, JSONL persistence + hash dedup, 24h/3-failure auto-abandon, `getFulfillmentPhrase()` for voice-consistent replies, `abandonStaleCommitments()` cleanup every cycle).
 
 # 27
 
@@ -507,3 +509,119 @@ Task 1 of plan #100 was "Make #69 actionable: restate the remaining-work checkli
 1. **Plan synthesis enforcement** — `workspace-decision` skill + scheduler plan synthesis user message explicitly state every task must produce file changes. Non-code actions are handled during synthesis or absorbed into Context.
 2. **Task execution enforcement** — `task-execution` skill constraint #10 requires at least one git commit. Claude Code translates non-code tasks into file changes.
 3. **Cross-SOUL failure counting** — scheduler reads plan issue comments via `getIssueThread()` to count failures from ALL SOULs. Uses `Math.max(inMemoryCount, commentBasedCount)`. Syncs in-memory tracker with comment count to avoid duplicate abandon notices.
+
+---
+
+# Infrastructure & Resilience Scenarios
+
+These scenarios document the invisible infrastructure that keeps SOULs running reliably. They cover session management, rate limiting, cleanup, and cross-platform coordination.
+
+# 31
+
+The {{OWNER}} lets a SOUL run continuously for 3+ hours. Bluesky access tokens expire every ~2 hours. The session refresh loop (every 15 minutes with agent-specific jitter) proactively refreshes the `accessJwt` before expiration. If the `refreshJwt` succeeds, the SOUL continues seamlessly. If refresh fails, the SOUL falls back to full re-authentication with stored credentials. The {{OWNER}} observes zero interruptions — no failed API calls, no "session expired" errors.
+
+**What MUST happen:**
+- `startSessionRefreshLoop()` fires every 15 minutes (with deterministic jitter per agent)
+- `ensureValidSession()` refreshes via `refreshJwt` first — only re-authenticates on failure
+- Re-authentication uses the stored Bluesky credentials from environment variables
+- Session state is updated in-memory immediately — no stale token window
+
+**What MUST NOT happen:**
+- A SOUL crashes or goes silent because its Bluesky token expired mid-conversation
+- Multiple SOULs all refresh at the same instant (jitter prevents thundering herd)
+- A refresh failure permanently stops the SOUL — full re-auth is the fallback
+- Session refresh fires during active response mode (guarded by mode check)
+
+**Enforcement:** Code (`startSessionRefreshLoop` in scheduler.ts with 15m jittered interval, `ensureValidSession` with refresh-then-reauth fallback, `ensureSessionOrReauth` for on-demand recovery).
+
+# 32
+
+A SOUL is running and making frequent GitHub API calls — polling 3 workspaces for plans, checking PRs for approval, reviewing pull requests. GitHub's rate limit (5000 calls/hour) starts depleting. When remaining calls drop below 200, the SOUL automatically skips its GitHub awareness check and plan awareness check that cycle. It continues all other work — Bluesky awareness, expressions, reflections, commitment fulfillment. Once rate limits reset (next hour), the SOUL resumes full GitHub polling. The {{OWNER}} never sees the SOUL crash or return HTTP 403 errors.
+
+**What MUST happen:**
+- `githubAwarenessCheck()` calls `getGitHubRateLimitStatus()` at the top of each cycle
+- If `remaining < 200`, the entire GitHub check is skipped with a warning log
+- `planAwarenessCheck()` has the same guard — skips workspace polling when budget is low
+- Bluesky operations, expression cycles, and reflection cycles continue unaffected
+- Rate limit status is tracked via response headers from every GitHub API call
+
+**What MUST NOT happen:**
+- A SOUL exhausts its GitHub API quota and all GitHub operations fail for an hour
+- Rate limit checks themselves consume API calls (they read cached response headers)
+- A low-budget skip is silent — it must be logged as a warning so the {{OWNER}} knows
+
+**Enforcement:** Code (`getGitHubRateLimitStatus()` cached from response headers, budget guards at top of `githubAwarenessCheck` and `planAwarenessCheck`, `githubFetch` wrapper tracks `X-RateLimit-Remaining` headers).
+
+# 33
+
+A workspace has 4 open issues: #45 (feature request from 10 days ago, no comments in 8 days), #46 (active discussion from yesterday), #47 (a `memo`-labeled coordination issue untouched for 4 days), and #48 (a `discussion`-labeled brainstorm from 2 weeks ago). During the plan awareness cycle, `cleanupStaleWorkspaceIssues()` runs. It closes #45 (stale: >7 days idle) and #47 (stale memo: >3 days idle). It skips #46 (active) and #48 (`discussion` label — exempt from auto-close). The {{OWNER}} sees fewer zombie issues without losing active conversations.
+
+**What MUST happen:**
+- Regular issues: auto-closed after 7 days of no activity (no comments, no updates)
+- `memo`-labeled issues: auto-closed after 3 days (short-lived coordination artifacts)
+- `discussion`-labeled issues: never auto-closed (protected from staleness cleanup)
+- `plan`-labeled issues: never auto-closed (managed by plan lifecycle)
+- `finished`-labeled issues (sentinels): never auto-closed (managed by sentinel lifecycle)
+- Closure is silent — no comment posted, just state change to closed
+
+**What MUST NOT happen:**
+- An active conversation is auto-closed because it was created long ago
+- A discussion issue is destroyed by stale cleanup
+- A plan issue is closed before all its tasks are merged
+- Auto-close failures crash the cleanup loop — they are non-fatal and logged
+
+**Enforcement:** Code (`cleanupStaleWorkspaceIssues()` in github-workspace-discovery.ts with label-based exemptions and `updated_at` timestamp comparison).
+
+# 34
+
+A workspace issue asks "How do we structure the API routes?" @soul1 comments with a detailed architectural analysis. 24+ hours pass with no human follow-up. @soul1 cannot post again (consecutive reply prevention from `analyzeConversation()`). The issue would stay open forever — answered but not closed. `closeHandledWorkspaceIssues()` runs during the plan awareness cycle, detects that @soul1's comment is the most recent and the issue has been idle for >24 hours, and closes it. The {{OWNER}} observes: question answered, issue resolved and closed. No human intervention needed.
+
+**What MUST happen:**
+- `closeHandledWorkspaceIssues()` scans workspace issues where the agent's comment is the most recent
+- Issues idle for >24 hours after the agent's last comment are auto-closed
+- Skips `plan`, `discussion`, and `finished`-labeled issues
+- Skips PRs (only processes issues)
+- Closure is silent — no additional comment, just state change
+
+**What MUST NOT happen:**
+- An issue is closed while a human is still actively replying (24h idle guard)
+- A plan issue is auto-closed by this function
+- A discussion issue is auto-closed by this function
+- An issue where someone else commented after the SOUL is closed (only closes when SOUL's comment is most recent)
+
+**Enforcement:** Code (`closeHandledWorkspaceIssues()` in github-workspace-discovery.ts with 24h idle threshold, label exemptions, and most-recent-comment check).
+
+# 35
+
+Three SOULs start a project via Bluesky. @soul1 is `@marvin.bsky.social` on Bluesky and `sh-marvin` on GitHub. As the conversation unfolds, @soul1's Bluesky handle is registered via `registerPeerByBlueskyHandle()`. When @soul1 mentions their GitHub workspace URL, `linkPeerIdentities()` merges the Bluesky and GitHub identities into a single peer record. Later, when @soul2 creates a PR, the system knows to request a review from `sh-marvin` (GitHub) because it linked `@marvin.bsky.social` → `sh-marvin`. Cross-platform identity is transparent and automatic.
+
+**What MUST happen:**
+- `registerPeerByBlueskyHandle()` creates peer records from Bluesky notifications (workspace URL mentions)
+- `linkPeerIdentities()` merges Bluesky handle and GitHub username into one peer record
+- `getPeerGithubUsername()` resolves Bluesky handles to GitHub usernames for PR reviewer assignment
+- `getPeerUsernames()` returns all known peer GitHub usernames for `analyzeConversation()` round-robin checks
+- Peer records persist in `.memory/peer-awareness.json` across restarts
+
+**What MUST NOT happen:**
+- A SOUL is treated as two separate peers (one Bluesky, one GitHub) causing double-counting in round-robin
+- Reviewer assignment fails because GitHub username is unknown (fallback: list repository collaborators)
+- Peer discovery only works one direction — must work from both Bluesky mentions and GitHub activity
+
+**Enforcement:** Code (`peer-awareness.ts` with `registerPeerByBlueskyHandle`, `linkPeerIdentities`, `getPeerGithubUsername`, JSONL persistence in `.memory/peer-awareness.json`).
+
+# 36
+
+When a plan is synthesized from multiple open issues, those issues are rolled up into plan tasks. `closeRolledUpIssues()` posts a comment on each rolled-up issue — "Rolled into plan #52 — closing" — and closes it. The plan issue becomes the single source of truth. The {{OWNER}} sees issues #45-49 closed with clear links to the plan that absorbed them. `discussion`-labeled issues are never rolled up (they are excluded from `getWorkspacesNeedingPlanSynthesis()` and `synthesizePlanForWorkspaces()`).
+
+**What MUST happen:**
+- Each rolled-up issue receives a comment linking to the plan issue number
+- Each rolled-up issue is closed after the comment
+- `discussion`-labeled issues are excluded from plan synthesis and never rolled up
+- Closure failures are non-fatal — logged as warnings, processing continues to next issue
+
+**What MUST NOT happen:**
+- A discussion issue is rolled into a plan and auto-closed
+- Issues are closed without a link to the plan (observer must be able to trace the closure)
+- A closure failure stops the rollup of remaining issues
+
+**Enforcement:** Code (`closeRolledUpIssues()` in github-workspace-discovery.ts, `DISCUSSION_LABEL` exclusion in `getWorkspacesNeedingPlanSynthesis` and `synthesizePlanForWorkspaces`).

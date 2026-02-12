@@ -59,6 +59,12 @@ The task-execution skill explicitly tells Claude Code to never run `git merge`, 
 
 Constraint #10 requires Claude Code to produce at least one git commit with file changes. If a task seems to require only non-code actions (posting comments, updating issues), Claude Code must translate it into a file change (update documentation, a tracking file, or a config). Tasks with zero git changes fail at GATE 1. This prevents the non-code task retry loop described in Scenario 30.
 
+### workspace-decision — Discussion Label Protection (Scenario 25, 33, 34)
+The workspace-decision skill manages plan synthesis decisions. Key constraints:
+- Every task MUST produce file/code changes that go through a Pull Request. Non-code work is absorbed into the plan Context section.
+- SOULs add the `discussion` label to brainstorm/exploration issues via `github_update_issue`. Discussion-labeled issues are protected from: plan synthesis rollup (`getWorkspacesNeedingPlanSynthesis` skips them), stale cleanup (`cleanupStaleWorkspaceIssues` skips them, Scenario 33), handled-issue closure (`closeHandledWorkspaceIssues` skips them, Scenario 34), and rolled-up closure (`closeRolledUpIssues` skips them, Scenario 36).
+- If a discussion evolves into concrete work, a SOUL removes the `discussion` label — next plan synthesis cycle will roll it up.
+
 ## Adding a Skill
 
 1. Create `skills/my-skill/SKILL.md`

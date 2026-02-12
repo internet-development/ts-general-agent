@@ -121,7 +121,7 @@ export async function runTestsIfPresent(workspacePath: string): Promise<TestResu
   //NOTE(self): Check if package.json exists and has a real test script
   const packageJsonPath = path.join(workspacePath, 'package.json');
   if (!fs.existsSync(packageJsonPath)) {
-    logger.debug('No package.json found, skipping tests', { workspacePath });
+    logger.info('No package.json found, skipping tests', { workspacePath });
     return result;
   }
 
@@ -131,13 +131,13 @@ export async function runTestsIfPresent(workspacePath: string): Promise<TestResu
 
     //NOTE(self): Skip npm's default "Error: no test specified" script
     if (!testScript || testScript.includes('no test specified')) {
-      logger.debug('No real test script in package.json', { workspacePath });
+      logger.info('No real test script in package.json, skipping tests', { workspacePath });
       return result;
     }
 
     result.testsExist = true;
   } catch {
-    logger.debug('Failed to parse package.json', { workspacePath });
+    logger.info('Failed to parse package.json, skipping tests', { workspacePath });
     return result;
   }
 

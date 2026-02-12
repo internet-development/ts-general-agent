@@ -580,7 +580,7 @@ export class AgentScheduler {
         return;
       }
 
-      logger.debug('Version check passed', { version: LOCAL_VERSION });
+      logger.info('Version check passed', { version: LOCAL_VERSION });
     } catch (error) {
       //NOTE(self): Network errors are non-fatal — just log and try again next interval
       logger.warn('Version check: network error', { error: String(error) });
@@ -612,7 +612,7 @@ export class AgentScheduler {
       //NOTE(self): Quick notification check - no LLM
       const notifResult = await atproto.getNotifications({ limit: 10 });
       if (!notifResult.success) {
-        logger.debug('Awareness check failed', { error: notifResult.error });
+        logger.info('Awareness check failed', { error: notifResult.error });
         ui.stopSpinner(`Bluesky check failed: ${notifResult.error}`, false);
         return;
       }
@@ -650,7 +650,7 @@ export class AgentScheduler {
         if (seenAt) {
           const notifTime = new Date(n.indexedAt);
           if (notifTime <= seenAt) {
-            logger.debug('Skipping notification older than seenAt', { uri: n.uri, notifTime: n.indexedAt, seenAt: seenAt.toISOString() });
+            logger.info('Skipping notification older than seenAt', { uri: n.uri, notifTime: n.indexedAt, seenAt: seenAt.toISOString() });
             return false;
           }
         }
@@ -698,7 +698,7 @@ export class AgentScheduler {
             if (posterDid !== this.appConfig.owner.blueskyDid &&
                 posterHandle !== this.appConfig.bluesky.username) {
               registerPeerByBlueskyHandle(posterHandle, 'workspace', pn.notification.uri);
-              logger.debug('Registered Bluesky peer from workspace URL', { posterHandle });
+              logger.info('Registered Bluesky peer from workspace URL', { posterHandle });
             }
           }
 
@@ -780,14 +780,14 @@ export class AgentScheduler {
 
       const seenResult = await atproto.updateSeenNotifications();
       if (!seenResult.success) {
-        logger.debug('Failed to mark notifications as seen', { error: seenResult.error });
+        logger.info('Failed to mark notifications as seen', { error: seenResult.error });
       }
 
       //NOTE(self): Reset error counter on success
       this.state.consecutiveErrors = 0;
     } catch (error) {
       this.state.consecutiveErrors++;
-      logger.debug('Awareness check error', { error: String(error) });
+      logger.warn('Awareness check error', { error: String(error) });
       ui.stopSpinner('Awareness check error', false);
     }
   }
@@ -830,7 +830,7 @@ export class AgentScheduler {
       });
 
       if (!notifResult.success) {
-        logger.debug('GitHub awareness check failed', { error: notifResult.error });
+        logger.info('GitHub awareness check failed', { error: notifResult.error });
         ui.stopSpinner(`GitHub check failed: ${notifResult.error}`, false);
         return;
       }
@@ -838,7 +838,7 @@ export class AgentScheduler {
       const notifications = notifResult.data;
       const actionable = filterActionableNotifications(notifications, this.appConfig.github.username);
 
-      logger.debug('GitHub awareness check', {
+      logger.info('GitHub awareness check', {
         fetched: notifications.length,
         actionable: actionable.length,
         since: githubSeenAt?.toISOString() || 'none',
@@ -853,7 +853,7 @@ export class AgentScheduler {
         //NOTE(self): Get issue/PR number from subject URL
         const number = extractNumberFromApiUrl(notif.subject.url);
         if (!number) {
-          logger.debug('Could not extract number from GitHub notification', { url: notif.subject.url });
+          logger.info('Could not extract number from GitHub notification', { url: notif.subject.url });
           continue;
         }
 
@@ -876,7 +876,7 @@ export class AgentScheduler {
             l => l.name.toLowerCase() === 'finished'
           );
           if (isFinishedSentinel) {
-            logger.debug('Skipping finished sentinel issue in notification pipeline', { url });
+            logger.info('Skipping finished sentinel issue in notification pipeline', { url });
             continue;
           }
 
@@ -952,7 +952,7 @@ export class AgentScheduler {
       }
 
     } catch (error) {
-      logger.debug('GitHub awareness check error', { error: String(error) });
+      logger.warn('GitHub awareness check error', { error: String(error) });
       ui.stopSpinner('GitHub check error', false);
     }
   }
@@ -969,7 +969,7 @@ export class AgentScheduler {
     //NOTE(self): Always applied — even without registered peers, other SOULs may be responding
     const peers = getPeerUsernames();
     const jitterMs = getAgentJitter(this.appConfig.agent.name);
-    logger.debug('Applying jitter before GitHub response', {
+    logger.info('Applying jitter before GitHub response', {
       jitterMs, agentName: this.appConfig.agent.name,
     });
     await new Promise(resolve => setTimeout(resolve, jitterMs));
@@ -1179,7 +1179,7 @@ export class AgentScheduler {
     const blueskyPeers = getPeerUsernames();
     if (blueskyPeers.length > 0) {
       const jitterMs = getAgentJitter(this.appConfig.agent.name);
-      logger.debug('Applying peer jitter before Bluesky response', {
+      logger.info('Applying peer jitter before Bluesky response', {
         jitterMs, agentName: this.appConfig.agent.name,
       });
       await new Promise(resolve => setTimeout(resolve, jitterMs));
@@ -1206,7 +1206,7 @@ export class AgentScheduler {
       const worthResponding = this.state.pendingNotifications.filter((pn) => {
         const check = shouldRespondTo(pn.notification, config.owner.blueskyDid);
         if (!check.shouldRespond) {
-          logger.debug('Skipping notification', { reason: check.reason, uri: pn.notification.uri });
+          logger.info('Skipping notification', { reason: check.reason, uri: pn.notification.uri });
 
           //NOTE(self): Auto-like closing/acknowledgment messages — warm acknowledgment without creating a new reply
           if (check.reason === 'closing or acknowledgment message') {
@@ -1271,7 +1271,7 @@ export class AgentScheduler {
         const hasWorkspaceCtx = threadHasWorkspaceContext(rootUri, pn.notification.author.did, pn.notification.author.handle);
         const convCheck = shouldRespondInConversation(rootUri, agentDid, undefined, { hasWorkspaceContext: hasWorkspaceCtx });
         if (!convCheck.shouldRespond) {
-          logger.debug('Skipping notification (conversation state)', { reason: convCheck.reason, uri: pn.notification.uri, isProjectThread: hasWorkspaceCtx });
+          logger.info('Skipping notification (conversation state)', { reason: convCheck.reason, uri: pn.notification.uri, isProjectThread: hasWorkspaceCtx });
           return false;
         }
 
@@ -1662,7 +1662,7 @@ export class AgentScheduler {
               //NOTE(self): Skip if this commitment type was already fulfilled via direct tool call
               if (fulfilledCommitmentTypes.has(c.type)) {
                 skippedAlreadyFulfilled++;
-                logger.debug('Skipping commitment already fulfilled via tool call', { type: c.type, description: c.description });
+                logger.info('Skipping commitment already fulfilled via tool call', { type: c.type, description: c.description });
                 continue;
               }
               enqueueCommitment({
@@ -1801,7 +1801,7 @@ export class AgentScheduler {
         source = pending.source;
       }
 
-      logger.debug('Expression prompt generated', {
+      logger.info('Expression prompt generated', {
         source,
         promptLength: prompt.length,
         promptPreview: prompt.slice(0, 100),
@@ -2060,7 +2060,7 @@ Revise and post again.`;
         //NOTE(self): Gated on 48h burn-in to prove stability before modifying own code
         const uptimeMs = Date.now() - this.startedAt;
         if (uptimeMs < AgentScheduler.IMPROVEMENT_BURN_IN_MS) {
-          logger.debug('Self-improvement gated — burn-in period active', {
+          logger.info('Self-improvement gated — burn-in period active', {
             uptimeHours: Math.round(uptimeMs / (60 * 60 * 1000)),
             requiredHours: 48,
           });
@@ -2217,7 +2217,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           ui.stopSpinner(regenerated ? 'Voice phrases updated' : 'Voice phrases unchanged');
         } catch (voiceError) {
           ui.stopSpinner('Voice phrase generation skipped', false);
-          logger.debug('Voice phrase regeneration failed (non-fatal)', { error: String(voiceError) });
+          logger.info('Voice phrase regeneration failed (non-fatal)', { error: String(voiceError) });
         }
       }
     } catch (error) {
@@ -2506,7 +2506,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
     const session = getSession();
     if (!session) {
-      logger.debug('No session for engagement check');
+      logger.info('No session for engagement check');
       return;
     }
 
@@ -2516,7 +2516,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       //NOTE(self): Fetch my recent posts to get engagement data
       const feedResult = await getAuthorFeed(session.did, { limit: 20 });
       if (!feedResult.success) {
-        logger.debug('Failed to fetch author feed', { error: feedResult.error });
+        logger.info('Failed to fetch author feed', { error: feedResult.error });
         ui.stopSpinner('Engagement check failed', false);
         return;
       }
@@ -2546,7 +2546,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             addInsight(`Well-received post (${engagement.likes} likes) from ${expression.promptSource} - consider more content like this`);
           }
 
-          logger.debug('Updated expression engagement', {
+          logger.info('Updated expression engagement', {
             uri: expression.postUri,
             source: expression.promptSource,
             engagement,
@@ -2558,7 +2558,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
       ui.stopSpinner('Engagement check complete');
     } catch (error) {
-      logger.debug('Engagement check error', { error: String(error) });
+      logger.warn('Engagement check error', { error: String(error) });
       ui.stopSpinner('Engagement check error', false);
     }
   }
@@ -2585,7 +2585,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     logger.info('Early plan awareness check requested');
     setTimeout(async () => {
       if (this.state.currentMode !== 'idle') {
-        logger.debug('Skipping early plan check — not idle');
+        logger.info('Skipping early plan check — not idle');
         return;
       }
       await this.planAwarenessCheck();
@@ -2625,7 +2625,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               if (!tracked) {
                 //NOTE(self): First time seeing this task stuck — start tracking
                 this.stuckTaskTracker.set(taskKey, { firstSeen: now, retryCount: 0 });
-                logger.debug('Tracking potentially stuck task', { taskKey, status: task.status });
+                logger.info('Tracking potentially stuck task', { taskKey, status: task.status });
               } else if (now - tracked.firstSeen > AgentScheduler.STUCK_TIMEOUT_MS) {
                 //NOTE(self): Before resetting, check if there's an open PR for this task
                 //NOTE(self): Tasks stay in_progress until their PR merges — don't nuke valid work
@@ -2640,7 +2640,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
                   (pr: any) => pr.head?.ref?.startsWith(taskBranchPrefix)
                 );
                 if (hasOpenPR) {
-                  logger.debug('Task has open PR, not recovering as stuck', { taskKey });
+                  logger.info('Task has open PR, not recovering as stuck', { taskKey });
                   //NOTE(self): Reset firstSeen so we don't keep checking every cycle
                   this.stuckTaskTracker.set(taskKey, { firstSeen: now, retryCount: tracked.retryCount });
                   continue;
@@ -2820,7 +2820,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             });
 
             if (existingPRs.success && existingPRs.data.length > 0) {
-              logger.debug('Branch already has a PR, skipping recovery', {
+              logger.info('Branch already has a PR, skipping recovery', {
                 branchName,
                 prNumber: existingPRs.data[0].number,
                 prState: existingPRs.data[0].state,
@@ -2975,7 +2975,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       //NOTE(self): Get watched workspaces
       const workspaces = getWatchedWorkspaces();
       if (workspaces.length === 0) {
-        logger.debug('No workspaces being watched for plans');
+        logger.info('No workspaces being watched for plans');
         return;
       }
 
@@ -3080,7 +3080,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       if (discoveredPlans.length === 0) {
-        logger.debug('No claimable tasks found in watched workspaces');
+        logger.info('No claimable tasks found in watched workspaces');
       } else {
         logger.info('Found plans with claimable tasks', {
           planCount: discoveredPlans.length,
@@ -3145,7 +3145,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               issueComments = threadResult.data.comments;
             }
           } catch (err) {
-            logger.debug('Failed to fetch issue comments for retry counting (non-fatal)', { error: String(err) });
+            logger.info('Failed to fetch issue comments for retry counting (non-fatal)', { error: String(err) });
           }
         }
 
@@ -3265,11 +3265,11 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               if (claimAnnounceResults[0] && !claimAnnounceResults[0].is_error) {
                 logger.info('Announced task claim on Bluesky', { taskNumber: task.number, threadUri: discovered.workspace.discoveredInThread });
               } else {
-                logger.debug('Claim announcement failed (non-fatal)', { error: claimAnnounceResults[0]?.content });
+                logger.info('Claim announcement failed (non-fatal)', { error: claimAnnounceResults[0]?.content });
               }
             }
           } catch (announceError) {
-            logger.debug('Claim announcement error (non-fatal)', { error: String(announceError) });
+            logger.info('Claim announcement error (non-fatal)', { error: String(announceError) });
           }
         }
 
@@ -3310,7 +3310,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           //NOTE(self): Only merge PRs we created — the PR creator is responsible for merging
           //NOTE(self): This prevents reviewers from merging before all reviewers have approved
           if (pr.user.login.toLowerCase() !== agentUsername) {
-            logger.debug('Skipping auto-merge — not PR creator', {
+            logger.info('Skipping auto-merge — not PR creator', {
               repo: `${ws.owner}/${ws.repo}`,
               number: pr.number,
               creator: pr.user.login,
@@ -3501,7 +3501,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         if (openIssues.length === 0) {
           //NOTE(self): No issues to synthesize from — update timestamp so we don't check again for 1 hour
           updateWorkspaceSynthesisTimestamp(workspace.owner, workspace.repo);
-          logger.debug('No open issues to synthesize plan from', { workspace: `${workspace.owner}/${workspace.repo}` });
+          logger.info('No open issues to synthesize plan from', { workspace: `${workspace.owner}/${workspace.repo}` });
 
           //NOTE(self): Health check — if no open issues AND no active plans, assess workspace completeness
           //NOTE(self): This catches the gap where a plan completes, all issues close, but work remains
@@ -3722,11 +3722,11 @@ Create a plan using \`plan_create\` that synthesizes all of the above issues int
                 if (announceResults[0] && !announceResults[0].is_error) {
                   logger.info('Announced plan synthesis on Bluesky', { planIssueNumber, threadUri: workspace.discoveredInThread });
                 } else {
-                  logger.debug('Synthesis announcement failed (non-fatal)', { error: announceResults[0]?.content });
+                  logger.info('Synthesis announcement failed (non-fatal)', { error: announceResults[0]?.content });
                 }
               }
             } catch (announceError) {
-              logger.debug('Synthesis announcement error (non-fatal)', { error: String(announceError) });
+              logger.info('Synthesis announcement error (non-fatal)', { error: String(announceError) });
             }
           }
 
@@ -4172,7 +4172,7 @@ Do NOT create an issue for minor polish, documentation-only gaps, or subjective 
       const peers = getPeerUsernames();
       if (peers.length > 0) {
         const jitterMs = getAgentJitter(config.agent.name);
-        logger.debug('Applying peer jitter before workspace PR review', {
+        logger.info('Applying peer jitter before workspace PR review', {
           jitterMs, agentName: config.agent.name,
         });
         await new Promise(resolve => setTimeout(resolve, jitterMs));
@@ -4411,14 +4411,14 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   ): Promise<void> {
     //NOTE(self): Only reply if we have a source thread URI to reply to
     if (!commitment.sourceThreadUri || !commitment.sourceThreadUri.startsWith('at://')) {
-      logger.debug('No valid source thread URI for fulfillment reply', { id: commitment.id });
+      logger.info('No valid source thread URI for fulfillment reply', { id: commitment.id });
       return;
     }
 
     //NOTE(self): Extract the URL from the fulfillment result
     const url = this.extractFulfillmentUrl(commitment.type, result);
     if (!url) {
-      logger.debug('No URL to share from fulfillment result', { id: commitment.id, type: commitment.type });
+      logger.info('No URL to share from fulfillment result', { id: commitment.id, type: commitment.type });
       return;
     }
 

@@ -27,3 +27,4 @@ export * from '@adapters/github/delete-branch.js';
 export * from '@adapters/github/request-pull-request-reviewers.js';
 export * from '@adapters/github/list-repository-collaborators.js';
 export * from '@adapters/github/get-repo-contents.js';
+export * from '@adapters/github/rate-limit.js';

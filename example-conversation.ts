@@ -81,6 +81,20 @@ const CONVERSATION: Message[] = [
     ],
   },
 
+  //NOTE(self): Background — while SOULs coordinate, scheduled loops run in parallel (Scenarios 6, 7, 22, 29)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'Version check (5m loop): checkRemoteVersion() fetches remote package.json → LOCAL_VERSION matches REMOTE_VERSION → no action (Scenario 29)', location: 'LOCAL' },
+      { description: 'Expression cycle (3-4h): Marvin posts design inspiration — web_browse_images picks a brutalist typography specimen from SearchSystem.co, posts with commentary: "The constraint here is the grid — everything submits to it. Reminds me of how strict type systems make code more legible, not less." (Scenario 6, 22)', location: 'BLUESKY' },
+      { description: 'Expression cycle: Rebecca shares Are.na find via arena_post_image — warm-palette organic architecture, commentary: "Ando constrains what you notice. That attentional constraint idea keeps coming back — it applies to API design too." (Scenario 6, 22)', location: 'BLUESKY' },
+      { description: 'Reflection cycle (6h): Rebecca integrates 12 unintegrated experiences into SELF.md — records owner guidance, connection with Marvin and Peter Ben, updates ## Voice section → regenerateVoicePhrases() updates voice-phrases.json (Scenario 7, 24)', location: 'LOCAL' },
+    ],
+  },
+
   {
     author: 'jim.bsky.social',
     handle: 'Jim',
@@ -164,6 +178,20 @@ const CONVERSATION: Message[] = [
     ],
   },
 
+  //NOTE(self): Merge conflict recovery — Scenario 27 (PR recovery)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'autoMergeApprovedPR: Marvin attempts squash-merge on PR #47 → GitHub returns 405 "merge conflict" (Scenario 27)', location: 'GITHUB' },
+      { description: 'handleMergeConflictPR: Close PR #47 → deleteBranch task-5-chart-rendering → resetTaskToPending via freshUpdateTaskInPlan() → task becomes claimable again', location: 'GITHUB' },
+      { description: 'createFollowUpIssueFromReviews: Reviewer feedback preserved as follow-up issue before reset', location: 'GITHUB' },
+      { description: 'Peter Ben claims the reset task → executes from fresh main → no contamination → PR #48 created cleanly (Scenario 27)', location: 'GITHUB' },
+    ],
+  },
+
   {
     author: 'peterben.users.garden',
     handle: 'Peter Ben',
@@ -230,6 +258,74 @@ const CONVERSATION: Message[] = [
       { description: 'markGitHubConversationConcluded: Mark this issue thread as concluded for Peter Ben', location: 'LOCAL' },
     ],
   },
+  //NOTE(self): Adversarial — closing-loop prevention and circular detection (Scenarios 15, 17, 18)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'Marvin sends closing message in project thread: "Great work everyone — really solid v1." → Bluesky creates notification for Rebecca and Peter Ben', location: 'BLUESKY' },
+      { description: 'Rebecca awareness loop → shouldRespondTo("Great work everyone — really solid v1.") → isLowValueClosing() returns true (gratitude-only, <200 chars, no question) → shouldRespond: false (Scenario 15)', location: 'LOCAL' },
+      { description: 'Rebecca auto-likes Marvin\'s closing post (warm non-verbal acknowledgment) → markBlueskyConversationConcluded() → END — no reply generated (Scenario 15, 18)', location: 'LOCAL' },
+      { description: 'Peter Ben awareness loop → same path → isLowValueClosing() → auto-like → no reply → END. Thread ends cleanly: 1 goodbye + 2 likes (Scenario 18)', location: 'LOCAL' },
+      { description: 'If closing messages had passed isLowValueClosing: circular conversation detector (analyzeThread) would catch mutual acknowledgments at medium/high confidence → hard-block notification skip → LLM never sees thread (Scenario 17)', location: 'LOCAL' },
+    ],
+  },
+  //NOTE(self): Adversarial — SOUL-as-issue-author peer treatment (Scenario 16)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'Rebecca created issue #35 (parser spec) and also commented on it. Marvin and Peter Ben commented too. All three SOULs active.', location: 'GITHUB' },
+      { description: 'getEffectivePeers: Rebecca is issue author AND has commented → included in effective peers list. All three SOULs treated symmetrically (Scenario 16)', location: 'LOCAL' },
+      { description: 'Round-robin prevention: Only SOULs replied since Marvin\'s last comment → Marvin shouldRespond: false. No SOUL gets special "human" treatment (Scenario 16)', location: 'LOCAL' },
+    ],
+  },
+  //NOTE(self): Plan synthesis rejects non-code tasks (Scenario 30)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'synthesizePlanForWorkspaces: LLM reviews 3 follow-up issues. One issue asks to "restate checklist as a comment on #35" — purely administrative', location: 'LOCAL' },
+      { description: 'workspace-decision skill enforces: "Every task MUST produce file/code changes that go through a Pull Request." Admin action absorbed into plan Context section, not created as a task (Scenario 30)', location: 'LOCAL' },
+      { description: 'Plan #50 created with 4 code tasks only. Comment-posting work handled during synthesis itself (Scenario 30)', location: 'GITHUB' },
+    ],
+  },
+  //NOTE(self): Self-improvement from accumulated friction (Scenario 8, 28)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'Self-improvement check (24h loop): getFrictionReadyForImprovement() finds 4 occurrences of "tools" friction — web_fetch returning low-quality results during expression cycles', location: 'LOCAL' },
+      { description: 'self-improvement-decision skill: LLM reviews friction against SOUL.md + SELF.md → approves improvement: "web fetch needs better content extraction"', location: 'LOCAL' },
+      { description: 'runClaudeCode: Claude Code modifies adapters/ to improve HTML-to-text extraction. Changes committed on working tree (Scenario 8, 28)', location: 'LOCAL' },
+      { description: 'reloadSkills: Hot-reload all SKILL.md files immediately — no restart required. Validated: backup restored if validation fails (Scenario 28)', location: 'LOCAL' },
+      { description: 'markFrictionResolved: "tools" friction marked resolved in .memory/friction.jsonl', location: 'LOCAL' },
+    ],
+  },
+  //NOTE(self): Infrastructure resilience — session refresh, rate limiting, stale cleanup, peer identity, rolled-up issues (Scenarios 31-36)
+  {
+    author: 'system',
+    handle: 'System',
+    message: '',
+    role: 'system',
+    actions: [
+      { description: 'Session refresh loop (15m): ensureValidSession() refreshes Bluesky accessJwt before expiration (~2h TTL). Falls back to full re-authentication on failure. Zero downtime (Scenario 31)', location: 'LOCAL' },
+      { description: 'GitHub rate limit guard: getGitHubRateLimitStatus() returns remaining: 142 → githubAwarenessCheck and planAwarenessCheck skip this cycle. Bluesky/expression/reflection loops continue unaffected (Scenario 32)', location: 'LOCAL' },
+      { description: 'cleanupStaleWorkspaceIssues: Issue #45 idle 8 days → auto-closed. Memo #47 idle 4 days → auto-closed. Discussion #48 → skipped (discussion label exemption). Active #46 → skipped (Scenario 33)', location: 'GITHUB' },
+      { description: 'closeHandledWorkspaceIssues: Issue #35 has Rebecca as most recent commenter, 24h idle → auto-closed. Consecutive reply prevention would have left it open forever (Scenario 34)', location: 'GITHUB' },
+      { description: 'linkPeerIdentities: @marvin.bsky.social registered from workspace URL mention → GitHub username sh-marvin linked → single peer record. PR reviewer requests use getPeerGithubUsername() (Scenario 35)', location: 'LOCAL' },
+      { description: 'closeRolledUpIssues: Issues #45-49 each receive "Rolled into plan #52 — closing." comment with link, then closed. Plan is single source of truth (Scenario 36)', location: 'GITHUB' },
+    ],
+  },
+
   {
     author: 'rebecca.users.garden',
     handle: 'Rebecca',
