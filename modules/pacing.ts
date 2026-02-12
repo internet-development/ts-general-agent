@@ -5,6 +5,16 @@
 
 import { ui } from '@modules/ui.js';
 import { logger } from '@modules/logger.js';
+import {
+  PACING_POST_COOLDOWN_S,
+  PACING_REPLY_COOLDOWN_S,
+  PACING_LIKE_COOLDOWN_S,
+  PACING_FOLLOW_COOLDOWN_S,
+  PACING_ACTION_COOLDOWN_S,
+  PACING_TICK_INTERVAL_S,
+  PACING_MAX_ACTIONS_PER_TICK,
+  PACING_REFLECTION_PAUSE_S,
+} from '@common/config.js';
 
 
 //NOTE(self): Rate Limits
@@ -30,14 +40,14 @@ export interface RateLimits {
 //NOTE(self): Default limits model real human social media behavior
 //NOTE(self): Thoughtful, present, but not obsessively refreshing
 const DEFAULT_LIMITS: RateLimits = {
-  postCooldown: 1800,      // 30 minutes between original posts - quality over quantity
-  replyCooldown: 60,       // 1 minute between replies - conversations can flow naturally
-  likeCooldown: 45,        // 45 seconds between likes - deliberate appreciation
-  followCooldown: 3600,    // 1 hour between follows - following is meaningful
-  actionCooldown: 10,      // 10 seconds between any action - breathe between actions
-  tickInterval: 120,       // 2 minutes between ticks - like a human checking their phone
-  maxActionsPerTick: 3,    // Max 3 actions per tick - focused engagement
-  reflectionPause: 3,      // 3 second pause for reflection - think before acting
+  postCooldown: PACING_POST_COOLDOWN_S,
+  replyCooldown: PACING_REPLY_COOLDOWN_S,
+  likeCooldown: PACING_LIKE_COOLDOWN_S,
+  followCooldown: PACING_FOLLOW_COOLDOWN_S,
+  actionCooldown: PACING_ACTION_COOLDOWN_S,
+  tickInterval: PACING_TICK_INTERVAL_S,
+  maxActionsPerTick: PACING_MAX_ACTIONS_PER_TICK,
+  reflectionPause: PACING_REFLECTION_PAUSE_S,
 };
 
 
@@ -66,7 +76,7 @@ class PacingManager {
   setUrgentMode(urgent: boolean): void {
     this.urgentMode = urgent;
     if (urgent) {
-      logger.debug('Urgent mode enabled - replies will flow immediately');
+      logger.info('Urgent mode enabled - replies will flow immediately');
     }
   }
 
@@ -210,7 +220,7 @@ class PacingManager {
       this.actionHistory = this.actionHistory.slice(-100);
     }
 
-    logger.debug('Action recorded', { type, actionsThisTick: this.actionsThisTick });
+    logger.info('Action recorded', { type, actionsThisTick: this.actionsThisTick });
   }
 
 

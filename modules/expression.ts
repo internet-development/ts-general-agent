@@ -355,7 +355,7 @@ export function scheduleNextExpression(minMinutes: number = 90, maxMinutes: numb
 
   saveExpressionSchedule(schedule);
 
-  logger.debug('Next expression scheduled', {
+  logger.info('Next expression scheduled', {
     nextExpression: schedule.nextExpression,
     promptSource: source,
   });
@@ -438,38 +438,6 @@ export function getExpressionsNeedingEngagementCheck(): ExpressionRecord[] {
     const postTime = new Date(record.timestamp).getTime();
     return postTime < thirtyMinutesAgo && !record.engagement;
   });
-}
-
-//NOTE(self): Get expression statistics for reflection
-export function getExpressionStats(): {
-  today: number;
-  withEngagement: number;
-  totalReplies: number;
-  topSources: Array<{ source: string; count: number }>;
-} {
-  const sourceCounts: Record<string, number> = {};
-  let withEngagement = 0;
-  let totalReplies = 0;
-
-  for (const record of todaysExpressions) {
-    sourceCounts[record.promptSource] = (sourceCounts[record.promptSource] || 0) + 1;
-
-    if (record.engagement) {
-      withEngagement++;
-      totalReplies += record.engagement.replies;
-    }
-  }
-
-  const topSources = Object.entries(sourceCounts)
-    .map(([source, count]) => ({ source, count }))
-    .sort((a, b) => b.count - a.count);
-
-  return {
-    today: todaysExpressions.length,
-    withEngagement,
-    totalReplies,
-    topSources,
-  };
 }
 
 //NOTE(self): Identity with utility - validation patterns

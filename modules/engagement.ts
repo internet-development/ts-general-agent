@@ -73,7 +73,7 @@ export function updateSeenAt(timestamp: Date): void {
   const state = loadState();
   state.seenAt = timestamp.toISOString();
   saveState(state);
-  logger.debug('Updated seenAt timestamp', { seenAt: state.seenAt });
+  logger.info('Updated seenAt timestamp', { seenAt: state.seenAt });
 }
 
 function getDefaultState(): EngagementState {
@@ -106,7 +106,7 @@ function loadRelationshipsFromDisk(): Record<string, RelationshipRecord> {
   try {
     if (existsSync(RELATIONSHIPS_PATH)) {
       const data = JSON.parse(readFileSync(RELATIONSHIPS_PATH, 'utf-8'));
-      logger.debug('Loaded relationships', { count: Object.keys(data.relationships || {}).length });
+      logger.info('Loaded relationships', { count: Object.keys(data.relationships || {}).length });
       return data.relationships || {};
     }
   } catch (err) {
@@ -226,11 +226,6 @@ export function recordInteraction(
   saveState(state);
 }
 
-function getRelationship(handle: string): RelationshipRecord | null {
-  const state = loadState();
-  return state.relationships[handle] || null;
-}
-
 export function markInteractionResponded(originalUri: string, responseUri: string): void {
   const state = loadState();
 
@@ -255,34 +250,13 @@ function hasRespondedToNotification(uri: string): boolean {
   for (const relationship of Object.values(state.relationships)) {
     for (const interaction of relationship.interactions) {
       if (interaction.uri === uri && interaction.responded) {
-        logger.debug('Notification already responded to (relationship records)', { uri, handle: relationship.handle });
+        logger.info('Notification already responded to (relationship records)', { uri, handle: relationship.handle });
         return true;
       }
     }
   }
   return false;
 }
-
-function getPendingResponses(): Array<{ handle: string; interactions: InteractionRecord[] }> {
-  const state = loadState();
-  const pending: Array<{ handle: string; interactions: InteractionRecord[] }> = [];
-
-  for (const [handle, relationship] of Object.entries(state.relationships)) {
-    const unresponded = relationship.interactions.filter(
-      (i) => !i.responded && ['reply', 'mention', 'quote'].includes(i.type)
-    );
-    if (unresponded.length > 0) {
-      pending.push({ handle, interactions: unresponded });
-    }
-  }
-
-  return pending.sort((a, b) => {
-    const aOldest = a.interactions[0]?.timestamp || '';
-    const bOldest = b.interactions[0]?.timestamp || '';
-    return aOldest.localeCompare(bOldest);
-  });
-}
-
 
 //NOTE(self): Posting Intelligence
 
@@ -342,12 +316,6 @@ export function recordOriginalPost(): void {
   saveState(state);
 }
 
-function boostInspiration(amount: number = 10, source?: string): void {
-  const state = loadState();
-  state.posting.inspirationLevel = Math.min(100, state.posting.inspirationLevel + amount);
-  saveState(state);
-}
-
 
 //NOTE(self): Notification Priority
 
@@ -368,14 +336,14 @@ export function prioritizeNotifications(
   const state = loadState();
   const prioritized: PrioritizedNotification[] = [];
 
-  logger.debug('Prioritizing notifications', {
+  logger.info('Prioritizing notifications', {
     total: notifications.length,
     types: notifications.map(n => ({ reason: n.reason, author: n.author.handle, isRead: n.isRead })),
   });
 
   for (const notification of notifications) {
     if (hasRespondedToNotification(notification.uri)) {
-      logger.debug('Skipping already-responded notification', { uri: notification.uri, author: notification.author.handle });
+      logger.info('Skipping already-responded notification', { uri: notification.uri, author: notification.author.handle });
       continue;
     }
 
@@ -712,76 +680,8 @@ function deduplicateNotifications(
 }
 
 
-//NOTE(self): Expression Prompts
-
-
-interface ExpressionPrompt {
-  theme: string;
-  prompt: string;
-  tone: PostingDecision['suggestedTone'];
-}
-
-function generateExpressionPrompts(
-  selfContent: string,
-  recentObservations: string[]
-): ExpressionPrompt[] {
-  const prompts: ExpressionPrompt[] = [];
-  const values = selfContent.match(/^\d+\.\s+(.+)$/gm) || [];
-  const interests = selfContent.match(/I love (.+?)(?:\.|,|$)/gi) || [];
-
-  if (values.length > 0) {
-    const randomValue = values[Math.floor(Math.random() * values.length)];
-    prompts.push({
-      theme: 'values',
-      prompt: `Reflect on this value: "${randomValue.replace(/^\d+\.\s+/, '')}"`,
-      tone: 'reflective',
-    });
-  }
-
-  if (interests.length > 0) {
-    const randomInterest = interests[Math.floor(Math.random() * interests.length)];
-    prompts.push({
-      theme: 'passion',
-      prompt: `Share your enthusiasm: ${randomInterest}`,
-      tone: 'celebratory',
-    });
-  }
-
-  if (recentObservations.length > 0) {
-    const randomObs = recentObservations[Math.floor(Math.random() * recentObservations.length)];
-    prompts.push({
-      theme: 'observation',
-      prompt: `Something caught your attention: "${randomObs}"`,
-      tone: 'curious',
-    });
-  }
-
-  prompts.push({
-    theme: 'growth',
-    prompt: 'What have you learned recently that changed your perspective?',
-    tone: 'reflective',
-  });
-
-  prompts.push({
-    theme: 'gratitude',
-    prompt: 'What are you grateful for today?',
-    tone: 'supportive',
-  });
-
-  return prompts;
-}
-
-
 //NOTE(self): Reflection & Self-Awareness
 
-
-const REFLECTION_THRESHOLD = 5;
-const MAJOR_REFLECTION_THRESHOLD = 4;
-
-function shouldReflect(): boolean {
-  const state = loadState();
-  return state.reflection.significantEvents >= REFLECTION_THRESHOLD;
-}
 
 export function getSignificantEventCount(): number {
   const state = loadState();
@@ -811,12 +711,6 @@ export function recordReflectionComplete(insightsIntegrated: boolean = true): vo
   saveState(state);
 }
 
-function recordSelfUpdate(): void {
-  const state = loadState();
-  state.reflection.lastSelfUpdate = new Date().toISOString();
-  saveState(state);
-}
-
 export function addInsight(insight: string): void {
   const state = loadState();
 
@@ -840,44 +734,6 @@ export function getInsights(): string[] {
 export function getReflectionState(): ReflectionState {
   const state = loadState();
   return state.reflection;
-}
-
-function shouldMajorReflect(): boolean {
-  const state = loadState();
-  return state.reflection.reflectionCount % MAJOR_REFLECTION_THRESHOLD === 0;
-}
-
-//NOTE(self): Engagement Stats
-
-
-interface EngagementStats {
-  totalRelationships: number;
-  positiveRelationships: number;
-  pendingResponses: number;
-  postsToday: number;
-  dailyPostLimit: number;
-  inspirationLevel: number;
-  canPostNow: boolean;
-}
-
-function getEngagementStats(): EngagementStats {
-  const state = loadState();
-  const pending = getPendingResponses();
-  const postingDecision = canPostOriginal();
-
-  const positiveCount = Object.values(state.relationships).filter(
-    (r) => r.sentiment === 'positive'
-  ).length;
-
-  return {
-    totalRelationships: Object.keys(state.relationships).length,
-    positiveRelationships: positiveCount,
-    pendingResponses: pending.reduce((sum, p) => sum + p.interactions.length, 0),
-    postsToday: state.posting.postsToday,
-    dailyPostLimit: state.posting.dailyPostLimit,
-    inspirationLevel: state.posting.inspirationLevel,
-    canPostNow: postingDecision.shouldPost,
-  };
 }
 
 //NOTE(self): Relationship Summary for Reflection

@@ -1,4 +1,5 @@
 import { logger } from '@modules/logger.js';
+import { GITHUB_MIN_SPACING_MS, GITHUB_LOW_BUDGET_THRESHOLD } from '@common/config.js';
 
 // Module-level singleton state
 let rateLimitRemaining = 5000;
@@ -6,8 +7,8 @@ let rateLimitReset = 0;       // Unix epoch seconds
 let rateLimitLimit = 5000;
 let lastRequestTime = 0;
 
-const MIN_SPACING_MS = 5000;
-const LOW_BUDGET_THRESHOLD = 100;
+const MIN_SPACING_MS = GITHUB_MIN_SPACING_MS;
+const LOW_BUDGET_THRESHOLD = GITHUB_LOW_BUDGET_THRESHOLD;
 
 function readRateLimitHeaders(response: Response): void {
   const remaining = response.headers.get('x-ratelimit-remaining');

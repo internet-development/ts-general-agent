@@ -6,7 +6,6 @@ import { updateIssue } from '@adapters/github/update-issue.js';
 import { getRepoContents } from '@adapters/github/get-repo-contents.js';
 import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
-import type { TaskStatus, ParsedTask } from '@local-tools/self-plan-parse.js';
 
 export interface TaskDefinition {
   title: string;
@@ -177,7 +176,7 @@ export async function createPlan(params: CreatePlanParams): Promise<CreatePlanRe
         }
       }
     } catch (err) {
-      logger.debug('Failed to check repo contents for doc files (will inject as fallback)', { repo, error: String(err) });
+      logger.warn('Failed to check repo contents for doc files (will inject as fallback)', { repo, error: String(err) });
     }
   }
 
@@ -215,28 +214,6 @@ export async function createPlan(params: CreatePlanParams): Promise<CreatePlanRe
     issueNumber: result.data.number,
     issueUrl: result.data.html_url,
   };
-}
-
-//NOTE(self): Update plan issue body with new content
-export async function updatePlanBody(
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  newBody: string
-): Promise<{ success: boolean; error?: string }> {
-  const result = await updateIssue({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body: newBody,
-  });
-
-  if (!result.success) {
-    logger.error('Failed to update plan body', { error: result.error });
-    return { success: false, error: result.error };
-  }
-
-  return { success: true };
 }
 
 //NOTE(self): Update plan labels to reflect status

@@ -167,7 +167,7 @@ export async function regenerateVoicePhrases(): Promise<boolean> {
   const extract = extractFromSelf(selfContent);
 
   if (!extract.voice) {
-    logger.debug('No ## Voice section found in SELF.md, skipping regeneration');
+    logger.info('No ## Voice section found in SELF.md, skipping regeneration');
     return false;
   }
 

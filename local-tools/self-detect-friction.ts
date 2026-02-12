@@ -77,7 +77,7 @@ function loadState(): FrictionState {
         improvements: data.improvements || [],
         lastImprovementAttempt: data.lastImprovementAttempt || null,
       };
-      logger.debug('Loaded friction state', {
+      logger.info('Loaded friction state', {
         frictionCount: frictionState.frictions.length,
         improvementCount: frictionState.improvements.length,
       });
@@ -140,7 +140,7 @@ export function recordFriction(
       existing.instances = existing.instances.slice(-10);
     }
 
-    logger.debug('Friction recorded (existing)', {
+    logger.info('Friction recorded (existing)', {
       id: existing.id,
       occurrences: existing.occurrences,
     });
@@ -162,7 +162,7 @@ export function recordFriction(
   };
 
   state.frictions.push(newFriction);
-  logger.debug('Friction recorded (new)', { id: newFriction.id, category });
+  logger.info('Friction recorded (new)', { id: newFriction.id, category });
   saveState();
   return newFriction;
 }
@@ -337,13 +337,6 @@ export function buildImprovementPrompt(friction: FrictionRecord): string {
   });
 }
 
-//NOTE(self): Get all unresolved friction for display
-//NOTE(self): @returns Array of unresolved friction records
-export function getUnresolvedFriction(): FrictionRecord[] {
-  const state = loadState();
-  return state.frictions.filter((f) => !f.resolved);
-}
-
 //NOTE(self): Clean up old resolved friction
 //NOTE(self): @param olderThanDays - Days after which to prune resolved friction (default: 30)
 //NOTE(self): @returns Number of records cleaned up
@@ -365,8 +358,3 @@ export function cleanupResolvedFriction(olderThanDays: number = 30): number {
   return removed;
 }
 
-//NOTE(self): Load friction state (persisted)
-//NOTE(self): @returns The current friction state
-export function loadFrictionState(): FrictionState {
-  return loadState();
-}

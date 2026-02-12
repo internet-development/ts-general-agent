@@ -101,7 +101,7 @@ export function recordExperience(
   );
 
   if (recentSimilar) {
-    logger.debug('Skipping duplicate experience', { type, description: description.slice(0, 50) });
+    logger.info('Skipping duplicate experience', { type, description: description.slice(0, 50) });
     return;
   }
 
@@ -251,7 +251,7 @@ export function markExperiencesIntegrated(experienceIds?: string[]): void {
   }
 
   saveState();
-  logger.debug('Marked experiences as integrated', {
+  logger.info('Marked experiences as integrated', {
     count: experienceIds?.length || s.experiences.filter(e => e.integrated).length
   });
 }
@@ -277,13 +277,6 @@ export function pruneOldExperiences(daysOld: number = 30): number {
   }
 
   return pruned;
-}
-
-//NOTE(self): Get count of unintegrated experiences
-//NOTE(self): @returns Number of unintegrated experiences
-export function getUnintegratedCount(): number {
-  const s = loadState();
-  return s.experiences.filter(e => !e.integrated).length;
 }
 
 //NOTE(self): Get temporal span of all experiences for reflection context (Scenario 7)

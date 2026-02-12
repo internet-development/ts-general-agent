@@ -120,28 +120,4 @@ export function safeWriteFile(filePath: string, content: string): boolean {
   }
 }
 
-export function safeAppendFile(filePath: string, content: string): boolean {
-  if (!isWritablePath(filePath)) {
-    logger.error('Append rejected - path not writable', { path: filePath });
-    return false;
-  }
-
-  const safe = safePath(filePath);
-  if (!safe) {
-    return false;
-  }
-
-  try {
-    const dir = path.dirname(safe);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.appendFileSync(safe, content, 'utf-8');
-    logger.info('File appended', { path: safe });
-    return true;
-  } catch (error) {
-    logger.error('Failed to append file', { path: safe, error: String(error) });
-    return false;
-  }
-}
 

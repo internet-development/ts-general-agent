@@ -174,7 +174,7 @@ function configureGitIdentity(workspacePath: string): void {
     const settingsPath = path.join(claudeDir, 'settings.json');
     const settings = { attribution: { commit: '', pr: '' } };
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    logger.debug('Wrote .claude/settings.json to suppress co-author attribution', { workspacePath });
+    logger.info('Wrote .claude/settings.json to suppress co-author attribution', { workspacePath });
   } catch (err) {
     logger.warn('Failed to write .claude/settings.json (non-fatal)', { error: String(err) });
   }

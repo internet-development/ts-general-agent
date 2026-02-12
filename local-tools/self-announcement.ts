@@ -47,7 +47,7 @@ export async function announceIfWorthy(
 
     const decision = (decisionResult.text || '').trim().toLowerCase();
     if (!decision.startsWith('yes')) {
-      logger.debug('Announcement declined by SOUL', { announcementType, title: context.title });
+      logger.info('Announcement declined by SOUL', { announcementType, title: context.title });
       return;
     }
 

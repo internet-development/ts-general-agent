@@ -66,18 +66,3 @@ export async function removeIssueAssignee(
     return { success: false, error: String(error) };
   }
 }
-
-//NOTE(self): Convenience function to release a task claim
-export async function releaseTask(
-  owner: string,
-  repo: string,
-  issue_number: number,
-  assignee: string
-): Promise<GitHubResult<GitHubIssue>> {
-  return removeIssueAssignee({
-    owner,
-    repo,
-    issue_number,
-    assignees: [assignee],
-  });
-}

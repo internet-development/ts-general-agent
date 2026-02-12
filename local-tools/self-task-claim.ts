@@ -2,16 +2,12 @@
 //NOTE(self): Uses first-writer-wins: if someone else claimed first, we gracefully fail
 
 import { claimTask } from '@adapters/github/add-issue-assignee.js';
-import { releaseTask } from '@adapters/github/remove-issue-assignee.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
 import {
-  parsePlan,
-  getClaimableTasks,
   freshUpdateTaskInPlan,
   type ParsedPlan,
-  type ParsedTask,
 } from '@local-tools/self-plan-parse.js';
 import { getGitHubPhrase } from '@modules/voice-phrases.js';
 
@@ -104,44 +100,6 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
 
   logger.info('Successfully claimed task', { taskNumber, myUsername });
   return { success: true, claimed: true };
-}
-
-//NOTE(self): Release a task claim (if we can't complete it)
-export async function releaseTaskClaim(params: ClaimTaskParams): Promise<{ success: boolean; error?: string }> {
-  const { owner, repo, issueNumber, taskNumber, plan } = params;
-  const config = getConfig();
-  const myUsername = config.github.username;
-
-  logger.info('Releasing task claim', { owner, repo, issueNumber, taskNumber });
-
-  //NOTE(self): Remove ourselves as assignee
-  const releaseResult = await releaseTask(owner, repo, issueNumber, myUsername);
-  if (!releaseResult.success) {
-    return { success: false, error: releaseResult.error };
-  }
-
-  //NOTE(self): Update the plan body (fresh read to avoid clobbering)
-  const planUpdateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
-    status: 'pending',
-    assignee: null,
-  });
-  if (!planUpdateResult.success) {
-    logger.warn('Failed to update plan body on task release', { owner, repo, issueNumber, taskNumber, error: planUpdateResult.error });
-  }
-
-  //NOTE(self): Post a comment
-  const releaseCommentResult = await createIssueComment({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body: getGitHubPhrase('task_release', { number: String(taskNumber) }),
-  });
-
-  if (!releaseCommentResult.success) {
-    logger.warn('Failed to post release comment', { error: releaseCommentResult.error });
-  }
-
-  return { success: true };
 }
 
 //NOTE(self): Mark a task as in_progress (after claiming)

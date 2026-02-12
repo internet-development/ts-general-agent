@@ -8,12 +8,13 @@ import { getConfig } from '@modules/config.js';
 import { logger } from '@modules/logger.js';
 import { ui } from '@modules/ui.js';
 import { AGENT_TOOLS, type ToolDefinition, type ToolCall, type ToolResult } from '@modules/tools.js';
+import { LLM_MAX_RETRIES, LLM_BASE_BACKOFF_MS, LLM_MAX_BACKOFF_MS, LLM_MAX_TOOL_RESULT_CHARS } from '@common/config.js';
 
 //NOTE(self): Retry configuration for transient errors (rate limits, network issues)
 //NOTE(self): Reliability builds trust - follow through on every conversation
-const MAX_RETRIES = 3;
-const BASE_BACKOFF_MS = 5000; // 5 seconds initial backoff
-const MAX_BACKOFF_MS = 60000; // 1 minute max backoff
+const MAX_RETRIES = LLM_MAX_RETRIES;
+const BASE_BACKOFF_MS = LLM_BASE_BACKOFF_MS;
+const MAX_BACKOFF_MS = LLM_MAX_BACKOFF_MS;
 
 //NOTE(self): Fatal error class for errors that should stop the agent
 export class FatalAPIError extends Error {
@@ -347,7 +348,7 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
 }
 
 //NOTE(self): Maximum characters for a single tool result to prevent context overflow
-const MAX_TOOL_RESULT_CHARS = 30000;
+const MAX_TOOL_RESULT_CHARS = LLM_MAX_TOOL_RESULT_CHARS;
 
 function truncateToolResult(content: string): string {
   if (content.length > MAX_TOOL_RESULT_CHARS) {
@@ -355,63 +356,6 @@ function truncateToolResult(content: string): string {
     return `${truncated}\n\n[TRUNCATED: Result was ${content.length} chars, showing first ${MAX_TOOL_RESULT_CHARS}]`;
   }
   return content;
-}
-
-//NOTE(self): Compact messages to remove consumed base64 data and reduce context size
-export function compactMessages(messages: Message[]): Message[] {
-  let lastToolResultIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role === 'user' && Array.isArray(m.content) &&
-        m.content.some((c: ContentBlock) => c.type === 'tool_result')) {
-      lastToolResultIndex = i;
-      break;
-    }
-  }
-
-  return messages.map((msg, index) => {
-    if (index >= lastToolResultIndex) {
-      return msg;
-    }
-
-    if (msg.role !== 'user' || !Array.isArray(msg.content)) {
-      return msg;
-    }
-
-    const compactedContent = msg.content.map((block) => {
-      const contentBlock = block as ContentBlock;
-      if (contentBlock.type !== 'tool_result' || !contentBlock.content) {
-        return block;
-      }
-
-      if (contentBlock.content.includes('"base64"')) {
-        try {
-          const parsed = JSON.parse(contentBlock.content);
-          if (parsed.base64 && typeof parsed.base64 === 'string' && parsed.base64.length > 1000) {
-            const estimatedBytes = Math.ceil(parsed.base64.length * 0.75);
-            parsed.base64 = `[CONSUMED: ${Math.round(estimatedBytes / 1024)}KB image data was used]`;
-            return {
-              ...contentBlock,
-              content: JSON.stringify(parsed),
-            };
-          }
-        } catch {
-          //NOTE(self): Not valid JSON, leave as is
-        }
-      }
-
-      if (contentBlock.content.length > MAX_TOOL_RESULT_CHARS) {
-        return {
-          ...contentBlock,
-          content: contentBlock.content.slice(0, 5000) + '\n\n[COMPACTED: Older result truncated to save context]',
-        };
-      }
-
-      return block;
-    });
-
-    return { ...msg, content: compactedContent };
-  });
 }
 
 export function createToolResultMessage(results: ToolResult[]): Message {

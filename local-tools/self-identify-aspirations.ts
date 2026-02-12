@@ -132,7 +132,7 @@ export function extractAspirations(): Aspiration[] {
   const selfContent = readSelf(config.paths.selfmd);
 
   if (!selfContent) {
-    logger.debug('No SELF.md content to extract aspirations from');
+    logger.info('No SELF.md content to extract aspirations from');
     return [];
   }
 
@@ -231,7 +231,7 @@ export function extractAspirations(): Aspiration[] {
     });
   }
 
-  logger.debug('Extracted aspirations from SELF.md', {
+  logger.info('Extracted aspirations from SELF.md', {
     total: aspirations.length,
     actionable: aspirations.filter((a) => a.actionable).length,
   });

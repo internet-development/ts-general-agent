@@ -97,7 +97,7 @@ export function logPost(entry: PostLogEntry): boolean {
     ensureLogDir();
     const line = JSON.stringify(entry) + '\n';
     fs.appendFileSync(POST_LOG_PATH, line, 'utf8');
-    logger.debug('Logged post to post_log.jsonl', {
+    logger.info('Logged post to post_log.jsonl', {
       bsky_url: entry.bluesky.bsky_url,
       source_type: entry.source.type,
     });
@@ -166,35 +166,6 @@ export function lookupPostByBskyUrl(bsky_url: string): PostLogEntry | null {
   } catch (err) {
     logger.warn('Failed to read post log', { error: String(err) });
     return null;
-  }
-}
-
-//NOTE(self): Get recent posts (newest first)
-//NOTE(self): Useful for generating context about recent activity
-export function getRecentPosts(limit: number = 10): PostLogEntry[] {
-  try {
-    if (!fs.existsSync(POST_LOG_PATH)) {
-      return [];
-    }
-
-    const content = fs.readFileSync(POST_LOG_PATH, 'utf8');
-    const lines = content.trim().split('\n').filter(line => line.length > 0);
-
-    const posts: PostLogEntry[] = [];
-    //NOTE(self): Read from end (newest) to beginning
-    for (let i = lines.length - 1; i >= 0 && posts.length < limit; i--) {
-      try {
-        const entry = JSON.parse(lines[i]) as PostLogEntry;
-        posts.push(entry);
-      } catch {
-        continue;
-      }
-    }
-
-    return posts;
-  } catch (err) {
-    logger.warn('Failed to read recent posts', { error: String(err) });
-    return [];
   }
 }
 
@@ -304,33 +275,6 @@ export function hasCompleteAttribution(entry: PostLogEntry): boolean {
   return !!entry.source.original_url;
 }
 
-//NOTE(self): Get the total number of logged posts
-//NOTE(self): Useful for stats and understanding posting history
-export function getPostCount(): number {
-  try {
-    if (!fs.existsSync(POST_LOG_PATH)) {
-      return 0;
-    }
-
-    const content = fs.readFileSync(POST_LOG_PATH, 'utf8');
-    const lines = content.trim().split('\n').filter(line => line.length > 0);
-
-    let count = 0;
-    for (const line of lines) {
-      try {
-        JSON.parse(line);
-        count++;
-      } catch {
-        //NOTE(self): Skip malformed lines
-      }
-    }
-
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
 //NOTE(self): Credit + traceability - find posts where I still need to track down original creators
 //NOTE(self): Returns posts flagged as needing attribution follow-up, oldest first
 export function getPostsNeedingAttributionFollowup(limit: number = 20): PostLogEntry[] {
@@ -403,7 +347,7 @@ export function markPostNeedsAttributionFollowup(
 
     if (found) {
       fs.writeFileSync(POST_LOG_PATH, updatedLines.join('\n') + '\n', 'utf8');
-      logger.debug('Updated attribution followup flag', { post_uri, needs_followup });
+      logger.info('Updated attribution followup flag', { post_uri, needs_followup });
     }
 
     return found;
@@ -453,7 +397,7 @@ export function updatePostAttribution(
 
     if (found) {
       fs.writeFileSync(POST_LOG_PATH, updatedLines.join('\n') + '\n', 'utf8');
-      logger.debug('Updated post attribution', { post_uri, original_url });
+      logger.info('Updated post attribution', { post_uri, original_url });
     }
 
     return found;

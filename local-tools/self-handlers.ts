@@ -355,7 +355,7 @@ export async function handleGracefulExit(call: ToolCall, config: any): Promise<T
     if (closing_type === 'like') {
       const reactionResult = await github.createIssueReaction(owner, repo, number, 'heart');
       if (!reactionResult.success) {
-        logger.debug('Failed to add closing reaction', { error: reactionResult.error });
+        logger.warn('Failed to add closing reaction', { error: reactionResult.error });
       }
     }
 
@@ -371,7 +371,7 @@ export async function handleGracefulExit(call: ToolCall, config: any): Promise<T
       if (closeResult.success) {
         logger.info('Auto-closed workspace issue after graceful_exit', { owner, repo, number });
       } else {
-        logger.debug('Failed to auto-close workspace issue', { error: closeResult.error });
+        logger.warn('Failed to auto-close workspace issue', { error: closeResult.error });
       }
     }
 
@@ -451,7 +451,7 @@ export async function handleConcludeConversation(call: ToolCall): Promise<ToolRe
       if (closeResult.success) {
         logger.info('Auto-closed workspace issue after conclude_conversation', { owner, repo, number });
       } else {
-        logger.debug('Failed to auto-close workspace issue', { error: closeResult.error });
+        logger.warn('Failed to auto-close workspace issue', { error: closeResult.error });
       }
     }
 

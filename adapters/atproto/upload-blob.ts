@@ -56,7 +56,7 @@ export async function uploadBlob(
     }
 
     const result = await response.json();
-    logger.debug('Blob upload response', { blob: result.blob });
+    logger.info('Blob upload response', { blob: result.blob });
     return { success: true, data: { blob: result.blob } };
   } catch (error) {
     logger.error('Blob upload exception', { error: String(error) });

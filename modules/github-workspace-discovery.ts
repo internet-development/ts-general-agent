@@ -23,6 +23,15 @@ import { getIssueThread } from '@adapters/github/get-issue-thread.js';
 import { getConfig } from '@modules/config.js';
 import { getConversation } from '@modules/github-engagement.js';
 import { getGitHubPhrase } from '@modules/voice-phrases.js';
+import {
+  STALE_ISSUE_DAYS as _STALE_ISSUE_DAYS,
+  STALE_MEMO_DAYS as _STALE_MEMO_DAYS,
+  HANDLED_ISSUE_HOURS as _HANDLED_ISSUE_HOURS,
+  REJECTED_PR_TIMEOUT_MS as _REJECTED_PR_TIMEOUT_MS,
+  UNREVIEWED_PR_TIMEOUT_MS as _UNREVIEWED_PR_TIMEOUT_MS,
+  PLAN_SYNTHESIS_COOLDOWN_MS as _PLAN_SYNTHESIS_COOLDOWN_MS,
+  HEALTH_CHECK_COOLDOWN_MS as _HEALTH_CHECK_COOLDOWN_MS,
+} from '@common/config.js';
 
 //NOTE(self): Path to watched workspaces state
 const WATCHED_WORKSPACES_PATH = '.memory/watched_workspaces.json';
@@ -103,7 +112,7 @@ function loadState(): WorkspaceDiscoveryState {
         workspaces: data.workspaces || {},
         lastFullPoll: data.lastFullPoll || null,
       };
-      logger.debug('Loaded workspace discovery state', {
+      logger.info('Loaded workspace discovery state', {
         workspaceCount: Object.keys(discoveryState.workspaces).length,
       });
     } else {
@@ -156,7 +165,7 @@ export function watchWorkspace(
       saveState();
       logger.info('Updated workspace with thread URI', { key, threadUri });
     } else {
-      logger.debug('Workspace already being watched', { key });
+      logger.info('Workspace already being watched', { key });
     }
     return;
   }
@@ -270,7 +279,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
   const summary = { plansFound: 0, totalTasks: 0, completed: 0, inProgress: 0, claimed: 0, blocked: 0, pending: 0, claimable: 0, pendingBlockedByDeps: 0, pendingHasAssignee: 0 };
 
   if (workspaces.length === 0) {
-    logger.debug('No workspaces to poll');
+    logger.info('No workspaces to poll for plans');
     return { claimablePlans, allPlansByWorkspace, summary };
   }
 
@@ -280,7 +289,7 @@ export async function pollWorkspacesForPlans(): Promise<PlanPollResult> {
     try {
       //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
       if (workspace.finishedIssueNumber) {
-        logger.debug('Skipping finished workspace', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
+        logger.info('Skipping finished workspace', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
         continue;
       }
 
@@ -409,13 +418,13 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
   const config = getConfig();
   const agentUsername = config.github.username.toLowerCase();
 
-  logger.debug('Polling workspaces for open issues', { workspaceCount: workspaces.length });
+  logger.info('Polling workspaces for open issues', { workspaceCount: workspaces.length });
 
   for (const workspace of workspaces) {
     try {
       //NOTE(self): Skip finished workspaces — sentinel issue blocks all new work
       if (workspace.finishedIssueNumber) {
-        logger.debug('Skipping finished workspace for open issues', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
+        logger.info('Skipping finished workspace for open issues', { workspace: getWorkspaceKey(workspace.owner, workspace.repo), finishedIssue: workspace.finishedIssueNumber });
         continue;
       }
 
@@ -496,14 +505,14 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
   const results: ReviewablePR[] = [];
 
   if (workspaces.length === 0) {
-    logger.debug('No workspaces to poll for reviewable PRs');
+    logger.info('No workspaces to poll for reviewable PRs');
     return [];
   }
 
   const config = getConfig();
   const agentUsername = config.github.username.toLowerCase();
 
-  logger.debug('Polling workspaces for reviewable PRs', { workspaceCount: workspaces.length });
+  logger.info('Polling workspaces for reviewable PRs', { workspaceCount: workspaces.length });
 
   for (const workspace of workspaces) {
     try {
@@ -572,8 +581,8 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
 }
 
 //NOTE(self): Stale thresholds — memos are coordination artifacts and should be cleaned up faster
-const STALE_ISSUE_DAYS = 7;
-const STALE_MEMO_DAYS = 3;
+const STALE_ISSUE_DAYS = _STALE_ISSUE_DAYS;
+const STALE_MEMO_DAYS = _STALE_MEMO_DAYS;
 
 //NOTE(self): Find and close stale open issues in watched workspaces
 //NOTE(self): Stale = open, no activity for threshold days, not a plan issue, not a PR
@@ -615,6 +624,10 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
         //NOTE(self): Skip discussion issues — they stay open until a human closes them
         const hasDiscussionLabel = issue.labels.some(l => l.name.toLowerCase() === DISCUSSION_LABEL);
         if (hasDiscussionLabel) continue;
+
+        //NOTE(self): Skip finished sentinel issues — managed by sentinel lifecycle (Scenario 23)
+        const hasFinishedLabel = issue.labels.some(l => l.name.toLowerCase() === 'finished');
+        if (hasFinishedLabel) continue;
 
         //NOTE(self): Memos use a shorter stale threshold (3 days vs 7 days)
         //NOTE(self): They're coordination artifacts — once read and discussed, they should be closed
@@ -666,7 +679,7 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
 //NOTE(self):   2. Last activity was > 24 hours ago (gave others time to respond)
 //NOTE(self):   3. Not a plan issue (plans have their own lifecycle)
 //NOTE(self):   4. Not a PR
-const HANDLED_ISSUE_HOURS = 24;
+const HANDLED_ISSUE_HOURS = _HANDLED_ISSUE_HOURS;
 
 export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; found: number }> {
   const state = loadState();
@@ -702,6 +715,10 @@ export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; f
         //NOTE(self): Skip discussion issues — they stay open until a human closes them
         const hasDiscussionLabel = issue.labels.some(l => l.name.toLowerCase() === DISCUSSION_LABEL);
         if (hasDiscussionLabel) continue;
+
+        //NOTE(self): Skip finished sentinel issues — managed by sentinel lifecycle (Scenario 23)
+        const hasFinishedLabel = issue.labels.some(l => l.name.toLowerCase() === 'finished');
+        if (hasFinishedLabel) continue;
 
         //NOTE(self): Check if enough time has passed since last activity
         const lastActivity = new Date(issue.updated_at).getTime();
@@ -754,8 +771,8 @@ export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; f
 
 //NOTE(self): Find approved PRs in watched workspaces that can be auto-merged
 //NOTE(self): Also detects PRs stuck with only rejections or no reviews at all
-const REJECTED_PR_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
-const UNREVIEWED_PR_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
+const REJECTED_PR_TIMEOUT_MS = _REJECTED_PR_TIMEOUT_MS;
+const UNREVIEWED_PR_TIMEOUT_MS = _UNREVIEWED_PR_TIMEOUT_MS;
 
 export interface PollPRsResult {
   approved: { workspace: WatchedWorkspace; pr: GitHubPullRequest; approvals: number }[];
@@ -885,7 +902,7 @@ export async function autoMergeApprovedPR(
     if (deleteResult.success) {
       logger.info('Deleted feature branch after auto-merge', { branch: headRef, number: pr.number });
     } else {
-      logger.debug('Branch deletion failed after auto-merge (non-fatal)', { branch: headRef, error: deleteResult.error });
+      logger.warn('Branch deletion failed after auto-merge (non-fatal)', { branch: headRef, error: deleteResult.error });
     }
   }
 
@@ -1111,7 +1128,7 @@ export async function handleMergeConflictPR(
 
 //NOTE(self): Plan Synthesis — detect workspaces that need a new plan synthesized from open issues
 //NOTE(self): Cooldown: 1 hour between synthesis attempts per workspace
-const PLAN_SYNTHESIS_COOLDOWN_MS = 60 * 60 * 1000;
+const PLAN_SYNTHESIS_COOLDOWN_MS = _PLAN_SYNTHESIS_COOLDOWN_MS;
 
 //NOTE(self): Update the synthesis timestamp for a workspace (called after synthesis attempt)
 export function updateWorkspaceSynthesisTimestamp(owner: string, repo: string): void {
@@ -1151,7 +1168,7 @@ export function getWorkspacesNeedingPlanSynthesis(): WatchedWorkspace[] {
 
 //NOTE(self): Health Check Cooldown — 24 hours between checks per workspace
 //NOTE(self): Much longer than plan synthesis (1h) because health checks are expensive (LLM call + file reads)
-const HEALTH_CHECK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const HEALTH_CHECK_COOLDOWN_MS = _HEALTH_CHECK_COOLDOWN_MS;
 
 //NOTE(self): Update the health check timestamp for a workspace (called after health check attempt)
 export function updateWorkspaceHealthCheckTimestamp(owner: string, repo: string): void {
@@ -1370,7 +1387,7 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
     //NOTE(self): Check if any comments contain work requests (vs just agreement)
     const hasWorkComments = nonCreatorComments.some(c => !isAgreementComment(c.body));
     if (!hasWorkComments) {
-      logger.debug('Sentinel has only agreement comments — staying finished', { owner, repo, issueNumber });
+      logger.info('Sentinel has only agreement comments — staying finished', { owner, repo, issueNumber });
       return true;
     }
 

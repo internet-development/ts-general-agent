@@ -134,11 +134,6 @@ export function loadAllSkills(): void {
   logger.info('Skills loaded', { count: skillRegistry.size, ids: [...skillRegistry.keys()] });
 }
 
-//NOTE(self): Get a full skill by ID
-export function getSkill(id: string): Skill | undefined {
-  return skillRegistry.get(id);
-}
-
 //NOTE(self): Get a specific ## section from a skill
 export function getSkillSection(id: string, sectionName: string): string | undefined {
   const skill = skillRegistry.get(id);

@@ -7,11 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { logger } from '@modules/logger.js';
+import { COMMITMENT_MAX_ATTEMPTS, COMMITMENT_STALE_THRESHOLD_MS } from '@common/config.js';
 
 const QUEUE_FILE = '.memory/pending_commitments.jsonl';
 const QUEUE_LOG_FILE = '.memory/logs/commitment-queue.log';
-const MAX_ATTEMPTS = 3;
-const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_ATTEMPTS = COMMITMENT_MAX_ATTEMPTS;
+const STALE_THRESHOLD_MS = COMMITMENT_STALE_THRESHOLD_MS;
 
 export type CommitmentStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'abandoned';
 export type CommitmentType = 'create_issue' | 'create_plan' | 'comment_issue';
@@ -29,14 +30,6 @@ export interface Commitment {
   lastAttemptAt: string | null;
   error: string | null;
   result: Record<string, unknown> | null;
-}
-
-interface CommitmentStats {
-  pending: number;
-  inProgress: number;
-  completed: number;
-  failed: number;
-  abandoned: number;
 }
 
 //NOTE(self): In-memory cache for fast access
@@ -145,7 +138,7 @@ export function enqueueCommitment(params: {
   );
   if (existing) {
     auditLog('duplicate_rejected', { existingId: existing.id, description: params.description });
-    logger.debug('Duplicate commitment rejected', { existingId: existing.id });
+    logger.info('Duplicate commitment rejected', { existingId: existing.id });
     return null;
   }
 
@@ -177,18 +170,6 @@ export function enqueueCommitment(params: {
 
   logger.info('Commitment enqueued', { id: commitment.id, type: commitment.type });
   return commitment;
-}
-
-//NOTE(self): The reply-blocking check — returns true if there are unfulfilled commitments
-//NOTE(self): Counts 'pending' and 'failed' with attempts < MAX as blocking
-export function hasPendingCommitments(): boolean {
-  const queue = loadQueue();
-  return queue.some(
-    (c) =>
-      c.status === 'pending' ||
-      c.status === 'in_progress' ||
-      (c.status === 'failed' && c.attemptCount < MAX_ATTEMPTS)
-  );
 }
 
 //NOTE(self): Get commitments that need work — sorted oldest first
@@ -283,13 +264,3 @@ export function abandonStaleCommitments(): void {
   }
 }
 
-export function getCommitmentStats(): CommitmentStats {
-  const queue = loadQueue();
-  return {
-    pending: queue.filter((c) => c.status === 'pending').length,
-    inProgress: queue.filter((c) => c.status === 'in_progress').length,
-    completed: queue.filter((c) => c.status === 'completed').length,
-    failed: queue.filter((c) => c.status === 'failed').length,
-    abandoned: queue.filter((c) => c.status === 'abandoned').length,
-  };
-}

@@ -4,37 +4,6 @@
 
 Modules are **core runtime infrastructure**. They provide the foundational systems that local-tools depend on but should not duplicate.
 
-## Architectural Role
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       LOCAL-TOOLS                              │
-│        (high-level capabilities, business logic)             │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ uses
-┌──────────────────────────▼──────────────────────────────────┐
-│                        MODULES  ◄── You are here            │
-│        (orchestration, state, scheduling)                    │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ uses
-┌──────────────────────────▼──────────────────────────────────┐
-│                        ADAPTERS                              │
-│        (API wrappers, auth, request/response)                │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Responsibilities
-
-| Responsibility | Description |
-|----------------|-------------|
-| **Orchestration** | Coordinate multi-step workflows across local-tools and adapters |
-| **Scheduling** | Manage the multi-loop architecture (awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment) |
-| **State Management** | Persist and manage runtime state (engagement, conversations, relationships) |
-| **Tool System** | Define tools for LLM and execute tool calls |
-| **Configuration** | Load and validate environment configuration |
-| **Logging** | Structured logging infrastructure |
-| **Memory** | File-based persistence abstraction |
-
 ## What Belongs Here
 
 - The scheduler and main loops
@@ -56,60 +25,18 @@ Modules are **core runtime infrastructure**. They provide the foundational syste
 
 Ask these questions:
 
-| Question | If YES → | If NO → |
-|----------|----------|---------|
-| Is this used by multiple local-tools? | Module | Local Tool |
-| Would the agent break without this? | Module | Local Tool |
-| Is this orchestration/coordination? | Module | Local Tool |
-| Is this a discrete, toggleable capability? | Local Tool | Module |
-| Does this combine adapters for a specific purpose? | Local Tool | Module |
-
-## Current Modules
-
-### Core Infrastructure (Never Move)
-
-| Module | Purpose | Depends On |
-|--------|---------|------------|
-| `scheduler.ts` | Multi-loop architecture (session refresh, version check, awareness, GitHub awareness, expression, reflection, improvement, plan awareness, commitment fulfillment, heartbeat, engagement check). `executeClaimedTask()` includes PRE-GATE `verifyBranch()` check. `requestEarlyPlanCheck()` fires plan awareness 5s after PR merge via `registerOnPRMerged()` callback. `startVersionCheckLoop()` detects remote version mismatch and initiates graceful shutdown (Scenario 29). **Cross-SOUL failure counting (v8.6.9):** task claiming reads plan issue comments via `getIssueThread()` to count failures from ALL SOULs, not just in-memory tracking. **Plan synthesis enforces code-only tasks (Scenario 30):** LLM user message explicitly requires every task to produce file changes. | All modules |
-| `executor.ts` | Thin tool dispatcher — imports handler functions from `local-tools/self-*-handlers.ts` files, routes by tool name. `github_create_pr` auto-requests reviewers via `requestReviewersForPR()`. `github_merge_pr` triggers `onPRMergedCallback` for early re-poll. `plan_execute_task` includes PRE-GATE `verifyBranch()` check. Exports `registerOnPRMerged()` callback to avoid circular imports with scheduler. | local-tools (handlers) |
-| `tools.ts` | Tool aggregator — imports domain tool arrays from `local-tools/self-*-tools.ts`, exports combined `AGENT_TOOLS` | local-tools (tool definitions) |
-| `config.ts` | Environment configuration | None |
-| `logger.ts` | Logging infrastructure | None |
-| `memory.ts` | File-based persistence | None |
-| `llm-gateway.ts` | AI Gateway / LLM interface (formerly `openai.ts`) | Config |
-| `sandbox.ts` | File system sandboxing | Config |
-| `ui.ts` | Terminal UI components | None |
-| `loop.ts` | Main agent loop runner | Scheduler |
-| `skills.ts` | Skills framework (loads `skills/*/SKILL.md`, interpolation, prompt assembly) | Logger |
-| `peer-awareness.ts` | Dynamic peer SOUL discovery from plans, workspaces, threads | Config, Memory |
-| `voice-phrases.ts` | Load/regenerate `voice-phrases.json` for personality-consistent phrasing (`getFulfillmentPhrase`, `getTaskClaimPhrase`, `getGitHubPhrase`) | Memory, Logger |
-
-### State Management (Keep in Modules)
-
-| Module | Purpose | Why It Stays |
-|--------|---------|--------------|
-| `engagement.ts` | Relationship tracking, notification prioritization, `isLowValueClosing()` (verbose closing/acknowledgment detection), `shouldRespondTo()` (notification filtering with hard-block for closings) | Used by scheduler, multiple local-tools depend on it |
-| `bluesky-engagement.ts` | Bluesky conversation state | Essential for response loop |
-| `github-engagement.ts` | GitHub conversation state | Essential for response loop |
-| `expression.ts` | Expression scheduling (core parts) | Orchestration infrastructure |
-| `pacing.ts` | Rate limiting | Cross-cutting concern |
-| `post-log.ts` | Post logging (core parts) | Infrastructure for attribution local-tools |
-| `github-workspace-discovery.ts` | Poll workspaces for plan issues (up to 30 per workspace), manage watch list, three-tier auto-close (handled 24h, stale memo 3d, stale other 7d), `pollWorkspacesForApprovedPRs()` (up to 30 PRs) + `autoMergeApprovedPR()` for auto-merging approved PRs. **Merge-gated task completion:** tasks stay `in_progress` until PR merges — `completeTaskAfterMerge()` marks `completed` and checks plan closure. **PR recovery:** `handleMergeConflictPR()` closes conflicting/rejected/unreviewed PRs, deletes branch, resets task to `pending`. **Follow-up issues:** `createFollowUpIssueFromReviews()` creates issues from reviewer feedback after merge. **Auto-assignment:** `pollWorkspacesForOpenIssues()` assigns unassigned issues to their author but does NOT filter by assignee — all workspace issues visible to all SOULs. **Plan synthesis:** `getWorkspacesNeedingPlanSynthesis()` finds workspaces with zero open plans and cooldown expired (1h), `updateWorkspaceSynthesisTimestamp()` records attempt, `closeRolledUpIssues()` closes source issues with plan link comment. **Duplicate plan consolidation:** `PlanPollResult.allPlansByWorkspace` tracks all plan issue numbers per workspace — scheduler uses this to close older duplicate plans (superseded by newest). **"LIL INTDEV FINISHED" sentinel:** `createFinishedSentinel()` creates sentinel issue when workspace health check finds no remaining work. `isWorkspaceFinished()` checks local state (no API call). `verifyFinishedSentinel()` confirms sentinel still open (API check per cycle). Both `pollWorkspacesForPlans` and `getWorkspacesNeedingPlanSynthesis` skip finished workspaces. | Multi-SOUL collaboration infrastructure |
-| `commitment-queue.ts` | Track pending commitments with JSONL persistence, dedup, stale cleanup | Ensures follow-through on promises made in replies |
-
-### Moved to Local-Tools
-
-These were previously modules but have been migrated to local-tools as they represent discrete, toggleable capabilities:
-
-| Former Module | New Local Tool | Reason Moved |
-|---------------|-----------|--------------|
-| `friction.ts` | `self-detect-friction.ts` | Optional self-improvement trigger |
-| `aspiration.ts` | `self-identify-aspirations.ts` | Optional growth tracking |
-| `experiences.ts` | `self-capture-experiences.ts` | Optional reflection enhancement |
+| Question                                           | If YES →   | If NO →    |
+| -------------------------------------------------- | ---------- | ---------- |
+| Is this used by multiple local-tools?              | Module     | Local Tool |
+| Would the agent break without this?                | Module     | Local Tool |
+| Is this orchestration/coordination?                | Module     | Local Tool |
+| Is this a discrete, toggleable capability?         | Local Tool | Module     |
+| Does this combine adapters for a specific purpose? | Local Tool | Module     |
 
 ## Design Principles
 
 ### 1. Infrastructure, Not Features
+
 Modules provide the rails; local-tools run on them. If something is a "feature," it's a local-tool.
 
 ```typescript
@@ -126,19 +53,21 @@ export async function analyzeThreadSentiment(threadUri: string): Promise<Sentime
 ```
 
 ### 2. Shared Dependencies
+
 If multiple local-tools need it, it's a module. If only one local-tool needs it, put it in that local-tool.
 
 ```typescript
 // Module - used by multiple local-tools
 // modules/engagement.ts
-export function getRelationship(handle: string): RelationshipRecord | null
+export function getRelationship(handle: string): RelationshipRecord | null;
 
 // Local-tool - only used by self-improvement
 // local-tools/self-detect-friction.ts
-export function buildImprovementPrompt(friction: FrictionEntry): string
+export function buildImprovementPrompt(friction: FrictionEntry): string;
 ```
 
 ### 3. No Direct External API Calls
+
 Modules use adapters for external services. Never import `fetch` or service-specific clients directly.
 
 ```typescript
@@ -152,6 +81,7 @@ const result = await atproto.getTimeline({ limit: 20 });
 ```
 
 ### 4. State Isolation
+
 Each module manages its own state. Cross-module state coordination happens in the scheduler.
 
 ```typescript
@@ -168,6 +98,7 @@ if (getSignificantEventCount() >= threshold) {
 ```
 
 ### 5. Explicit Dependencies
+
 Import from module entry points, not internal files:
 
 ```typescript
@@ -181,66 +112,16 @@ import { recordInteraction } from '@modules/engagement/interactions.js';
 ## Module Interaction Patterns
 
 ### Scheduler → Everything
-The scheduler is the orchestration hub:
 
-```
-scheduler.ts
-├── awareness loop (45s)
-│   ├── atproto adapter (notifications)
-│   ├── engagement module (prioritization)
-│   ├── workspace-discovery (URL extraction from records)
-│   └── local-tools (response generation)
-├── github awareness loop (2m)
-│   ├── github adapter (notifications)
-│   └── github-engagement module (conversation tracking)
-├── expression loop (3-4h)
-│   ├── expression module (scheduling)
-│   └── local-tools (post creation)
-├── reflection loop (6h)
-│   ├── experiences local-tool (gather)
-│   └── local-tools (SELF.md update)
-├── improvement loop (24h)
-│   ├── friction local-tool (identify)
-│   └── improvement local-tool (execute via Claude Code)
-├── plan awareness loop (3m)
-│   ├── workspace-discovery (poll plans, PRs, open issues)
-│   ├── plan synthesis: if no open plans → synthesizePlanForWorkspaces() → LLM creates plan → close rolled-up issues
-│   ├── task-claim → task-execute → task-verify → PR created (task stays in_progress)
-│   ├── PR review: all requested reviewers must LGTM before merge
-│   ├── auto-merge approved PRs → completeTaskAfterMerge → on allComplete → handlePlanComplete + announceIfWorthy
-│   ├── recover stuck PRs: rejected >1h, unreviewed >2h, merge conflicts → close PR, reset task to pending
-│   ├── stuck task recovery: in_progress >30m with NO open PR → reset to pending
-│   ├── follow-up issues from reviewer feedback after merge
-│   ├── PR review (one per cycle)
-│   ├── auto-assign unassigned workspace issues to author
-│   ├── closeHandledWorkspaceIssues (24h: agent responded, no follow-up)
-│   └── cleanupStaleWorkspaceIssues (3d memos, 7d others)
-├── commitment fulfillment loop (15s)
-│   ├── commitment-queue (pending commitments)
-│   └── commitment-fulfill (dispatch by type)
-├── version check loop (~5m with jitter)
-│   ├── fetch remote package.json from GitHub main
-│   └── version mismatch → graceful shutdown (Scenario 29)
-├── heartbeat loop (5m)
-│   └── terminal status display
-└── session refresh loop (15m)
-    └── proactive ATProto token refresh
-```
+The scheduler is the orchestration hub. See `modules/scheduler.ts` for the full loop architecture.
 
 ### Tool Execution Flow
 
 ```
-LLM generates tool call
-       │
-       ▼
-tools.ts (definition lookup)
-       │
-       ▼
-executor.ts (dispatch)
-       │
-       ├── Adapter calls (direct API)
-       ├── Local-tool calls (capabilities)
-       └── Module calls (state updates)
+LLM generates tool call → tools.ts (definition lookup) → executor.ts (dispatch)
+  ├── Adapter calls (direct API)
+  ├── Local-tool calls (capabilities)
+  └── Module calls (state updates)
 ```
 
 ## Error Handling
@@ -256,7 +137,7 @@ export function loadState(): EngagementState {
   } catch (err) {
     logger.error('Failed to load state', { error: String(err) });
   }
-  return getDefaultState();  // Always return valid state
+  return getDefaultState(); // Always return valid state
 }
 ```
 
@@ -269,12 +150,13 @@ export function loadState(): EngagementState {
 ## Adding a New Module
 
 Before adding a module, verify it meets the criteria:
+
 - [ ] Used by multiple local-tools
 - [ ] Agent would break without it
 - [ ] It's infrastructure, not a feature
 
 If adding:
+
 1. Create `modules/{name}.ts`
 2. Import directly from `@modules/{name}.js` where needed
-3. Add to this AGENTS.md
-4. Document state shape if stateful
+3. Document state shape if stateful

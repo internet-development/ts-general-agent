@@ -39,7 +39,7 @@ function loadWebImagesPosted(): Set<string> {
       return new Set(entries.map(e => e.url));
     }
   } catch (e) {
-    logger.debug('Failed to load web images posted', { error: String(e) });
+    logger.warn('Failed to load web images posted', { error: String(e) });
   }
   return new Set();
 }
@@ -173,7 +173,7 @@ export async function handleCurlFetch(call: ToolCall): Promise<ToolResult> {
 
     curl.on('close', (code) => {
       if (code !== 0) {
-        try { fs.unlinkSync(tempFile); } catch (e) { logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
+        try { fs.unlinkSync(tempFile); } catch (e) { logger.warn('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
 
         let errorMsg = `curl exited with code ${code}`;
         if (code === 22) {
@@ -210,7 +210,7 @@ export async function handleCurlFetch(call: ToolCall): Promise<ToolResult> {
       }
 
       if (fileSize === 0) {
-        try { fs.unlinkSync(tempFile); } catch (e) { logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
+        try { fs.unlinkSync(tempFile); } catch (e) { logger.warn('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
         resolve({
           tool_use_id: call.id,
           content: 'Error: URL returned empty response',
@@ -239,7 +239,7 @@ export async function handleCurlFetch(call: ToolCall): Promise<ToolResult> {
 
           const firstChars = magicBytes.toString('utf8').toLowerCase();
           if (firstChars.includes('<!do') || firstChars.includes('<htm') || firstChars.includes('<?xm')) {
-            try { fs.unlinkSync(tempFile); } catch (e) { logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
+            try { fs.unlinkSync(tempFile); } catch (e) { logger.warn('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
             resolve({
               tool_use_id: call.id,
               content: 'Error: URL returned HTML/XML instead of binary data (likely an error page)',
@@ -248,7 +248,7 @@ export async function handleCurlFetch(call: ToolCall): Promise<ToolResult> {
             return;
           }
         } catch (e) {
-          logger.debug('Failed to read magic bytes', { file: tempFile, error: String(e) });
+          logger.warn('Failed to read magic bytes', { file: tempFile, error: String(e) });
         }
       }
 
@@ -285,7 +285,7 @@ export async function handleCurlFetch(call: ToolCall): Promise<ToolResult> {
     });
 
     curl.on('error', (err) => {
-      try { fs.unlinkSync(tempFile); } catch (e) { logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
+      try { fs.unlinkSync(tempFile); } catch (e) { logger.warn('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
       resolve({
         tool_use_id: call.id,
         content: `Error: ${err.message}`,
@@ -408,7 +408,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
       postedIds = JSON.parse(content);
     }
   } catch (e) {
-    logger.debug('Failed to load arena posted IDs', { path: postedPath, error: String(e) });
+    logger.warn('Failed to load arena posted IDs', { path: postedPath, error: String(e) });
     postedIds = [];
   }
 
@@ -475,7 +475,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
 
     curl.on('close', (code) => {
       if (code !== 0) {
-        try { fs.unlinkSync(tempFile); } catch (e) { logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
+        try { fs.unlinkSync(tempFile); } catch (e) { logger.warn('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
         resolve({ success: false, error: `curl failed: ${stderr || `exit code ${code}`}` });
         return;
       }
@@ -493,7 +493,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
         else if (magicBytes[0] === 0x89 && magicBytes[1] === 0x50) mimeType = 'image/png';
         else if (magicBytes[0] === 0x47 && magicBytes[1] === 0x49) mimeType = 'image/gif';
         else if (magicBytes[0] === 0x52 && magicBytes[1] === 0x49 && magicBytes[8] === 0x57) mimeType = 'image/webp';
-      } catch (e) { logger.debug('Failed to detect mime from magic bytes', { file: tempFile, error: String(e) }); }
+      } catch (e) { logger.warn('Failed to detect mime from magic bytes', { file: tempFile, error: String(e) }); }
 
       const extMap: Record<string, string> = {
         'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
@@ -505,13 +505,13 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
         fs.renameSync(tempFile, finalPath);
         resolve({ success: true, filePath: finalPath, mimeType });
       } catch (e) {
-        logger.debug('Failed to rename temp file, using original', { tempFile, finalPath, error: String(e) });
+        logger.warn('Failed to rename temp file, using original', { tempFile, finalPath, error: String(e) });
         resolve({ success: true, filePath: tempFile, mimeType });
       }
     });
 
     curl.on('error', (err) => {
-      try { fs.unlinkSync(tempFile); } catch (e) { logger.debug('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
+      try { fs.unlinkSync(tempFile); } catch (e) { logger.warn('Failed to clean up temp file', { file: tempFile, error: String(e) }); }
       resolve({ success: false, error: err.message });
     });
   });
@@ -528,7 +528,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
   try {
     processedImage = await processFileImageForUpload(curlResult.filePath);
   } catch (err) {
-    try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.debug('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
+    try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.warn('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
     return {
       tool_use_id: call.id,
       content: `Error processing image: ${String(err)}`,
@@ -538,7 +538,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
 
   const uploadResult = await atproto.uploadBlob(processedImage.buffer, processedImage.mimeType);
   if (!uploadResult.success) {
-    try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.debug('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
+    try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.warn('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
     return {
       tool_use_id: call.id,
       content: `Error uploading to Bluesky: ${uploadResult.error}`,
@@ -591,7 +591,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
       reply_to.root_cid
     );
     if (!replyRefsResult.success) {
-      try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.debug('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
+      try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.warn('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
       return {
         tool_use_id: call.id,
         content: `Error resolving reply refs: ${replyRefsResult.error}`,
@@ -608,7 +608,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
 
   const postResult = await atproto.createPost(postParams);
 
-  try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.debug('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
+  try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.warn('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
 
   if (!postResult.success) {
     return {

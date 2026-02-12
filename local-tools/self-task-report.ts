@@ -7,10 +7,7 @@ import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
 import {
   freshUpdateTaskInPlan,
-  fetchFreshPlan,
   type ParsedPlan,
-  type ParsedTask,
-  type TaskStatus,
 } from '@local-tools/self-plan-parse.js';
 import { updatePlanStatus, closePlan } from '@local-tools/self-plan-create.js';
 import { getGitHubPhrase } from '@modules/voice-phrases.js';
@@ -81,33 +78,6 @@ export async function reportTaskComplete(
   //NOTE(self): Do NOT remove assignee — SOUL still owns the task until PR merges
 
   return { success: true, planComplete: false };
-}
-
-//NOTE(self): Report task progress (for long-running tasks)
-export async function reportTaskProgress(
-  params: ReportTaskParams,
-  progressMessage: string
-): Promise<{ success: boolean; error?: string }> {
-  const { owner, repo, issueNumber, taskNumber } = params;
-  const config = getConfig();
-  const myUsername = config.github.username;
-
-  const comment = getGitHubPhrase('task_progress', {
-    number: String(taskNumber), details: progressMessage, username: myUsername,
-  });
-
-  const result = await createIssueComment({
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body: comment,
-  });
-
-  if (!result.success) {
-    return { success: false, error: result.error };
-  }
-
-  return { success: true };
 }
 
 //NOTE(self): Report task blocked

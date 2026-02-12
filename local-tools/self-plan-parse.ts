@@ -55,7 +55,7 @@ export function parsePlan(issueBody: string, issueTitle: string): ParsedPlan | n
 
   //NOTE(self): Check if this is a plan issue (starts with # [PLAN])
   if (!issueTitle.startsWith('[PLAN]') && !issueBody.includes('# [PLAN]')) {
-    logger.debug('Issue is not a plan (no [PLAN] marker)');
+    logger.info('Issue is not a plan (no [PLAN] marker)');
     return null;
   }
 
@@ -328,7 +328,7 @@ export function parsePlan(issueBody: string, issueTitle: string): ParsedPlan | n
     plan.status = 'active';
   }
 
-  logger.debug('Parsed plan', {
+  logger.info('Parsed plan', {
     title: plan.title,
     taskCount: plan.tasks.length,
     status: plan.status,
@@ -431,19 +431,6 @@ export function updateTaskInPlanBody(
   }
 
   return result.join('\n');
-}
-
-//NOTE(self): Check if a task's dependencies are all completed
-export function areDependenciesMet(task: ParsedTask, plan: ParsedPlan): boolean {
-  if (task.dependencies.length === 0) return true;
-
-  const completedTaskIds = new Set(
-    plan.tasks
-      .filter(t => t.status === 'completed')
-      .map(t => `Task ${t.number}`)
-  );
-
-  return task.dependencies.every(dep => completedTaskIds.has(dep));
 }
 
 //NOTE(self): Fetch the latest plan body from GitHub and re-parse it

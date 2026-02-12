@@ -76,7 +76,7 @@ export async function extractCommitments(replies: ReplyForExtraction[]): Promise
       (c) => c.confidence === 'high' || c.confidence === 'medium'
     );
 
-    logger.debug('Commitment extraction result', {
+    logger.info('Commitment extraction result', {
       replyCount: replies.length,
       rawCount: parsed.length,
       filteredCount: filtered.length,

@@ -114,7 +114,7 @@ export async function handleBlueskyPostWithImage(call: ToolCall, config: any): P
   const uploadResult = await atproto.uploadBlob(processedImage.buffer, processedImage.mimeType);
   if (!uploadResult.success) {
     if (imageFilePath) {
-      try { fs.unlinkSync(imageFilePath); } catch { /* best effort */ }
+      try { fs.unlinkSync(imageFilePath); } catch (e) { logger.warn('Failed to clean up image file', { filePath: imageFilePath, error: String(e) }); }
     }
     return { tool_use_id: call.id, content: `Error uploading image: ${uploadResult.error}`, is_error: true };
   }
@@ -136,7 +136,7 @@ export async function handleBlueskyPostWithImage(call: ToolCall, config: any): P
   if (imageFilePath) {
     try {
       fs.unlinkSync(imageFilePath);
-      logger.debug('Cleaned up image file', { filePath: imageFilePath });
+      logger.info('Cleaned up image file', { filePath: imageFilePath });
     } catch (err) {
       logger.warn('Failed to clean up image file', { filePath: imageFilePath, error: String(err) });
     }

@@ -182,7 +182,7 @@ export function extractGitHubUrlsFromRecord(record: Record<string, unknown>): Pa
   //NOTE(self): Nothing found - log for debugging
   const recordStr = JSON.stringify(record);
   if (recordStr.toLowerCase().includes('github')) {
-    logger.debug('Record mentions "github" but no valid URLs extracted', {
+    logger.warn('Record mentions "github" but no valid URLs extracted', {
       recordPreview: recordStr.slice(0, 500),
     });
   }

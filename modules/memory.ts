@@ -58,7 +58,7 @@ export function createMemory(basePath: string): Memory {
       ensureDir(path);
       try {
         writeFileSync(path, content, 'utf-8');
-        logger.debug('Memory written', { key });
+        logger.info('Memory written', { key });
       } catch (err) {
         logger.error('Failed to write memory', { key, error: String(err) });
       }
@@ -70,7 +70,7 @@ export function createMemory(basePath: string): Memory {
       try {
         const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
         writeFileSync(path, existing + content, 'utf-8');
-        logger.debug('Memory appended', { key });
+        logger.info('Memory appended', { key });
       } catch (err) {
         logger.error('Failed to append memory', { key, error: String(err) });
       }
@@ -88,7 +88,7 @@ export function createMemory(basePath: string): Memory {
       try {
         return readdirSync(path);
       } catch (e) {
-        logger.debug('Failed to list directory', { path, error: String(e) });
+        logger.warn('Failed to list directory', { path, error: String(e) });
         return [];
       }
     },
@@ -137,18 +137,3 @@ export function readSelf(selfPath: string): string {
     return ''; // Graceful degradation - return empty string
   }
 }
-
-export function writeSelf(selfPath: string, content: string): boolean {
-  try {
-    const dir = dirname(selfPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    writeFileSync(selfPath, content, 'utf-8');
-    return true;
-  } catch (err) {
-    logger.error('Failed to write SELF.md', { selfPath, error: String(err) });
-    return false; // Graceful degradation - return false instead of crashing
-  }
-}
-

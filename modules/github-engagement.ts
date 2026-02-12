@@ -6,7 +6,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
-import { isWatchingWorkspace } from '@modules/github-workspace-discovery.js';
 
 //NOTE(self): Path to GitHub engagement state
 const GITHUB_ENGAGEMENT_PATH = '.memory/github_engagement.json';
@@ -70,7 +69,7 @@ function loadState(): GitHubEngagementState {
         conversations: data.conversations || {},
         lastNotificationCheck: data.lastNotificationCheck || null,
       };
-      logger.debug('Loaded GitHub engagement state', {
+      logger.info('Loaded GitHub engagement state', {
         conversationCount: Object.keys(engagementState.conversations).length,
       });
     } else {
@@ -114,7 +113,7 @@ export function updateGitHubSeenAt(timestamp: Date): void {
   const state = loadState();
   state.seenAt = timestamp.toISOString();
   saveState();
-  logger.debug('Updated GitHub seenAt', { seenAt: state.seenAt });
+  logger.info('Updated GitHub seenAt', { seenAt: state.seenAt });
 }
 
 export function updateLastNotificationCheck(): void {
@@ -132,49 +131,6 @@ export function getConversation(
   const state = loadState();
   const key = getConversationKey(owner, repo, number);
   return state.conversations[key] || null;
-}
-
-export function trackConversation(
-  owner: string,
-  repo: string,
-  number: number,
-  type: 'issue' | 'pull',
-  url: string,
-  source: string
-): ConversationRecord {
-  const state = loadState();
-  const key = getConversationKey(owner, repo, number);
-
-  if (state.conversations[key]) {
-    //NOTE(self): Update existing conversation
-    state.conversations[key].lastChecked = new Date().toISOString();
-    saveState();
-    return state.conversations[key];
-  }
-
-  //NOTE(self): Create new conversation record
-  const record: ConversationRecord = {
-    owner,
-    repo,
-    number,
-    type,
-    url,
-    firstSeen: new Date().toISOString(),
-    lastChecked: new Date().toISOString(),
-    lastCommentedAt: null,
-    ourCommentId: null,
-    ourCommentCount: 0,
-    state: 'new',
-    source,
-    concludedAt: null,
-    reengagementCount: 0,
-  };
-
-  state.conversations[key] = record;
-  saveState();
-
-  logger.info('Tracking new GitHub conversation', { key, source });
-  return record;
 }
 
 export function recordOurComment(
@@ -197,9 +153,51 @@ export function recordOurComment(
   state.conversations[key].state = 'awaiting_response';
   saveState();
 
-  logger.debug('Recorded our comment', { key, commentId });
+  logger.info('Recorded our comment', { key, commentId });
 }
 
+//NOTE(self): Track a new GitHub conversation
+export function trackConversation(
+  owner: string,
+  repo: string,
+  number: number,
+  type: 'issue' | 'pull',
+  url: string,
+  source: string
+): ConversationRecord {
+  const state = loadState();
+  const key = getConversationKey(owner, repo, number);
+
+  if (state.conversations[key]) {
+    state.conversations[key].lastChecked = new Date().toISOString();
+    saveState();
+    return state.conversations[key];
+  }
+
+  const record: ConversationRecord = {
+    owner,
+    repo,
+    number,
+    type,
+    url,
+    firstSeen: new Date().toISOString(),
+    lastChecked: new Date().toISOString(),
+    lastCommentedAt: null,
+    ourCommentId: null,
+    ourCommentCount: 0,
+    state: 'new',
+    source,
+    concludedAt: null,
+    reengagementCount: 0,
+  };
+
+  state.conversations[key] = record;
+  saveState();
+  logger.info('Tracking new GitHub conversation', { key, source });
+  return record;
+}
+
+//NOTE(self): Update a conversation's state
 export function updateConversationState(
   owner: string,
   repo: string,
@@ -224,10 +222,10 @@ export function updateConversationState(
     state.conversations[key].concludedAt = new Date().toISOString();
   }
   saveState();
-
-  logger.debug('Updated conversation state', { key, newState, reason });
+  logger.info('Updated conversation state', { key, newState, reason });
 }
 
+//NOTE(self): Mark a conversation as concluded (convenience wrapper)
 export function markConversationConcluded(
   owner: string,
   repo: string,
@@ -235,68 +233,6 @@ export function markConversationConcluded(
   reason: string
 ): void {
   updateConversationState(owner, repo, number, 'concluded', reason);
-}
-
-//NOTE(self): Get conversations that need attention
-export interface ConversationNeedingAttention {
-  conversation: ConversationRecord;
-  reason: string;
-}
-
-export function getConversationsNeedingAttention(): ConversationNeedingAttention[] {
-  const state = loadState();
-  const results: ConversationNeedingAttention[] = [];
-
-  for (const [key, conversation] of Object.entries(state.conversations)) {
-    //NOTE(self): Skip closed conversations entirely
-    if (conversation.state === 'closed') {
-      continue;
-    }
-
-    //NOTE(self): Check concluded conversations for re-engagement
-    //NOTE(self): Workspace issues get unlimited re-engagement; casual threads capped at 1
-    if (conversation.state === 'concluded') {
-      const reengageCount = conversation.reengagementCount ?? 0;
-      const isWorkspace = isWatchingWorkspace(conversation.owner, conversation.repo);
-      const reengageLimit = isWorkspace ? Infinity : 1;
-      if (reengageCount < reengageLimit && conversation.concludedAt) {
-        const concludedTime = new Date(conversation.concludedAt).getTime();
-        const lastCheckedTime = new Date(conversation.lastChecked).getTime();
-        //NOTE(self): If lastChecked is newer than concludedAt, someone may have updated it
-        //NOTE(self): This is a lightweight signal — the actual comment check happens when we fetch the thread
-        if (lastCheckedTime > concludedTime) {
-          conversation.state = 'active';
-          conversation.reengagementCount = reengageCount + 1;
-          saveState();
-          results.push({
-            conversation,
-            reason: 'Re-engagement detected after conclusion',
-          });
-        }
-      }
-      continue;
-    }
-
-    //NOTE(self): New conversations we haven't engaged with yet
-    if (conversation.state === 'new') {
-      results.push({
-        conversation,
-        reason: 'New conversation requiring initial response',
-      });
-      continue;
-    }
-
-    //NOTE(self): Active conversations (someone replied to us)
-    if (conversation.state === 'active') {
-      results.push({
-        conversation,
-        reason: 'Someone replied to your comment',
-      });
-      continue;
-    }
-  }
-
-  return results;
 }
 
 //NOTE(self): Clean up old concluded conversations (housekeeping)
@@ -323,24 +259,3 @@ export function cleanupOldConversations(maxAgeMs: number = 30 * 24 * 60 * 60 * 1
   return cleaned;
 }
 
-//NOTE(self): Get conversation stats for reflection
-export interface GitHubEngagementStats {
-  totalConversations: number;
-  activeConversations: number;
-  awaitingResponse: number;
-  concluded: number;
-  totalCommentsPosted: number;
-}
-
-export function getGitHubEngagementStats(): GitHubEngagementStats {
-  const state = loadState();
-  const conversations = Object.values(state.conversations);
-
-  return {
-    totalConversations: conversations.length,
-    activeConversations: conversations.filter(c => c.state === 'active' || c.state === 'new').length,
-    awaitingResponse: conversations.filter(c => c.state === 'awaiting_response').length,
-    concluded: conversations.filter(c => c.state === 'concluded').length,
-    totalCommentsPosted: conversations.reduce((sum, c) => sum + c.ourCommentCount, 0),
-  };
-}

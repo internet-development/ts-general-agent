@@ -1,5 +1,6 @@
 import { logger } from '@modules/logger.js';
 import { ensureValidSession, getAuthHeaders } from '@adapters/atproto/authenticate.js';
+import { ATPROTO_MIN_SPACING_MS, ATPROTO_LOW_BUDGET_THRESHOLD } from '@common/config.js';
 
 // Module-level singleton state
 let rateLimitRemaining = 300;
@@ -7,8 +8,8 @@ let rateLimitReset = 0;       // Unix epoch seconds
 let rateLimitLimit = 300;
 let lastRequestTime = 0;
 
-const MIN_SPACING_MS = 5000;
-const LOW_BUDGET_THRESHOLD = 20;
+const MIN_SPACING_MS = ATPROTO_MIN_SPACING_MS;
+const LOW_BUDGET_THRESHOLD = ATPROTO_LOW_BUDGET_THRESHOLD;
 
 function readRateLimitHeaders(response: Response): void {
   const remaining = response.headers.get('ratelimit-remaining');

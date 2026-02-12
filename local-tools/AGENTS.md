@@ -4,33 +4,14 @@
 
 Local-tools are **agent capabilities** - discrete things the agent can do. They represent features that could be enabled, disabled, or replaced independently.
 
-## Architectural Role
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       LOCAL-TOOLS  ◄── You are here          │
-│        (high-level capabilities, business logic)             │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ uses
-┌──────────────────────────▼──────────────────────────────────┐
-│                        MODULES                               │
-│        (orchestration, state, scheduling)                    │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ uses
-┌──────────────────────────▼──────────────────────────────────┐
-│                        ADAPTERS                              │
-│        (API wrappers, auth, request/response)                │
-└─────────────────────────────────────────────────────────────┘
-```
-
 ## Responsibilities
 
-| Responsibility | Description |
-|----------------|-------------|
-| **Capabilities** | Implement discrete agent actions (post, reply, comment, reflect) |
+| Responsibility     | Description                                                          |
+| ------------------ | -------------------------------------------------------------------- |
+| **Capabilities**   | Implement discrete agent actions (post, reply, comment, reflect)     |
 | **Business Logic** | Contain feature-specific logic that doesn't belong in infrastructure |
-| **Composition** | Combine adapters and modules to accomplish specific tasks |
-| **Self-Contained** | Be understandable and testable in isolation |
+| **Composition**    | Combine adapters and modules to accomplish specific tasks            |
+| **Self-Contained** | Be understandable and testable in isolation                          |
 
 ## What Belongs Here
 
@@ -47,108 +28,10 @@ Local-tools are **agent capabilities** - discrete things the agent can do. They 
 - Shared state management (use modules)
 - Orchestration logic (use scheduler)
 
-## File Naming Convention
-
-All local-tool files use a **flat structure** with semantic prefixes:
-
-| Prefix | Domain | Description |
-|--------|--------|-------------|
-| `self-github-` | GitHub | Actions on GitHub platform |
-| `self-` | Core self | Self-reflection, reading/writing SELF.md |
-| `self-improve-` | Self-improvement | Claude Code integration, code changes |
-| `self-detect-` | Detection | Pattern detection (friction, etc.) |
-| `self-identify-` | Identification | Finding opportunities (aspirations, etc.) |
-| `self-capture-` | Capture | Recording data (experiences, etc.) |
-| `self-plan-` | Planning | Multi-SOUL plan creation and parsing |
-| `self-task-` | Task execution | Claiming and executing tasks from plans |
-| `self-workspace-` | Workspaces | Collaborative workspace discovery and management |
-
-## Current Local-Tools
-
-### Platform Actions
-
-#### GitHub (`self-github-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `comment-issue` | Comment on an issue |
-| `create-workspace` | Create collaborative development workspace from template |
-| `create-issue` | Create issues/memos in repositories |
-
-### Self-Improvement (`self-improve-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `find-claude` | Locate Claude binary |
-| `install` | Install Claude Code |
-| `run` | Execute Claude Code with prompt |
-| `types` | Shared type definitions |
-
-### Detection & Analysis (`self-detect-*`, `self-identify-*`)
-| Local Tool | Purpose | Migrated From |
-|-------|---------|---------------|
-| `detect-friction` | Track friction for self-improvement | `modules/friction.ts` |
-| `identify-aspirations` | Extract growth goals from SELF.md | `modules/aspiration.ts` |
-
-### Capture & Recording (`self-capture-*`)
-| Local Tool | Purpose | Migrated From |
-|-------|---------|---------------|
-| `capture-experiences` | Record meaningful experiences | `modules/experiences.ts` |
-
-### Plan Management (`self-plan-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `plan-create` | Create structured plan issues with tasks, status, and verification steps. `ensureDocsTasks()` auto-injects SCENARIOS.md + LIL-INTDEV-AGENTS.md for workspace repos, but `createPlan()` checks repo contents first via `getRepoContents()` to skip injection when files already exist |
-| `plan-parse` | Parse plan markdown from GitHub issues into structured data. Also exports `fetchFreshPlan` (atomic read from GitHub API) and `freshUpdateTaskInPlan` (atomic read-modify-write to avoid clobbering concurrent writes) |
-
-### Task Execution (`self-task-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `task-claim` | Claim tasks via GitHub assignee API (first-writer-wins protocol). `releaseTaskClaim` checks `freshUpdateTaskInPlan` result to detect plan update failures |
-| `task-execute` | Execute claimed tasks via Claude Code. Also exports `createBranch`, `createPullRequest`, `requestReviewersForPR`, and `recoverOrphanedBranch` (find pushed branches without PRs for blocked/pending tasks and create PRs for them) |
-| `task-verify` | PRE-GATE + four-gate quality check: `verifyBranch()` confirms Claude Code stayed on the correct feature branch, then verify git changes exist, run tests if present, push to remote, verify push success |
-| `task-report` | Report task progress, completion, blocked status, or failure. `reportTaskComplete` returns `planComplete: true` when the last task finishes. `handlePlanComplete` posts quality loop review checklist (Scenario 10), checks `updatePlanStatus` and `closePlan` results for silent failures |
-
-### Commitment Tracking (`self-commitment-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `commitment-extract` | LLM-based extraction of action commitments from Bluesky replies (feeds commitment queue from response mode) |
-| `commitment-fulfill` | Dispatch commitments to fulfillment handlers (create_issue, create_plan, comment_issue) |
-
-### Identity & Extraction (`self-extract`)
-| Local Tool | Purpose |
-|-------|---------|
-| `extract` | SELF.md parsing — `extractFromSelf()` returns structured sections (voice, interests, etc.) for use in skills and reflection |
-
-### Announcement (`self-announcement`)
-| Local Tool | Purpose |
-|-------|---------|
-| `announcement` | Announcement guard shared by scheduler + executor for dual enforcement (`announceIfWorthy`) — decides whether PRs/plans warrant a Bluesky post |
-
-### Workspace Management (`self-workspace-*`)
-| Local Tool | Purpose |
-|-------|---------|
-| `workspace-watch` | Add/remove workspaces from watch list, extract workspace URLs from text and Bluesky records (facets, embeds, text) |
-
-### Domain Handlers (imported by `modules/executor.ts`)
-| Local Tool | Purpose |
-|-------|---------|
-| `self-handlers.ts` | Core domain tool handlers (self_read, self_write, etc.) |
-| `self-bluesky-handlers.ts` | Bluesky tool handlers (bluesky_post, bluesky_reply, etc.) |
-| `self-github-handlers.ts` | GitHub tool handlers (github_create_issue, github_comment, etc.) |
-| `self-web-handlers.ts` | Web tool handlers (web_browse, curl_fetch, etc.) |
-| `self-workspace-handlers.ts` | Workspace tool handlers (workspace_create, plan_create, etc.) |
-
-### Domain Tool Definitions (imported by `modules/tools.ts`)
-| Local Tool | Purpose |
-|-------|---------|
-| `self-tools.ts` | Core domain tool definitions (SELF_TOOLS) |
-| `self-bluesky-tools.ts` | Bluesky tool definitions (BLUESKY_TOOLS) |
-| `self-github-tools.ts` | GitHub tool definitions (GITHUB_TOOLS) |
-| `self-web-tools.ts` | Web tool definitions (WEB_TOOLS) |
-| `self-workspace-tools.ts` | Workspace tool definitions (WORKSPACE_TOOLS) |
-
 ## Design Principles
 
 ### 1. Single Function Per File
+
 Each local-tool file exports one primary function. Helpers can be internal but the public API is one function.
 
 ```typescript
@@ -163,6 +46,7 @@ export async function validateCommentLength(text: string) { ... }
 ```
 
 ### 2. Flat Structure
+
 No subdirectories. Use prefixes for organization. This makes it easy to see all local-tools at a glance.
 
 ```
@@ -177,6 +61,7 @@ local-tools/
 ```
 
 ### 3. Composable
+
 Local-tools can use adapters and modules. Minimize local-tool-to-local-tool dependencies to avoid circular imports.
 
 ```typescript
@@ -197,12 +82,13 @@ export async function commentOnIssue(owner: string, repo: string, issueNumber: n
 import { readSelf } from '@local-tools/self-read.js';
 
 export function appendToSelf(selfPath: string, addition: string): void {
-  const current = readSelf(selfPath);  // OK - related local-tools
+  const current = readSelf(selfPath); // OK - related local-tools
   // ...
 }
 ```
 
 ### 4. Self-Contained
+
 A local-tool should be understandable in isolation. Document what it does, not how the system uses it.
 
 ```typescript
@@ -224,6 +110,7 @@ export function recordFriction(
 ```
 
 ### 5. Stateless Preferred
+
 Local-tools should prefer stateless operation. If state is needed, use modules for persistence.
 
 ```typescript
@@ -236,7 +123,7 @@ export function shouldRespond(handle: string): boolean {
 }
 
 // BAD - local-tool maintains its own state
-let cache: Map<string, boolean> = new Map();  // Don't do this
+let cache: Map<string, boolean> = new Map(); // Don't do this
 
 export function shouldRespond(handle: string): boolean {
   if (cache.has(handle)) return cache.get(handle)!;
@@ -268,7 +155,7 @@ export async function commentOnIssue(owner: string, repo: string, num: number, b
   const result = await github.createComment(owner, repo, num, body);
   if (!result) {
     logger.error('Failed to comment on issue', { owner, repo, num });
-    return false;  // Caller handles false
+    return false; // Caller handles false
   }
   return true;
 }
@@ -277,7 +164,7 @@ export async function commentOnIssue(owner: string, repo: string, num: number, b
 export async function commentOnIssue(owner: string, repo: string, num: number, body: string): Promise<void> {
   const result = await github.createComment(owner, repo, num, body);
   if (!result) {
-    throw new Error('Comment failed');  // Unhelpful
+    throw new Error('Comment failed'); // Unhelpful
   }
 }
 ```
@@ -305,15 +192,13 @@ describe('self-detect-friction', () => {
 2. Create `local-tools/{prefix}-{name}.ts`
 3. Export one primary function
 4. Add types file if needed: `local-tools/{prefix}-types.ts`
-5. Update this AGENTS.md
 
 ### Checklist
+
 - [ ] Single primary function exported
 - [ ] Uses adapters for external APIs
 - [ ] Uses modules for shared state
 - [ ] Handles errors gracefully
-- [ ] Has JSDoc documentation
-- [ ] Added to this AGENTS.md
 
 ## Migration Notes
 

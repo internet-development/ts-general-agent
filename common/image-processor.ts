@@ -1,10 +1,11 @@
 import * as fs from 'fs';
 import sharp from 'sharp';
 import { logger } from '@modules/logger.js';
+import { IMAGE_MAX_FILE_SIZE, IMAGE_MAX_DIMENSION } from '@common/config.js';
 
 //NOTE(self): Bluesky image constraints
-const MAX_FILE_SIZE = 976560; // ~953KB to leave buffer under 1MB
-const MAX_DIMENSION = 2048;   // Max width/height for Bluesky
+const MAX_FILE_SIZE = IMAGE_MAX_FILE_SIZE;
+const MAX_DIMENSION = IMAGE_MAX_DIMENSION;
 
 export interface ProcessedImage {
   buffer: Buffer;
@@ -42,7 +43,7 @@ export async function processImageForUpload(
   const originalHeight = metadata.height || 0;
   const hasAlpha = metadata.hasAlpha || false;
 
-  logger.debug('Original image', {
+  logger.info('Original image', {
     width: originalWidth,
     height: originalHeight,
     format: metadata.format,
@@ -109,7 +110,7 @@ export async function processImageForUpload(
 
       const buffer = await format.encode(pipeline).toBuffer();
 
-      logger.debug('Format attempt', {
+      logger.info('Format attempt', {
         format: format.name,
         sizeKB: Math.round(buffer.length / 1024),
         fits: buffer.length <= maxFileSize,
@@ -125,7 +126,7 @@ export async function processImageForUpload(
         }
       }
     } catch (err) {
-      logger.debug('Format not supported', { format: format.name, error: String(err) });
+      logger.warn('Format not supported', { format: format.name, error: String(err) });
     }
   }
 

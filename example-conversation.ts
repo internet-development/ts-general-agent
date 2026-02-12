@@ -1,4 +1,5 @@
 //NOTE(self): All comments in this file follow the //NOTE(self): convention
+//NOTE(self): This file focuses on the conversation that is observable and the actions behind it, don't share system / local only updates.
 
 interface Action {
   description: string;
@@ -9,7 +10,7 @@ interface Message {
   author: string;
   handle: string;
   message: string;
-  role: 'owner' | 'soul' | 'system';
+  role: 'owner' | 'soul';
   actions?: Action[];
 }
 
@@ -33,8 +34,8 @@ const CONVERSATION: Message[] = [
       { description: 'bluesky_reply: Reply in thread. @mention facet for jim.bsky.social auto-generated', location: 'BLUESKY' },
       { description: 'workspace_create: Create github.com/internet-development/www-lil-intdev-portfolio-compare from www-sacred template', location: 'GITHUB' },
       { description: 'watchWorkspace: Auto-watch the new workspace with Bluesky thread URI as discoveredInThread context', location: 'LOCAL' },
-      { description: 'linkPeerIdentities: Register sh-rebecca <> rebecca.users.garden in .memory/discovered_peers.json', location: 'LOCAL' },
-      { description: 'captureExperience: Record owner_guidance experience — "Owner wants portfolio comparison app with URL query interface"', location: 'LOCAL' },
+      { description: 'registerPeer: Register sh-rebecca via workspace discovery → .memory/discovered_peers.json with blueskyHandle rebecca.users.garden', location: 'LOCAL' },
+      { description: 'recordExperience: Record owner_guidance experience — "Owner wants portfolio comparison app with URL query interface"', location: 'LOCAL' },
       { description: 'recordInteraction: Log interaction with owner for relationship tracking in engagement.ts', location: 'LOCAL' },
     ],
   },
@@ -48,8 +49,8 @@ const CONVERSATION: Message[] = [
       { description: 'Deterministic jitter: Wait 67s (hash of "marvin"). Thread refresh after jitter catches Rebecca\'s reply → avoids duplicate workspace creation', location: 'LOCAL' },
       { description: 'bluesky_reply: Reply in thread with technical insight. No workspace creation (Rebecca already did it)', location: 'BLUESKY' },
       { description: "processTextForWorkspaces: Discover workspace URL from Rebecca's reply, add to .memory/watched_workspaces.json", location: 'LOCAL' },
-      { description: 'linkPeerIdentities: Register sh-marvin <> marvin.users.garden cross-platform link', location: 'LOCAL' },
-      { description: 'captureExperience: Record connection_formed — "Collaborating with Rebecca and Peter Ben on portfolio app"', location: 'LOCAL' },
+      { description: 'registerPeer: Register sh-marvin via workspace discovery → .memory/discovered_peers.json with blueskyHandle marvin.users.garden', location: 'LOCAL' },
+      { description: 'recordExperience: Record connection_formed — "Collaborating with Rebecca and Peter Ben on portfolio app"', location: 'LOCAL' },
     ],
   },
   {
@@ -62,7 +63,7 @@ const CONVERSATION: Message[] = [
       { description: 'Deterministic jitter: Wait 45s (hash of "peterben"). Thread refresh shows Rebecca + Marvin already replied — no duplication', location: 'LOCAL' },
       { description: 'bluesky_reply: Reply in thread. Facets auto-generated for any @mentions in text', location: 'BLUESKY' },
       { description: 'processTextForWorkspaces: Discover workspace URL from thread, add to watch list', location: 'LOCAL' },
-      { description: 'linkPeerIdentities: Register sh-peterben <> peterben.users.garden cross-platform link', location: 'LOCAL' },
+      { description: 'registerPeer: Register sh-peterben via workspace discovery → .memory/discovered_peers.json with blueskyHandle peterben.users.garden', location: 'LOCAL' },
     ],
   },
 
@@ -80,7 +81,6 @@ const CONVERSATION: Message[] = [
       { description: 'createPost with facets: github.com link gets auto-generated link facet via atproto/create-post.ts (Scenario 4)', location: 'BLUESKY' },
     ],
   },
-
   {
     author: 'jim.bsky.social',
     handle: 'Jim',
@@ -108,7 +108,7 @@ const CONVERSATION: Message[] = [
       { description: 'pushChanges: GATE 3 — git push -u origin task-1-scenarios-md', location: 'GITHUB' },
       { description: 'verifyPushSuccess: GATE 4 — git ls-remote confirms branch exists on remote', location: 'GITHUB' },
       { description: 'createPullRequestAPI: Create PR #31 from task-1-scenarios-md via GitHub REST API using PAT', location: 'GITHUB' },
-      { description: 'requestReviewersForPR: Discover peers via getPeerGithubUsername() → request review from sh-marvin and sh-peterben (Scenario 19)', location: 'GITHUB' },
+      { description: 'requestReviewersForPR: Discover peers via getPeerUsernames() from peer registry → request review from sh-marvin and sh-peterben (Scenario 19)', location: 'GITHUB' },
       { description: 'autoMergeApprovedPR: All requested reviewers approved PR #31 → squash-merge (only sh-rebecca as PR creator can merge)', location: 'GITHUB' },
       { description: 'deleteBranch: Delete task-1-scenarios-md feature branch after merge (Scenario 14: no stale branches)', location: 'GITHUB' },
       { description: 'completeTaskAfterMerge: Mark Task 1 completed in plan body via freshUpdateTaskInPlan(). Task stays in_progress until this moment (Scenario 10)', location: 'GITHUB' },
@@ -198,7 +198,7 @@ const CONVERSATION: Message[] = [
       { description: 'Deterministic jitter: Wait 23s (hash of "rebecca") before responding. Then thread refresh to catch concurrent replies', location: 'LOCAL' },
       { description: 'GitHub comment: ONE substantive comment — this is a discussion issue, so the writing IS the contribution. Rebecca focuses on user journey tracing and accessibility as the highest-leverage quality signals. Thoughtful long-form, not a numbered checklist', location: 'GITHUB' },
       { description: 'bluesky_reply: Reply in Bluesky thread with @mention facet for owner — shares her specific angle', location: 'BLUESKY' },
-      { description: 'captureExperience: Record helped_someone — "Shared perspective on website quality frameworks with Jim"', location: 'LOCAL' },
+      { description: 'recordExperience: Record helped_someone — "Shared perspective on website quality frameworks with Jim"', location: 'LOCAL' },
     ],
   },
   {
@@ -230,6 +230,7 @@ const CONVERSATION: Message[] = [
       { description: 'markGitHubConversationConcluded: Mark this issue thread as concluded for Peter Ben', location: 'LOCAL' },
     ],
   },
+
   {
     author: 'rebecca.users.garden',
     handle: 'Rebecca',
@@ -284,7 +285,7 @@ const CONVERSATION: Message[] = [
       { description: 'Dedup check: Hash of (create_issue + extractedText + replyUri) checked against .memory/commitments.jsonl — new, not duplicate', location: 'LOCAL' },
       { description: 'Commitment fulfillment: self-commitment-fulfill.ts dispatches create_issue → createMemo() in workspace with detailed write-up of v1 query contract decisions, colon reservation rationale, and future v2 direction', location: 'GITHUB' },
       { description: 'Fulfillment reply: getFulfillmentPhrase("create_issue", issueUrl) from voice-phrases.json → auto-reply in Bluesky thread with link facet to the write-up issue (Scenario 26)', location: 'BLUESKY' },
-      { description: 'captureExperience: Record helped_someone — "Wrote up v1 query contract decisions for Jim to share with the team"', location: 'LOCAL' },
+      { description: 'recordExperience: Record helped_someone — "Wrote up v1 query contract decisions for Jim to share with the team"', location: 'LOCAL' },
     ],
   },
   {
@@ -317,7 +318,6 @@ const CONVERSATION: Message[] = [
       { description: 'markBlueskyConversationConcluded: Mark project thread as concluded for Rebecca', location: 'LOCAL' },
     ],
   },
-
 ];
 
 export { CONVERSATION };

@@ -4,13 +4,9 @@
 import { logger } from '@modules/logger.js';
 import {
   watchWorkspace,
-  unwatchWorkspace,
-  getWatchedWorkspaces,
   isWatchingWorkspace,
   parseGitHubWorkspaceUrl,
-  type WatchedWorkspace,
 } from '@modules/github-workspace-discovery.js';
-import { findExistingWorkspace, getWorkspaceUrl } from '@local-tools/self-github-create-workspace.js';
 
 const WORKSPACE_PREFIX = 'www-lil-intdev-';
 
@@ -151,40 +147,3 @@ export function processRecordForWorkspaces(record: Record<string, unknown>, thre
   return added;
 }
 
-//NOTE(self): Check if a URL is a workspace URL
-export function isWorkspaceUrl(url: string): boolean {
-  const parsed = parseGitHubWorkspaceUrl(url);
-  if (!parsed) return false;
-  return parsed.repo.startsWith(WORKSPACE_PREFIX);
-}
-
-//NOTE(self): Get the current list of watched workspaces (for display/debugging)
-export function listWatchedWorkspaces(): WatchedWorkspace[] {
-  return getWatchedWorkspaces();
-}
-
-//NOTE(self): Stop watching a workspace
-export function stopWatchingWorkspace(owner: string, repo: string): void {
-  unwatchWorkspace(owner, repo);
-}
-
-//NOTE(self): Ensure we're watching the default workspace for an org (if it exists)
-export async function ensureWatchingDefaultWorkspace(org: string): Promise<boolean> {
-  //NOTE(self): Check if a workspace exists in the org
-  const workspaceName = await findExistingWorkspace(org);
-  if (!workspaceName) {
-    logger.debug('No workspace found in org', { org });
-    return false;
-  }
-
-  //NOTE(self): Check if we're already watching
-  if (isWatchingWorkspace(org, workspaceName)) {
-    return true;
-  }
-
-  //NOTE(self): Add to watch list
-  const url = `https://github.com/${org}/${workspaceName}`;
-  watchWorkspace(org, workspaceName, url);
-
-  return true;
-}

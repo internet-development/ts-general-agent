@@ -8,9 +8,7 @@ import { findClaudeBinary } from '@local-tools/self-improve-find-claude.js';
 import { installClaudeCode } from '@local-tools/self-improve-install.js';
 import type { ClaudeCodeResult } from '@local-tools/self-improve-types.js';
 import type { Memory } from '@modules/memory.js';
-
-const EXEC_LOG_MAX_BYTES = 50 * 1024; // 50KB
-const EXEC_LOG_KEEP_ENTRIES = 25;
+import { EXEC_LOG_MAX_BYTES, EXEC_LOG_KEEP_ENTRIES } from '@common/config.js';
 const EXEC_LOG_DELIMITER = '## Self-Improvement via Claude Code';
 
 //NOTE(self): Truncate exec-log.md if it grows too large, keeping recent entries
@@ -26,7 +24,7 @@ function boundExecLog(memory: Memory): void {
   const recentEntries = parts.slice(-EXEC_LOG_KEEP_ENTRIES);
   const truncated = header + recentEntries.map(e => EXEC_LOG_DELIMITER + e).join('');
   memory.write('exec-log.md', truncated);
-  logger.debug('Bounded exec-log.md', { entriesBefore: parts.length - 1, entriesAfter: EXEC_LOG_KEEP_ENTRIES });
+  logger.info('Bounded exec-log.md', { entriesBefore: parts.length - 1, entriesAfter: EXEC_LOG_KEEP_ENTRIES });
 }
 
 export async function runClaudeCode(
@@ -85,7 +83,7 @@ ${prefixedPrompt}
     const settings = { attribution: { commit: '', pr: '' } };
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   } catch (settingsErr) {
-    logger.debug('Failed to write .claude/settings.json (non-fatal)', { error: String(settingsErr) });
+    logger.warn('Failed to write .claude/settings.json (non-fatal)', { error: String(settingsErr) });
   }
 
   //NOTE(self): Run Claude Code with spawn for long-running tasks

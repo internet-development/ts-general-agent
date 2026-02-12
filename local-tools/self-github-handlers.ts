@@ -227,16 +227,16 @@ export async function handleGithubMergePr(call: ToolCall, onPRMergedCallback: ((
           if (deleteResult.success) {
             logger.info('Deleted feature branch after merge', { branch: headRef, pull_number });
           } else {
-            logger.debug('Branch deletion failed (non-fatal)', { branch: headRef, error: deleteResult.error });
+            logger.warn('Branch deletion failed (non-fatal)', { branch: headRef, error: deleteResult.error });
           }
         }
       }
     } catch (branchDeleteError) {
-      logger.debug('Branch cleanup error (non-fatal)', { error: String(branchDeleteError) });
+      logger.warn('Branch cleanup error (non-fatal)', { error: String(branchDeleteError) });
     }
 
     if (onPRMergedCallback) {
-      try { onPRMergedCallback(); } catch { /* non-fatal */ }
+      try { onPRMergedCallback(); } catch (e) { logger.warn('PR merged callback failed (non-fatal)', { error: String(e) }); }
     }
 
     return {

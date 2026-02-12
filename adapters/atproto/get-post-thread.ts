@@ -414,7 +414,7 @@ export async function hasAgentRepliedInThread(postUri: string): Promise<boolean>
   const session = getSession();
   if (!session) {
     //NOTE(self): No session means we can't check - fail OPEN (allow reply attempt)
-    logger.debug('No session for hasAgentRepliedInThread check', { postUri });
+    logger.info('No session for hasAgentRepliedInThread check', { postUri });
     return false;
   }
 
@@ -427,7 +427,7 @@ export async function hasAgentRepliedInThread(postUri: string): Promise<boolean>
     if (!threadResult.success) {
       //NOTE(self): Fail OPEN - better to attempt a reply than block all replies
       //NOTE(self): Bluesky will reject true duplicates anyway
-      logger.debug('Failed to fetch thread for reply check, failing open', {
+      logger.warn('Failed to fetch thread for reply check, failing open', {
         postUri,
         error: threadResult.error,
       });
@@ -446,7 +446,7 @@ export async function hasAgentRepliedInThread(postUri: string): Promise<boolean>
 
         const replyPost = reply as ThreadViewPost;
         if (replyPost.post.author.did === agentDid) {
-          logger.debug('Agent has already replied in thread', {
+          logger.info('Agent has already replied in thread', {
             postUri,
             agentReplyUri: replyPost.post.uri,
           });
@@ -458,7 +458,7 @@ export async function hasAgentRepliedInThread(postUri: string): Promise<boolean>
     return false;
   } catch (error) {
     //NOTE(self): Fail OPEN on any error
-    logger.debug('Error checking thread for agent reply, failing open', {
+    logger.warn('Error checking thread for agent reply, failing open', {
       postUri,
       error: String(error),
     });

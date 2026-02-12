@@ -12,3 +12,5 @@ export * from '@adapters/atproto/get-followers.js';
 export * from '@adapters/atproto/get-follows.js';
 export * from '@adapters/atproto/get-notifications.js';
 export * from '@adapters/atproto/get-post-thread.js';
+export * from '@adapters/atproto/delete-post.js';
+export * from '@adapters/atproto/rate-limit.js';
