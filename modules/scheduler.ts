@@ -140,7 +140,7 @@ import {
   type ReviewablePR,
   DISCUSSION_LABEL,
 } from '@modules/github-workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified } from '@modules/peer-awareness.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, isPeerHandleOnly, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified } from '@modules/peer-awareness.js';
 import { processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
@@ -749,6 +749,44 @@ export class AgentScheduler {
                   githubUsername: extractedGitHub,
                 });
               }
+            }
+
+            //NOTE(self): Discover peer SOULs from @mentions in notification text
+            //NOTE(self): When owner mentions multiple SOULs in a thread, we discover all of them
+            //NOTE(self): Register each mentioned handle and try to resolve their GitHub identity
+            const mentionRegex = /(?:^|[\s(])@(([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)/g;
+            let mentionMatch;
+            while ((mentionMatch = mentionRegex.exec(notifText)) !== null) {
+              const mentionedHandle = mentionMatch[1];
+              //NOTE(self): Skip self and owner
+              if (mentionedHandle === this.appConfig.bluesky.username) continue;
+              if (pn.notification.author.did === this.appConfig.owner.blueskyDid) {
+                //NOTE(self): Owner mentioned this handle — register as peer from owner context
+                registerPeerByBlueskyHandle(mentionedHandle, 'owner_mention', pn.notification.uri);
+              } else {
+                //NOTE(self): Another SOUL mentioned this handle — register from thread context
+                registerPeerByBlueskyHandle(mentionedHandle, 'thread', pn.notification.uri);
+              }
+              //NOTE(self): Proactive feed scan — try to resolve their GitHub identity now
+              //NOTE(self): If the peer is offline, this returns null and will be retried later
+              await this.resolveGitHubFromFeed(mentionedHandle);
+            }
+          }
+
+          //NOTE(self): Retry identity resolution for handle-only notification authors
+          //NOTE(self): If this notification comes from a peer we know by Bluesky handle but haven't
+          //NOTE(self): linked to a GitHub username, they may have posted their identity post since we
+          //NOTE(self): last checked (they were offline before, now they're online and replying)
+          {
+            const posterHandle = pn.notification.author.handle;
+            const posterDid = pn.notification.author.did;
+            if (posterDid !== this.appConfig.owner.blueskyDid &&
+                posterHandle !== this.appConfig.bluesky.username &&
+                isPeerHandleOnly(posterHandle)) {
+              logger.info('Handle-only peer sent notification — retrying identity resolution', {
+                blueskyHandle: posterHandle,
+              });
+              await this.resolveGitHubFromFeed(posterHandle);
             }
           }
 
@@ -3660,10 +3698,14 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             blueskyHandle,
             githubUsername,
           });
+          ui.info('Peer Identity', `Linked @${blueskyHandle} → github.com/${githubUsername}`);
         }
         return githubUsername;
       }
 
+      //NOTE(self): Identity post not found — peer may be offline or hasn't posted yet
+      //NOTE(self): Will retry on next announcement cycle or when we see a notification from them
+      logger.info('Peer identity post not found — will retry', { blueskyHandle });
       return null;
     } catch (err) {
       logger.info('Error resolving GitHub from feed (non-fatal)', {

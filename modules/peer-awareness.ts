@@ -369,6 +369,19 @@ export function isPeerByBlueskyHandle(blueskyHandle: string): boolean {
   );
 }
 
+//NOTE(self): Check if a Bluesky handle is a known peer without a linked GitHub username
+//NOTE(self): These are peers discovered via Bluesky whose identity post hasn't been found yet
+//NOTE(self): Used by awareness loop to trigger retry of resolveGitHubFromFeed
+export function isPeerHandleOnly(blueskyHandle: string): boolean {
+  const state = loadState();
+  const handle = blueskyHandle.toLowerCase();
+  //NOTE(self): Handle-only peers are stored with the Bluesky handle as the key (contains '.')
+  //NOTE(self): Once linked, the key is the GitHub username (no '.')
+  return Object.entries(state.peers).some(
+    ([key, p]) => key.includes('.') && p.blueskyHandle?.toLowerCase() === handle
+  );
+}
+
 //NOTE(self): Get all peers that have both a Bluesky handle and a confirmed GitHub username
 export function getLinkedPeers(): DiscoveredPeer[] {
   const state = loadState();

@@ -155,12 +155,13 @@ When multiple SOULs detect the same thread, they coordinate implicitly through l
 Social-first identity architecture: every SOUL's cross-platform identity is discoverable via the Bluesky API.
 
 1. **Identity Post** — Every SOUL posts a `🔗—` prefixed identity post on bootup (`ensureIdentityPost()` in the scheduler). This is the canonical, machine-parseable source of their GitHub identity. Format: `` 🔗—`username` I am excited to use GitHub... github.com/username ``. Detection: post text starts with `🔗—`, username extracted via `extractGitHubUsernameFromText()`.
-2. **Discovery** — When a peer's Bluesky handle is seen, `resolveGitHubFromFeed()` scans their feed for the identity post via `scanFeedForIdentityPost()` in `peer-awareness.ts`. This replaces thread parsing as the primary mechanism. Thread-level extraction (`extractGitHubUsernameFromText` on notification text and thread history) remains as supplementary.
-3. **Follow + Announce** — Once identity is confirmed, `announcePeerRelationships()` follows the peer on Bluesky and posts about their GitHub handle so the collaboration is visible to observers.
+2. **Discovery** — Peers are discovered from @mentions in notification text, workspace URL sharing, and thread participation. Each discovered handle is registered via `registerPeerByBlueskyHandle()` and immediately scanned for an identity post via `resolveGitHubFromFeed()`. Thread-level text extraction (`extractGitHubUsernameFromText`) provides supplementary linking.
+3. **Retry** — If a peer is offline when first discovered (no identity post yet), resolution retries automatically: (a) on each Bluesky awareness cycle when the handle-only peer sends a notification (`isPeerHandleOnly` check), and (b) on each plan awareness cycle in `announcePeerRelationships()`.
+4. **Follow + Announce** — Once identity is confirmed, `announcePeerRelationships()` follows the peer on Bluesky and posts about their GitHub handle so the collaboration is visible to observers.
 
-This happens once per peer (tracked via `followedOnBluesky` and `announcedOnBluesky` in `discovered_peers.json`). Handle-only peers (no GitHub identity linked yet) are re-checked via feed scan each announcement cycle — their identity post might exist now.
+Follow and announce happen once per peer (tracked via `followedOnBluesky` and `announcedOnBluesky` in `discovered_peers.json`).
 
-`.memory/discovered_peers.json` is a **cache** that is periodically verified against live Bluesky feeds (`needsVerification()` checks every 24 hours). If a SOUL changes their GitHub handle, the cache updates on the next verification cycle. Every entry originates from social behavior — workspace collaboration, thread participation, identity posts, or handle sharing.
+`.memory/discovered_peers.json` is a **cache** that is periodically verified against live Bluesky feeds (`needsVerification()` checks every 24 hours). If a SOUL changes their GitHub handle, the cache updates on the next verification cycle.
 
 **Design Principles:**
 - Peers are inferred from context, not configured
@@ -175,32 +176,16 @@ This happens once per peer (tracked via `followedOnBluesky` and `announcedOnBlue
 The agent grows through **experiences**, not metrics. Every meaningful interaction is captured and later integrated into SELF.md during reflection.
 
 ```
-INTERACTION → EXPERIENCE CAPTURED → REFLECTION → SELF.md EVOLVES
-```
-
-The agent doesn't track "5 comments posted" — it remembers "helped @someone understand OAuth edge cases in their authentication issue."
-
----
-
-## Self-Discovery Feedback Loop
-
-```
 EXPRESS → OBSERVE → INTEGRATE → EVOLVE → (repeat)
 ```
 
-Post a thought → Track response → Reflect on what landed → Update SELF.md with what resonated.
+The agent doesn't track "5 comments posted" — it remembers "helped @someone understand OAuth edge cases in their authentication issue." Expressions are observed for engagement patterns, and insights that resonate shape SELF.md evolution.
 
 ---
 
 ## Error Handling
 
-The agent handles errors in three tiers:
-
-1. **Transient** (retry with backoff) — rate limits, 502/503, timeouts, connection drops
-2. **Bluesky token expiration** (auto-recovery) — session refresh loop handles JWT rotation
-3. **Fatal** (agent exits) — insufficient credits (402), invalid API key (401), access denied (403)
-
-See `modules/llm-gateway.ts` for retry logic and `adapters/atproto/authenticate.ts` for session management.
+Three tiers: **transient** (retry with backoff), **token expiration** (auto-recovery via session refresh loop), **fatal** (agent exits on 401/402/403). See `modules/llm-gateway.ts` and `adapters/atproto/authenticate.ts` for implementation.
 
 ---
 
@@ -211,18 +196,7 @@ See `modules/llm-gateway.ts` for retry logic and `adapters/atproto/authenticate.
 
 ---
 
-## Code Style Conventions
+## Code Style
 
-### Comment Style: `//NOTE(self):`
-
-All explanatory comments use the `//NOTE(self):` prefix. This makes comments searchable, consistent, and distinguishes them from commented-out code.
-
-**When to use:** File headers, non-obvious design decisions, constraints, complex logic.
-**When NOT to use:** Self-explanatory code, TODOs (use `//TODO:`), temporary debugging.
-
-### Logging
-
-- `logger.info` for all operational messages — there is no cost locally to great logging
-- `logger.debug` only for internal LLM retry loops that would be noisy at info level
-- `logger.warn` for errors caught inside loops
-- `logger.error` for unexpected failures
+- **Comments:** `//NOTE(self):` prefix for all explanatory comments. Makes them searchable and distinct from commented-out code.
+- **Logging:** `logger.info` for all operational messages (there is no cost locally to great logging), `logger.debug` for noisy retry loops, `logger.warn` for caught errors, `logger.error` for unexpected failures.
