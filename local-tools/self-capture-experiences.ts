@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 import { isEmpty } from '@common/strings.js';
 
 const EXPERIENCES_PATH = '.memory/experiences.json';
@@ -50,7 +51,13 @@ function loadState(): ExperiencesState {
 
   try {
     if (existsSync(EXPERIENCES_PATH)) {
-      state = JSON.parse(readFileSync(EXPERIENCES_PATH, 'utf-8'));
+      const data = JSON.parse(readFileSync(EXPERIENCES_PATH, 'utf-8'));
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: EXPERIENCES_PATH });
+        state = { experiences: [], lastPruned: new Date().toISOString() };
+      } else {
+        state = { experiences: data.experiences || [], lastPruned: data.lastPruned || new Date().toISOString() };
+      }
     } else {
       state = { experiences: [], lastPruned: new Date().toISOString() };
     }
@@ -67,7 +74,7 @@ function saveState(): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(EXPERIENCES_PATH, JSON.stringify(state, null, 2));
+    writeFileSync(EXPERIENCES_PATH, JSON.stringify(stampVersion(state!), null, 2));
   } catch (err) {
     logger.error('Failed to save experiences', { error: String(err) });
   }
@@ -279,7 +286,7 @@ export function pruneOldExperiences(daysOld: number = 30): number {
   return pruned;
 }
 
-//NOTE(self): Get temporal span of all experiences for reflection context (Scenario 7)
+//NOTE(self): Get temporal span of all experiences for reflection context
 //NOTE(self): Helps the SOUL understand how long it has been running and growing
 export function getExperienceTimeSpan(): { totalExperiences: number; oldestTimestamp: string | null; newestTimestamp: string | null; daysSinceFirst: number } {
   const s = loadState();

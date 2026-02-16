@@ -85,32 +85,7 @@ Only maintain state needed for authentication/sessions. All other state belongs 
 
 ### 5. Service-Specific Types Stay Here
 
-Types that mirror the external API belong in adapters. Internal domain types belong in modules/local-tools.
-
-```typescript
-// adapters/atproto/types.ts - mirrors Bluesky API
-export interface AtprotoPost {
-  uri: string;
-  cid: string;
-  author: AtprotoAuthor;
-  record: { text: string; createdAt: string };
-}
-
-// modules/types.ts - internal domain model
-export interface ConversationState {
-  rootUri: string;
-  participants: Map<string, ParticipantInfo>;
-  concluded: boolean;
-}
-```
-
-## Testing Strategy
-
-Adapters should be tested with:
-
-1. **Unit tests** - Mock the underlying API client
-2. **Integration tests** - Hit real APIs in staging/sandbox environments
-3. **Contract tests** - Verify response shapes match expected types
+Types that mirror the external API belong in adapters. Internal domain types belong in modules/local-tools. See `adapters/*/types.ts` for examples.
 
 ## Error Handling
 
@@ -136,21 +111,7 @@ if (!response.ok) {
 }
 ```
 
-All GitHub and ATProto adapter files follow the safe pattern. The outer try-catch also catches unexpected failures:
-
-```typescript
-export async function getProfile(actor: string): Promise<ApiResult<Profile>> {
-  try {
-    const response = await agent.app.bsky.actor.getProfile({ actor });
-    return { success: true, data: response.data };
-  } catch (error) {
-    if (error instanceof RateLimitError) {
-      return { success: false, error: `Rate limited. Retry after ${error.retryAfter}s` };
-    }
-    return { success: false, error: String(error) };
-  }
-}
-```
+All GitHub and ATProto adapter files follow the safe pattern.
 
 ## Adding a New Adapter
 
@@ -159,3 +120,5 @@ export async function getProfile(actor: string): Promise<ApiResult<Profile>> {
 3. Create `client.ts` or `authenticate.ts` for connection setup
 4. Create function files (one per API endpoint or logical group)
 5. Create `index.ts` that re-exports public API
+
+See `SCENARIOS.md` for behavioral expectations that adapters must support.

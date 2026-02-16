@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 import { renderSkillSection } from '@modules/skills.js';
 
 const FRICTION_STATE_PATH = '.memory/friction.json';
@@ -72,15 +73,20 @@ function loadState(): FrictionState {
   try {
     if (existsSync(FRICTION_STATE_PATH)) {
       const data = JSON.parse(readFileSync(FRICTION_STATE_PATH, 'utf-8'));
-      frictionState = {
-        frictions: data.frictions || [],
-        improvements: data.improvements || [],
-        lastImprovementAttempt: data.lastImprovementAttempt || null,
-      };
-      logger.info('Loaded friction state', {
-        frictionCount: frictionState.frictions.length,
-        improvementCount: frictionState.improvements.length,
-      });
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: FRICTION_STATE_PATH });
+        frictionState = getDefaultState();
+      } else {
+        frictionState = {
+          frictions: data.frictions || [],
+          improvements: data.improvements || [],
+          lastImprovementAttempt: data.lastImprovementAttempt || null,
+        };
+        logger.info('Loaded friction state', {
+          frictionCount: frictionState.frictions.length,
+          improvementCount: frictionState.improvements.length,
+        });
+      }
     } else {
       frictionState = getDefaultState();
     }
@@ -98,7 +104,7 @@ function saveState(): void {
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    writeFileSync(FRICTION_STATE_PATH, JSON.stringify(state, null, 2));
+    writeFileSync(FRICTION_STATE_PATH, JSON.stringify(stampVersion(state), null, 2));
   } catch (err) {
     logger.error('Failed to save friction state', { error: String(err) });
   }

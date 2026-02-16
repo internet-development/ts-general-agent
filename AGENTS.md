@@ -55,6 +55,13 @@ Auto-generated from `## Voice` in SELF.md during reflection cycles. See `modules
 
 Functional runtime data only (not agent memory). **SELF.md is the agent's memory.** Runtime state resets on restart; learnings are integrated into SELF.md during reflection cycles.
 
+**Memory Versioning:** All `.memory/` state files are version-stamped via `common/memory-version.ts`. When the agent version (from `package.json`) changes, state files with mismatched versions are automatically reset. This prevents stale data from a previous version from corrupting the new version.
+
+- JSON files: Use `stampVersion()` on save, `checkVersion()` on load — reset to defaults on mismatch.
+- JSONL files: Use `stampJsonlVersion()` sidecar files, `resetJsonlIfVersionMismatch()` on load — delete and re-create on mismatch.
+
+**Every new state file MUST use this system.** See existing files in `modules/` and `local-tools/` for the pattern.
+
 ### `.workrepos/`
 
 External GitHub repositories cloned by the agent. For all git operations, use `AGENT_GITHUB_USERNAME` and `AGENT_GITHUB_TOKEN` from `.env`. **Never use gh CLI.**
@@ -142,6 +149,18 @@ BLUESKY: Coordinate → GITHUB: Execute → BLUESKY: Report → COMPLETION: Cons
 ### Peer Coordination (Thread Deduplication)
 
 When multiple SOULs detect the same thread, they coordinate implicitly through layered mechanisms to avoid redundant responses. See `modules/peer-awareness.ts` for dynamic peer discovery, `get-issue-thread.ts` for effective peer resolution, and the scheduler for deterministic jitter, thread refresh, and contribution-aware formatting.
+
+### Peer Announcement
+
+Social-first identity architecture: every SOUL's cross-platform identity is discoverable via the Bluesky API.
+
+1. **Identity Post** — Every SOUL posts a `🔗—` prefixed identity post on bootup (`ensureIdentityPost()` in the scheduler). This is the canonical, machine-parseable source of their GitHub identity. Format: `` 🔗—`username` I am excited to use GitHub... github.com/username ``. Detection: post text starts with `🔗—`, username extracted via `extractGitHubUsernameFromText()`.
+2. **Discovery** — When a peer's Bluesky handle is seen, `resolveGitHubFromFeed()` scans their feed for the identity post via `scanFeedForIdentityPost()` in `peer-awareness.ts`. This replaces thread parsing as the primary mechanism. Thread-level extraction (`extractGitHubUsernameFromText` on notification text and thread history) remains as supplementary.
+3. **Follow + Announce** — Once identity is confirmed, `announcePeerRelationships()` follows the peer on Bluesky and posts about their GitHub handle so the collaboration is visible to observers.
+
+This happens once per peer (tracked via `followedOnBluesky` and `announcedOnBluesky` in `discovered_peers.json`). Handle-only peers (no GitHub identity linked yet) are re-checked via feed scan each announcement cycle — their identity post might exist now.
+
+`.memory/discovered_peers.json` is a **cache** that is periodically verified against live Bluesky feeds (`needsVerification()` checks every 24 hours). If a SOUL changes their GitHub handle, the cache updates on the next verification cycle. Every entry originates from social behavior — workspace collaboration, thread participation, identity posts, or handle sharing.
 
 **Design Principles:**
 - Peers are inferred from context, not configured

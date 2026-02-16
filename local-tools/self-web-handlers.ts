@@ -3,6 +3,7 @@ import * as path from 'path';
 import { createRequire } from 'module';
 import { spawn } from 'child_process';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 import { getConfig } from '@modules/config.js';
 import { getRepoRoot } from '@modules/sandbox.js';
 import type { ToolCall, ToolResult } from '@modules/tools.js';
@@ -35,7 +36,12 @@ function loadWebImagesPosted(): Set<string> {
   try {
     if (fs.existsSync(WEB_IMAGES_POSTED_PATH)) {
       const content = fs.readFileSync(WEB_IMAGES_POSTED_PATH, 'utf8');
-      const entries: WebImagePostedEntry[] = JSON.parse(content);
+      const data = JSON.parse(content);
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: WEB_IMAGES_POSTED_PATH });
+        return new Set();
+      }
+      const entries: WebImagePostedEntry[] = data.entries || [];
       return new Set(entries.map(e => e.url));
     }
   } catch (e) {
@@ -49,7 +55,10 @@ export function recordWebImagePosted(imageUrl: string, metadata?: { pageUrl?: st
     let entries: WebImagePostedEntry[] = [];
     if (fs.existsSync(WEB_IMAGES_POSTED_PATH)) {
       const content = fs.readFileSync(WEB_IMAGES_POSTED_PATH, 'utf8');
-      entries = JSON.parse(content);
+      const data = JSON.parse(content);
+      if (checkVersion(data)) {
+        entries = data.entries || [];
+      }
     }
     entries.push({
       url: imageUrl,
@@ -57,7 +66,7 @@ export function recordWebImagePosted(imageUrl: string, metadata?: { pageUrl?: st
       pageUrl: metadata?.pageUrl,
       pageTitle: metadata?.pageTitle,
     });
-    fs.writeFileSync(WEB_IMAGES_POSTED_PATH, JSON.stringify(entries, null, 2));
+    fs.writeFileSync(WEB_IMAGES_POSTED_PATH, JSON.stringify(stampVersion({ entries }), null, 2));
   } catch (e) {
     logger.warn('Failed to record web image posted', { error: String(e) });
   }
@@ -405,7 +414,14 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
   try {
     if (fs.existsSync(postedPath)) {
       const content = fs.readFileSync(postedPath, 'utf8');
-      postedIds = JSON.parse(content);
+      const data = JSON.parse(content);
+      //NOTE(self): Version check — reset posted IDs on agent version upgrade to allow fresh catalog
+      if (checkVersion(data)) {
+        postedIds = data.ids || [];
+      } else {
+        logger.info('Memory file version mismatch, resetting', { path: postedPath });
+        postedIds = [];
+      }
     }
   } catch (e) {
     logger.warn('Failed to load arena posted IDs', { path: postedPath, error: String(e) });
@@ -622,7 +638,7 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
 
   postedIds.push(selectedBlock.id);
   try {
-    fs.writeFileSync(postedPath, JSON.stringify(postedIds, null, 2));
+    fs.writeFileSync(postedPath, JSON.stringify(stampVersion({ ids: postedIds }), null, 2));
   } catch (err) {
     logger.warn('Failed to save arena_posted.json', { error: String(err) });
   }

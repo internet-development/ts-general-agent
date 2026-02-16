@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 import { listIssues } from '@adapters/github/list-issues.js';
 import { getRepository } from '@adapters/github/get-repository.js';
 import { listPullRequests } from '@adapters/github/list-pull-requests.js';
@@ -108,13 +109,18 @@ function loadState(): WorkspaceDiscoveryState {
   try {
     if (existsSync(WATCHED_WORKSPACES_PATH)) {
       const data = JSON.parse(readFileSync(WATCHED_WORKSPACES_PATH, 'utf-8'));
-      discoveryState = {
-        workspaces: data.workspaces || {},
-        lastFullPoll: data.lastFullPoll || null,
-      };
-      logger.info('Loaded workspace discovery state', {
-        workspaceCount: Object.keys(discoveryState.workspaces).length,
-      });
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: WATCHED_WORKSPACES_PATH });
+        discoveryState = getDefaultState();
+      } else {
+        discoveryState = {
+          workspaces: data.workspaces || {},
+          lastFullPoll: data.lastFullPoll || null,
+        };
+        logger.info('Loaded workspace discovery state', {
+          workspaceCount: Object.keys(discoveryState.workspaces).length,
+        });
+      }
     } else {
       discoveryState = getDefaultState();
     }
@@ -134,7 +140,7 @@ function saveState(): void {
       mkdirSync(dir, { recursive: true });
     }
     const tmpPath = WATCHED_WORKSPACES_PATH + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify(discoveryState, null, 2));
+    writeFileSync(tmpPath, JSON.stringify(stampVersion(discoveryState), null, 2));
     renameSync(tmpPath, WATCHED_WORKSPACES_PATH);
   } catch (err) {
     logger.error('Failed to save workspace discovery state', { error: String(err) });
@@ -459,7 +465,7 @@ export async function pollWorkspacesForOpenIssues(): Promise<DiscoveredIssue[]> 
         const hasFinishedLabel = issue.labels.some(l => l.name.toLowerCase() === 'finished');
         if (hasFinishedLabel) continue;
 
-        //NOTE(self): Auto-assign unassigned issues to the issue author (Scenario 14: every issue has an assignee)
+        //NOTE(self): Auto-assign unassigned issues to the issue author (every issue needs an assignee)
         //NOTE(self): This ensures clean issue management — no orphaned unassigned issues
         if (issue.assignees.length === 0 && issue.user?.login) {
           const assignResult = await updateIssue({
@@ -625,7 +631,7 @@ export async function cleanupStaleWorkspaceIssues(): Promise<{ closed: number; f
         const hasDiscussionLabel = issue.labels.some(l => l.name.toLowerCase() === DISCUSSION_LABEL);
         if (hasDiscussionLabel) continue;
 
-        //NOTE(self): Skip finished sentinel issues — managed by sentinel lifecycle (Scenario 23)
+        //NOTE(self): Skip finished sentinel issues — managed by sentinel lifecycle
         const hasFinishedLabel = issue.labels.some(l => l.name.toLowerCase() === 'finished');
         if (hasFinishedLabel) continue;
 
@@ -716,7 +722,7 @@ export async function closeHandledWorkspaceIssues(): Promise<{ closed: number; f
         const hasDiscussionLabel = issue.labels.some(l => l.name.toLowerCase() === DISCUSSION_LABEL);
         if (hasDiscussionLabel) continue;
 
-        //NOTE(self): Skip finished sentinel issues — managed by sentinel lifecycle (Scenario 23)
+        //NOTE(self): Skip finished sentinel issues — managed by sentinel lifecycle
         const hasFinishedLabel = issue.labels.some(l => l.name.toLowerCase() === 'finished');
         if (hasFinishedLabel) continue;
 

@@ -7,6 +7,7 @@ import type { AtprotoNotification } from '@adapters/atproto/types.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 
 
 //NOTE(self): Types
@@ -106,6 +107,10 @@ function loadRelationshipsFromDisk(): Record<string, RelationshipRecord> {
   try {
     if (existsSync(RELATIONSHIPS_PATH)) {
       const data = JSON.parse(readFileSync(RELATIONSHIPS_PATH, 'utf-8'));
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: RELATIONSHIPS_PATH });
+        return {};
+      }
       logger.info('Loaded relationships', { count: Object.keys(data.relationships || {}).length });
       return data.relationships || {};
     }
@@ -123,10 +128,10 @@ function saveRelationshipsToDisk(relationships: Record<string, RelationshipRecor
       mkdirSync(dir, { recursive: true });
     }
     const tmpPath = RELATIONSHIPS_PATH + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify({
+    writeFileSync(tmpPath, JSON.stringify(stampVersion({
       relationships,
       lastUpdated: new Date().toISOString()
-    }, null, 2));
+    }), null, 2));
     renameSync(tmpPath, RELATIONSHIPS_PATH);
   } catch (err) {
     logger.error('Failed to save relationships', { error: String(err) });

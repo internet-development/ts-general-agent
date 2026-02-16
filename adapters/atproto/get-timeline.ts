@@ -7,6 +7,7 @@ const BSKY_SERVICE = 'https://bsky.social';
 export interface GetTimelineParams {
   limit?: number;
   cursor?: string;
+  filter?: string; // e.g. 'posts_no_replies', 'posts_with_media'
 }
 
 export interface GetTimelineResponse {
@@ -61,6 +62,7 @@ export async function getAuthorFeed(
     searchParams.set('actor', actor);
     if (params.limit) searchParams.set('limit', String(params.limit));
     if (params.cursor) searchParams.set('cursor', params.cursor);
+    if (params.filter) searchParams.set('filter', params.filter);
 
     const url = `${BSKY_SERVICE}/xrpc/app.bsky.feed.getAuthorFeed?${searchParams}`;
     const response = await blueskyFetch(url, { headers });

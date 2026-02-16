@@ -161,7 +161,7 @@ export async function handlePlanComplete(
     logger.warn('Failed to post plan completion comment', { error: completionResult.error });
   }
 
-  //NOTE(self): Post quality loop review checklist (Scenario 10 enforcement)
+  //NOTE(self): Post quality loop review checklist
   //NOTE(self): Must stay in sync with executor.ts plan_execute_task handler (lines 2332-2345)
   const qualityLoopResult = await createIssueComment({
     owner,

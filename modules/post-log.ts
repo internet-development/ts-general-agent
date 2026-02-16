@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '@modules/logger.js';
+import { resetJsonlIfVersionMismatch, stampJsonlVersion } from '@common/memory-version.js';
 
 const POST_LOG_PATH = '.memory/post_log.jsonl';
 
@@ -95,8 +96,12 @@ function ensureLogDir(): boolean {
 export function logPost(entry: PostLogEntry): boolean {
   try {
     ensureLogDir();
+    if (resetJsonlIfVersionMismatch(POST_LOG_PATH)) {
+      logger.info('Memory file version mismatch, resetting', { path: POST_LOG_PATH });
+    }
     const line = JSON.stringify(entry) + '\n';
     fs.appendFileSync(POST_LOG_PATH, line, 'utf8');
+    stampJsonlVersion(POST_LOG_PATH);
     logger.info('Logged post to post_log.jsonl', {
       bsky_url: entry.bluesky.bsky_url,
       source_type: entry.source.type,
@@ -347,6 +352,7 @@ export function markPostNeedsAttributionFollowup(
 
     if (found) {
       fs.writeFileSync(POST_LOG_PATH, updatedLines.join('\n') + '\n', 'utf8');
+      stampJsonlVersion(POST_LOG_PATH);
       logger.info('Updated attribution followup flag', { post_uri, needs_followup });
     }
 
@@ -397,6 +403,7 @@ export function updatePostAttribution(
 
     if (found) {
       fs.writeFileSync(POST_LOG_PATH, updatedLines.join('\n') + '\n', 'utf8');
+      stampJsonlVersion(POST_LOG_PATH);
       logger.info('Updated post attribution', { post_uri, original_url });
     }
 

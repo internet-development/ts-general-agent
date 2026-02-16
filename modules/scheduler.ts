@@ -140,7 +140,7 @@ import {
   type ReviewablePR,
   DISCUSSION_LABEL,
 } from '@modules/github-workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer } from '@modules/peer-awareness.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified } from '@modules/peer-awareness.js';
 import { processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
@@ -166,7 +166,7 @@ import {
 import { extractCommitments, type ReplyForExtraction } from '@local-tools/self-commitment-extract.js';
 import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
 import { announceIfWorthy } from '@local-tools/self-announcement.js';
-import { createRequire } from 'module';
+import { MEMORY_VERSION } from '@common/memory-version.js';
 import {
   AWARENESS_INTERVAL_MS,
   GITHUB_AWARENESS_INTERVAL_MS,
@@ -190,9 +190,8 @@ import {
   IMPROVEMENT_BURN_IN_MS,
 } from '@common/config.js';
 
-//NOTE(self): Read local version from package.json for version check loop
-const _require = createRequire(import.meta.url);
-const LOCAL_VERSION: string = _require('../package.json').version || '0.0.0';
+//NOTE(self): Agent version — shared constant from common/memory-version.ts
+const LOCAL_VERSION = MEMORY_VERSION;
 
 //NOTE(self): Remote package.json URL for version checking
 const REMOTE_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/internet-development/ts-general-agent/main/package.json';
@@ -392,6 +391,9 @@ export class AgentScheduler {
       ui.error('Failed to establish session');
       return;
     }
+
+    //NOTE(self): Check own feed for identity post; create one if missing
+    await this.ensureIdentityPost();
 
     //NOTE(self): Initialize expression schedule if needed
     const expressionSchedule = loadExpressionSchedule();
@@ -690,7 +692,7 @@ export class AgentScheduler {
       });
 
       if (needsResponse.length > 0) {
-        //NOTE(self): Show detailed notification info so terminal is readable (Scenario 11)
+        //NOTE(self): Show detailed notification info so terminal is readable
         const notifDetails = needsResponse.map(pn => `${pn.notification.reason} from @${pn.notification.author.handle}`).join(', ');
         ui.stopSpinner(`${needsResponse.length} notification${needsResponse.length === 1 ? '' : 's'} found`);
         ui.info('Notifications', notifDetails);
@@ -721,6 +723,32 @@ export class AgentScheduler {
                 posterHandle !== this.appConfig.bluesky.username) {
               registerPeerByBlueskyHandle(posterHandle, 'workspace', pn.notification.uri);
               logger.info('Registered Bluesky peer from workspace URL', { posterHandle });
+
+              //NOTE(self): Proactive feed scan — try to resolve their GitHub identity immediately
+              //NOTE(self): This replaces waiting for them to share in a thread
+              await this.resolveGitHubFromFeed(posterHandle);
+            }
+          }
+
+          //NOTE(self): Scan notification text for GitHub handles
+          //NOTE(self): Peers share handles like "`sh-rebecca` on GitHub" or "github.com/sh-rebecca"
+          //NOTE(self): Extract and link to their Bluesky identity for the announcement pipeline
+          const notifRecord = pn.notification.record as { text?: string };
+          const notifText = notifRecord?.text || '';
+          if (notifText) {
+            const extractedGitHub = extractGitHubUsernameFromText(notifText);
+            const notifPosterHandle = pn.notification.author.handle;
+            const notifPosterDid = pn.notification.author.did;
+            if (extractedGitHub &&
+                notifPosterDid !== this.appConfig.owner.blueskyDid &&
+                notifPosterHandle !== this.appConfig.bluesky.username) {
+              const linked = linkBlueskyHandleToGitHub(notifPosterHandle, extractedGitHub);
+              if (linked) {
+                logger.info('Extracted GitHub handle from Bluesky message', {
+                  blueskyHandle: notifPosterHandle,
+                  githubUsername: extractedGitHub,
+                });
+              }
             }
           }
 
@@ -1300,6 +1328,12 @@ export class AgentScheduler {
         return true;
       });
 
+      //NOTE(self): Show how many were filtered and why so the terminal observer understands decisions
+      const filteredCount = this.state.pendingNotifications.length - worthResponding.length;
+      if (filteredCount > 0) {
+        ui.info('Filtered', `${filteredCount} notification${filteredCount === 1 ? '' : 's'} skipped (low-value, concluded, or already covered)`);
+      }
+
       if (worthResponding.length === 0) {
         ui.stopSpinner('Nothing worth responding to');
         this.state.pendingNotifications = [];
@@ -1452,6 +1486,50 @@ export class AgentScheduler {
               }
             }
 
+            //NOTE(self): Scan thread history for GitHub handles shared by other participants
+            //NOTE(self): Catches identities shared while this SOUL was offline
+            if (ta.conversationHistory) {
+              const historyLines = ta.conversationHistory.split('\n');
+              for (const line of historyLines) {
+                //NOTE(self): Skip our own lines (prefixed with **[YOU]**)
+                if (line.startsWith('**[YOU]**')) continue;
+
+                //NOTE(self): Extract author handle from line format: @handle: message
+                const authorMatch = line.match(/^@([a-zA-Z0-9._-]+):\s/);
+                if (!authorMatch) continue;
+
+                const lineAuthorHandle = authorMatch[1];
+                const extractedGitHub = extractGitHubUsernameFromText(line);
+                if (extractedGitHub &&
+                    lineAuthorHandle !== this.appConfig.bluesky.username) {
+                  const linked = linkBlueskyHandleToGitHub(lineAuthorHandle, extractedGitHub);
+                  if (linked) {
+                    logger.info('Extracted GitHub handle from thread history', {
+                      blueskyHandle: lineAuthorHandle,
+                      githubUsername: extractedGitHub,
+                    });
+                  }
+                }
+              }
+            }
+
+            //NOTE(self): Inject handle-sharing directive for project threads
+            //NOTE(self): If this SOUL hasn't shared its GitHub handle in this thread yet,
+            //NOTE(self): remind it to do so (SKILL.md rule 6)
+            if (isProjectThread && ta.conversationHistory) {
+              const ownGitHubUsername = this.appConfig.github.username;
+              const ownLines = ta.conversationHistory.split('\n').filter(l => l.startsWith('**[YOU]**'));
+              const alreadyShared = ownLines.some(l =>
+                l.includes(`\`${ownGitHubUsername}\``) ||
+                l.toLowerCase().includes(`github.com/${ownGitHubUsername.toLowerCase()}`) ||
+                l.toLowerCase().includes(`${ownGitHubUsername.toLowerCase()} on github`)
+              );
+              if (!alreadyShared) {
+                threadContext += `\n\n  📋 **SHARE YOUR GITHUB HANDLE** — You haven't shared your GitHub identity in this project thread yet.`;
+                threadContext += `\n  Include "\`${ownGitHubUsername}\` on GitHub" in your reply so peers can assign you to PRs and issues.`;
+              }
+            }
+
             //NOTE(self): Check for peer SOULs in this thread
             const peerHandles = getPeerBlueskyHandles();
             if (peerHandles.length > 0) {
@@ -1471,7 +1549,7 @@ export class AgentScheduler {
         }
 
         //NOTE(self): Extract full GitHub URLs from facets (not truncated text)
-        //NOTE(self): Scenario 12: when someone shares a GitHub URL on Bluesky, the LLM needs
+        //NOTE(self): When someone shares a GitHub URL on Bluesky, the LLM needs
         //NOTE(self): the exact URL to reference it in the reply — record.text may be truncated
         const githubUrls = extractGitHubUrlsFromRecord(n.record);
         const urlContext = githubUrls.length > 0
@@ -1649,7 +1727,7 @@ export class AgentScheduler {
         }
       }
 
-      //NOTE(self): Show response summary so terminal is detailed (Scenario 11)
+      //NOTE(self): Show response summary so terminal is detailed
       const repliesSent = collectedReplies.length;
       const actionsExecuted = executedActionTools.size;
       const summaryParts: string[] = [];
@@ -1877,7 +1955,8 @@ export class AgentScheduler {
 
           //NOTE(self): If invitation is weak or missing, ask for a revision
           if (!invitationCheck.hasInvitation || invitationCheck.confidence === 'weak') {
-            logger.debug('Invitation check failed, requesting revision', {
+            ui.updateSpinner('Revising post — adding stronger invitation');
+            logger.info('Invitation check failed, requesting revision', {
               hasInvitation: invitationCheck.hasInvitation,
               confidence: invitationCheck.confidence,
               suggestion: invitationCheck.suggestion,
@@ -1988,7 +2067,7 @@ Revise and post again.`;
                   ? `Shared design inspiration about ${source} — what drew you to this?`
                   : `Posted about ${source} - how did it feel to express this?`);
                 ui.stopSpinner(isDesign ? 'Design inspiration shared' : 'Thought shared');
-                //NOTE(self): Show the posted text so the terminal is detailed (Scenario 11)
+                //NOTE(self): Show the posted text so the terminal is detailed
                 if (postText) {
                   ui.printResponse(postText);
                 }
@@ -2128,6 +2207,19 @@ Revise and post again.`;
       const frictionStats = getFrictionStats();
       const reflectionState = getReflectionState();
 
+      //NOTE(self): Show what we're reflecting on so the terminal observer understands the cycle
+      const expCount = experienceData.experiences.length;
+      const insightCount = getInsights().length;
+      logger.info('Reflection cycle starting', {
+        experiences: expCount,
+        insights: insightCount,
+        frictionUnresolved: frictionStats.unresolved,
+        lastReflectedSelfUpdated: reflectionState.lastSelfUpdate ? new Date(reflectionState.lastSelfUpdate).toISOString() : 'never',
+      });
+      if (expCount > 0) {
+        ui.updateSpinner(`Reflecting on ${expCount} experience${expCount === 1 ? '' : 's'}`);
+      }
+
       //NOTE(self): Periodic housekeeping — prune old state to prevent unbounded growth
       if (Math.random() < 0.1) {
         pruneOldExperiences(30);
@@ -2138,7 +2230,7 @@ Revise and post again.`;
 
       const systemPrompt = buildSystemPrompt(soul, fullSelf, 'AGENT-DEEP-REFLECTION');
 
-      //NOTE(self): Add temporal context so the SOUL can reflect on change over time (Scenario 7)
+      //NOTE(self): Add temporal context so the SOUL can reflect on change over time
       const timeSpan = getExperienceTimeSpan();
       let temporalContext = '';
       if (timeSpan.daysSinceFirst > 0) {
@@ -2224,7 +2316,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       ui.stopSpinner('Reflection complete');
 
-      //NOTE(self): Show the full reflection text in a readable box (Scenario 11)
+      //NOTE(self): Show the full reflection text in a readable box
       if (response.text) {
         ui.printResponse(response.text);
       }
@@ -2555,10 +2647,21 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       }
 
       //NOTE(self): Update expressions with real engagement data
+      let totalLikes = 0;
+      let totalReplies = 0;
+      let totalReposts = 0;
+      let postsWithEngagement = 0;
+
       for (const expression of needsCheck) {
         const engagement = engagementMap.get(expression.postUri);
         if (engagement) {
           updateExpressionEngagement(expression.postUri, engagement);
+          totalLikes += engagement.likes;
+          totalReplies += engagement.replies;
+          totalReposts += engagement.reposts;
+          if (engagement.likes > 0 || engagement.replies > 0 || engagement.reposts > 0) {
+            postsWithEngagement++;
+          }
 
           //NOTE(self): Generate insights for high-engagement posts
           if (engagement.replies >= 1) {
@@ -2578,7 +2681,13 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           updateExpressionEngagement(expression.postUri, { likes: 0, replies: 0, reposts: 0 });
         }
       }
+
+      //NOTE(self): Show engagement summary so terminal observer can see how posts are landing
+      const engSummary = `${needsCheck.length} post${needsCheck.length === 1 ? '' : 's'} checked · ${totalLikes} like${totalLikes === 1 ? '' : 's'} · ${totalReplies} repl${totalReplies === 1 ? 'y' : 'ies'} · ${totalReposts} repost${totalReposts === 1 ? '' : 's'}`;
       ui.stopSpinner('Engagement check complete');
+      if (postsWithEngagement > 0) {
+        ui.info('Engagement', engSummary);
+      }
     } catch (error) {
       logger.warn('Engagement check error', { error: String(error) });
       ui.stopSpinner('Engagement check error', false);
@@ -3443,6 +3552,12 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         }
       }
 
+      //NOTE(self): Announce peer relationships on Bluesky — follow peers and post about their GitHub handle
+      //NOTE(self): Only runs when idle (don't block task execution)
+      if (this.state.currentMode === 'idle') {
+        await this.announcePeerRelationships();
+      }
+
       //NOTE(self): Close workspace issues that the agent already handled (one-shot trap fix)
       //NOTE(self): After a SOUL responds to a workspace issue, the consecutive reply check
       //NOTE(self): prevents re-engagement — so the issue stays open forever. This auto-closes
@@ -3477,6 +3592,209 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     } catch (error) {
       logger.error('Plan awareness check error', { error: String(error) });
       ui.stopSpinner('Workspace check error', false);
+    }
+  }
+
+  //NOTE(self): Ensure our own identity post exists on Bluesky
+  //NOTE(self): Every SOUL posts a 🔗— prefixed identity post linking Bluesky handle to GitHub profile
+  //NOTE(self): This is the canonical source of cross-platform identity — other SOULs discover it via feed scan
+  private async ensureIdentityPost(): Promise<void> {
+    try {
+      const session = getSession();
+      if (!session) return;
+
+      const githubUsername = this.appConfig.github.username;
+      if (!githubUsername) return;
+
+      const feedResult = await getAuthorFeed(session.did, { limit: 50, filter: 'posts_no_replies' });
+      if (!feedResult.success) {
+        logger.warn('Could not check own feed for identity post', { error: feedResult.error });
+        return;
+      }
+
+      const existingIdentity = scanFeedForIdentityPost(feedResult.data.feed);
+      if (existingIdentity) {
+        logger.info('Identity post found', { githubUsername: existingIdentity });
+        return;
+      }
+
+      //NOTE(self): No identity post found — create one
+      const postText = buildIdentityPostText(githubUsername);
+      const postToolCall: ToolCall = {
+        id: `identity-post-${Date.now()}`,
+        name: 'bluesky_post',
+        input: { text: postText },
+      };
+
+      const results = await executeTools([postToolCall]);
+      if (results[0] && !results[0].is_error) {
+        logger.info('Identity post created', { githubUsername });
+        ui.info('Identity', `Posted identity link: ${githubUsername}`);
+      } else {
+        logger.warn('Failed to create identity post', { error: results[0]?.content });
+      }
+    } catch (err) {
+      logger.warn('Error ensuring identity post (non-fatal)', { error: String(err) });
+    }
+  }
+
+  //NOTE(self): Resolve a peer's GitHub identity by scanning their Bluesky feed for an identity post
+  //NOTE(self): Returns the GitHub username if found, null otherwise
+  private async resolveGitHubFromFeed(blueskyHandle: string): Promise<string | null> {
+    try {
+      const feedResult = await getAuthorFeed(blueskyHandle, { limit: 50, filter: 'posts_no_replies' });
+      if (!feedResult.success) {
+        logger.info('Could not fetch peer feed for identity resolution', {
+          blueskyHandle,
+          error: feedResult.error,
+        });
+        return null;
+      }
+
+      const githubUsername = scanFeedForIdentityPost(feedResult.data.feed);
+      if (githubUsername) {
+        const linked = linkBlueskyHandleToGitHub(blueskyHandle, githubUsername);
+        markPeerVerified(githubUsername);
+        if (linked) {
+          logger.info('Resolved GitHub identity from Bluesky feed', {
+            blueskyHandle,
+            githubUsername,
+          });
+        }
+        return githubUsername;
+      }
+
+      return null;
+    } catch (err) {
+      logger.info('Error resolving GitHub from feed (non-fatal)', {
+        blueskyHandle,
+        error: String(err),
+      });
+      return null;
+    }
+  }
+
+  //NOTE(self): Announce peer relationships on Bluesky
+  //NOTE(self): When we discover a peer with both a Bluesky handle and GitHub username,
+  //NOTE(self): follow them on Bluesky and post about the collaboration
+  //NOTE(self): This makes the relationship visible to observers and
+  //NOTE(self): links cross-platform identities so people know who's working together
+  private async announcePeerRelationships(): Promise<void> {
+    try {
+      //NOTE(self): Log pipeline state at start of cycle
+      const summaryBefore = getPeerAnnouncementSummary();
+      if (summaryBefore.total > 0) {
+        logger.info('Peer announcement pipeline state', {
+          total: summaryBefore.total,
+          withGitHub: summaryBefore.withGitHub,
+          handleOnly: summaryBefore.handleOnly,
+          unfollowed: summaryBefore.unfollowed,
+          unannounced: summaryBefore.unannounced,
+        });
+        //NOTE(self): Attempt feed-based resolution for handle-only peers
+        //NOTE(self): Their identity post might exist now — scan before giving up
+        if (summaryBefore.handleOnly > 0) {
+          const handleOnlyPeers = summaryBefore.peers.filter(p => !p.hasGitHub && p.hasBluesky);
+          logger.info('Handle-only peers — attempting feed-based identity resolution', {
+            peers: handleOnlyPeers.map(p => p.key),
+          });
+          for (const hop of handleOnlyPeers) {
+            await this.resolveGitHubFromFeed(hop.key);
+          }
+        }
+
+        //NOTE(self): Re-verify peers whose identity is stale (>24h since last check)
+        //NOTE(self): Catches GitHub handle changes by re-scanning their Bluesky feed
+        const linkedPeers = getLinkedPeers();
+        for (const peer of linkedPeers) {
+          if (peer.blueskyHandle && needsVerification(peer.githubUsername)) {
+            await this.resolveGitHubFromFeed(peer.blueskyHandle);
+          }
+        }
+      }
+
+      //NOTE(self): Step 1: Follow unfollowed peers on Bluesky
+      const unfollowed = getUnfollowedPeers();
+      for (const peer of unfollowed) {
+        try {
+          //NOTE(self): Resolve their DID from their Bluesky handle
+          const profileResult = await atproto.getProfile(peer.blueskyHandle!);
+          if (!profileResult.success) {
+            logger.warn('Could not resolve peer Bluesky profile for follow', {
+              blueskyHandle: peer.blueskyHandle,
+              error: profileResult.error,
+            });
+            continue;
+          }
+
+          //NOTE(self): Follow them
+          const followResult = await atproto.followUser({ did: profileResult.data.did });
+          if (followResult.success) {
+            markPeerFollowed(peer.githubUsername);
+            logger.info('Followed peer on Bluesky', {
+              githubUsername: peer.githubUsername,
+              blueskyHandle: peer.blueskyHandle,
+            });
+          } else {
+            logger.warn('Failed to follow peer on Bluesky', {
+              blueskyHandle: peer.blueskyHandle,
+              error: followResult.error,
+            });
+          }
+        } catch (err) {
+          logger.warn('Error following peer on Bluesky (non-fatal)', {
+            blueskyHandle: peer.blueskyHandle,
+            error: String(err),
+          });
+        }
+      }
+
+      //NOTE(self): Step 2: Announce unannounced peers (post about their GitHub handle)
+      //NOTE(self): Only announce peers with confirmed GitHub usernames (not handle placeholders)
+      const unannounced = getUnannouncedPeers();
+      for (const peer of unannounced) {
+        try {
+          const postText = `Working with @${peer.blueskyHandle} (github.com/${peer.githubUsername}) — looking forward to building together.`;
+
+          const postToolCall: ToolCall = {
+            id: `peer-announce-${Date.now()}`,
+            name: 'bluesky_post',
+            input: { text: postText },
+          };
+
+          const results = await executeTools([postToolCall]);
+          if (results[0] && !results[0].is_error) {
+            markPeerAnnounced(peer.githubUsername);
+            logger.info('Announced peer relationship on Bluesky', {
+              githubUsername: peer.githubUsername,
+              blueskyHandle: peer.blueskyHandle,
+            });
+          } else {
+            logger.warn('Failed to announce peer on Bluesky', {
+              blueskyHandle: peer.blueskyHandle,
+              error: results[0]?.content,
+            });
+          }
+        } catch (err) {
+          logger.warn('Error announcing peer on Bluesky (non-fatal)', {
+            blueskyHandle: peer.blueskyHandle,
+            error: String(err),
+          });
+        }
+      }
+      //NOTE(self): Log completion summary
+      const summaryAfter = getPeerAnnouncementSummary();
+      if (unfollowed.length > 0 || unannounced.length > 0) {
+        logger.info('Peer announcement cycle complete', {
+          followed: unfollowed.length,
+          announced: unannounced.length,
+          remainingUnfollowed: summaryAfter.unfollowed,
+          remainingUnannounced: summaryAfter.unannounced,
+          remainingHandleOnly: summaryAfter.handleOnly,
+        });
+      }
+    } catch (err) {
+      logger.warn('Error in peer announcement cycle (non-fatal)', { error: String(err) });
     }
   }
 
@@ -3533,7 +3851,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           } else if (!isWorkspaceFinished(workspace.owner, workspace.repo)) {
             //NOTE(self): Health check on cooldown but workspace still has no sentinel — create one directly
             //NOTE(self): This means a previous health check ran but didn't result in a sentinel or issue
-            //NOTE(self): (Scenario 23: a workspace with zero open issues is a bug)
+            //NOTE(self): A workspace with zero open issues is a bug — needs sentinel
             logger.info('Workspace has 0 issues, 0 plans, no sentinel — creating sentinel (health check on cooldown)', {
               workspace: `${workspace.owner}/${workspace.repo}`,
             });
@@ -3794,7 +4112,7 @@ Create a plan using \`plan_create\` that synthesizes all of the above issues int
       const agentsContent = agentsResult.success ? agentsResult.data : null;
 
       //NOTE(self): If neither file exists, the workspace has nothing actionable — no docs, no issues, no plans
-      //NOTE(self): Create sentinel to prevent silent limbo (Scenario 23: zero open issues is a bug)
+      //NOTE(self): Create sentinel to prevent silent limbo (zero open issues is a bug)
       if (!readmeContent && !agentsContent) {
         logger.info('No README or agents doc found — creating finished sentinel', { workspace: workspaceKey });
         const sentinelNumber = await createFinishedSentinel(workspace.owner, workspace.repo, 'No documentation or open issues — project appears complete');
@@ -4030,59 +4348,69 @@ Do NOT create an issue for minor polish, documentation-only gaps, or subjective 
       }
 
       //NOTE(self): PRE-GATE — Verify Claude Code didn't switch branches or merge other branches
+      ui.updateSpinner('PRE-GATE: Verifying branch hygiene...');
       const branchCheck = await verifyBranch(workspaceResult.path, branchName);
       if (!branchCheck.success) {
-        ui.stopSpinner('Branch contaminated', false);
+        ui.stopSpinner('PRE-GATE FAILED: Branch contaminated', false);
         await reportTaskFailed(
           { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
           `Branch hygiene failure: ${branchCheck.error}`
         );
         return;
       }
+      logger.info('PRE-GATE passed: Branch hygiene verified', { branchName });
 
       //NOTE(self): GATE 1 — Verify Claude Code actually produced git changes
+      ui.updateSpinner('GATE 1: Verifying git changes...');
       const verification = await verifyGitChanges(workspaceResult.path);
       if (!verification.hasCommits || !verification.hasChanges) {
-        ui.stopSpinner('No changes produced', false);
+        ui.stopSpinner('GATE 1 FAILED: No changes produced', false);
         await reportTaskFailed(
           { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
           `Claude Code exited successfully but no git changes were produced. Commits: ${verification.commitCount}, Files changed: ${verification.filesChanged.length}`
         );
         return;
       }
+      logger.info('GATE 1 passed: Git changes verified', { commits: verification.commitCount, filesChanged: verification.filesChanged.length });
 
       //NOTE(self): GATE 2 — Run tests if they exist
+      ui.updateSpinner('GATE 2: Running tests...');
       const testResult = await runTestsIfPresent(workspaceResult.path);
       if (testResult.testsExist && testResult.testsRun && !testResult.testsPassed) {
-        ui.stopSpinner('Tests failed', false);
+        ui.stopSpinner('GATE 2 FAILED: Tests failed', false);
         await reportTaskFailed(
           { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
           `Tests failed after task execution.\n\n${testResult.output}`
         );
         return;
       }
+      logger.info('GATE 2 passed: Tests', { testsExist: testResult.testsExist, testsRun: testResult.testsRun, testsPassed: testResult.testsPassed });
 
       //NOTE(self): GATE 3 — Push MUST succeed (no more "continue anyway")
+      ui.updateSpinner('GATE 3: Pushing to remote...');
       const pushResult = await pushChanges(workspaceResult.path, branchName);
       if (!pushResult.success) {
-        ui.stopSpinner('Push failed', false);
+        ui.stopSpinner('GATE 3 FAILED: Push failed', false);
         await reportTaskFailed(
           { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
           `Failed to push branch '${branchName}': ${pushResult.error}`
         );
         return;
       }
+      logger.info('GATE 3 passed: Branch pushed', { branchName });
 
       //NOTE(self): GATE 4 — Verify branch actually exists on remote
+      ui.updateSpinner('GATE 4: Verifying remote branch...');
       const pushVerification = await verifyPushSuccess(workspaceResult.path, branchName);
       if (!pushVerification.success) {
-        ui.stopSpinner('Push verification failed', false);
+        ui.stopSpinner('GATE 4 FAILED: Push verification failed', false);
         await reportTaskFailed(
           { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
           `Push appeared to succeed but branch not found on remote: ${pushVerification.error}`
         );
         return;
       }
+      logger.info('GATE 4 passed: Remote branch verified', { branchName });
 
       //NOTE(self): Create PR — must succeed for task to be marked complete
       const prTitle = `task(${task.number}): ${task.title}`;
@@ -4547,6 +4875,8 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
     //NOTE(self): Process ALL pending commitments quickly — fulfill promises fast
     this.state.currentMode = 'plan_executing';
+    logger.info('Commitment fulfillment starting', { pending: pending.length, types: pending.map(c => c.type) });
+    ui.info('Commitments', `${pending.length} pending: ${pending.map(c => c.type).join(', ')}`);
 
     for (const commitment of pending) {
       ui.startSpinner(`Fulfilling commitment: ${commitment.description.slice(0, 50)}`);

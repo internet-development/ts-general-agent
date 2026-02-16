@@ -217,7 +217,7 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
     };
   },
 
-  //NOTE(self): Visual taste — developing aesthetic sense through observation (Scenario 22)
+  //NOTE(self): Visual taste — developing aesthetic sense through observation
   (e) => {
     //NOTE(self): Pull from explorations or currentFocus entries that mention visual/design themes
     const visualKeywords = /design|visual|ui|art|illustration|architecture|aesthetic|taste|typograph|interface|palette/i;
@@ -310,7 +310,7 @@ export function generateExpressionPrompt(selfContent?: string): { prompt: string
 //NOTE(self): Design inspiration prompt generator
 //NOTE(self): ~50% of expression cycles become design inspiration posts
 //NOTE(self): SOUL browses their catalog, picks an image, and shares their thoughts
-//NOTE(self): Higher weight because developing visual taste is a core identity activity (Scenario 22)
+//NOTE(self): Higher weight because developing visual taste is a core identity activity
 export function generateDesignInspirationPrompt(): { prompt: string; source: string; designSource: DesignSource } | null {
   //NOTE(self): 50% chance of design inspiration during expression cycle
   if (Math.random() > 0.50) return null;

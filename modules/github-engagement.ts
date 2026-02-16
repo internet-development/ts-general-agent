@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 
 //NOTE(self): Path to GitHub engagement state
 const GITHUB_ENGAGEMENT_PATH = '.memory/github_engagement.json';
@@ -64,14 +65,19 @@ function loadState(): GitHubEngagementState {
   try {
     if (existsSync(GITHUB_ENGAGEMENT_PATH)) {
       const data = JSON.parse(readFileSync(GITHUB_ENGAGEMENT_PATH, 'utf-8'));
-      engagementState = {
-        seenAt: data.seenAt || null,
-        conversations: data.conversations || {},
-        lastNotificationCheck: data.lastNotificationCheck || null,
-      };
-      logger.info('Loaded GitHub engagement state', {
-        conversationCount: Object.keys(engagementState.conversations).length,
-      });
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: GITHUB_ENGAGEMENT_PATH });
+        engagementState = getDefaultState();
+      } else {
+        engagementState = {
+          seenAt: data.seenAt || null,
+          conversations: data.conversations || {},
+          lastNotificationCheck: data.lastNotificationCheck || null,
+        };
+        logger.info('Loaded GitHub engagement state', {
+          conversationCount: Object.keys(engagementState.conversations).length,
+        });
+      }
     } else {
       engagementState = getDefaultState();
     }
@@ -91,7 +97,7 @@ function saveState(): void {
       mkdirSync(dir, { recursive: true });
     }
     const tmpPath = GITHUB_ENGAGEMENT_PATH + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify(engagementState, null, 2));
+    writeFileSync(tmpPath, JSON.stringify(stampVersion(engagementState), null, 2));
     renameSync(tmpPath, GITHUB_ENGAGEMENT_PATH);
   } catch (err) {
     logger.error('Failed to save GitHub engagement state', { error: String(err) });

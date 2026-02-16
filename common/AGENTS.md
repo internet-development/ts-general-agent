@@ -15,6 +15,13 @@ Common provides foundational utilities that any layer can import without creatin
 3. **Stateless** — no module-level mutable state
 4. **Barrel export** — `index.ts` re-exports everything; consumers import from `@common/index.js`
 
+## Key Utilities
+
+- **`memory-version.ts`** — Version-stamped state persistence. Every `.memory/` file uses this to auto-reset on agent version changes. See root AGENTS.md for the convention.
+- **`config.ts`** — All timing constants, thresholds, and interval values. Single source of truth for scheduler configuration.
+- **`strings.ts`** — Text utilities (truncation, grapheme-aware slicing).
+- **`image-processor.ts`** — Image resizing for Bluesky upload limits.
+
 ## Adding to Common
 
 1. Create `common/{name}.ts`

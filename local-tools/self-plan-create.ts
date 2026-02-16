@@ -100,7 +100,7 @@ export function generatePlanMarkdown(plan: PlanDefinition): string {
 }
 
 //NOTE(self): Check if docs tasks (LIL-INTDEV-AGENTS.md, SCENARIOS.md) are present in plan tasks
-//NOTE(self): For workspace repos, these are required as early tasks (Scenario 10 quality loop)
+//NOTE(self): For workspace repos, these are required as early tasks (quality loop)
 function hasDocsTasks(tasks: TaskDefinition[]): { hasAgentsMd: boolean; hasScenariosMd: boolean } {
   const hasAgentsMd = tasks.some(t =>
     t.title.toLowerCase().includes('lil-intdev-agents') ||
@@ -113,7 +113,7 @@ function hasDocsTasks(tasks: TaskDefinition[]): { hasAgentsMd: boolean; hasScena
   return { hasAgentsMd, hasScenariosMd };
 }
 
-//NOTE(self): Auto-inject documentation tasks for workspace repos if missing (Scenario 10)
+//NOTE(self): Auto-inject documentation tasks for workspace repos if missing
 //NOTE(self): The workspace-decision skill instructs the LLM to include these, but this is a safety net
 //NOTE(self): skipAgentsMd/skipScenariosMd are set when files already exist in the repo (avoid re-creating)
 function ensureDocsTasks(plan: PlanDefinition, repo: string, opts?: { skipAgentsMd?: boolean; skipScenariosMd?: boolean }): PlanDefinition {
@@ -130,7 +130,7 @@ function ensureDocsTasks(plan: PlanDefinition, repo: string, opts?: { skipAgents
       files: ['LIL-INTDEV-AGENTS.md'],
       description: 'Create the workspace documentation file. Model after AGENTS.md in the main repo but scoped to this project. Document architecture, roles, file structure, and constraints. This is written by the SOULs FOR the SOULs.',
     });
-    logger.warn('Auto-injected LIL-INTDEV-AGENTS.md task into workspace plan (Scenario 10 enforcement)', { repo });
+    logger.warn('Auto-injected LIL-INTDEV-AGENTS.md task into workspace plan (quality loop enforcement)', { repo });
   } else if (opts?.skipAgentsMd) {
     logger.info('Skipping LIL-INTDEV-AGENTS.md injection — file already exists in repo', { repo });
   }
@@ -143,7 +143,7 @@ function ensureDocsTasks(plan: PlanDefinition, repo: string, opts?: { skipAgents
       files: ['SCENARIOS.md'],
       description: 'Define acceptance criteria as concrete scenarios. Each scenario follows the pattern "A human could do X and see Y." These are used to verify the project actually works and drive the iterative quality loop.',
     });
-    logger.warn('Auto-injected SCENARIOS.md task into workspace plan (Scenario 10 enforcement)', { repo });
+    logger.warn('Auto-injected SCENARIOS.md task into workspace plan (quality loop enforcement)', { repo });
   } else if (opts?.skipScenariosMd) {
     logger.info('Skipping SCENARIOS.md injection — file already exists in repo', { repo });
   }
@@ -180,7 +180,7 @@ export async function createPlan(params: CreatePlanParams): Promise<CreatePlanRe
     }
   }
 
-  //NOTE(self): Auto-inject docs tasks for workspace repos (Scenario 10)
+  //NOTE(self): Auto-inject docs tasks for workspace repos (quality loop)
   const plan = ensureDocsTasks(params.plan, repo, { skipAgentsMd, skipScenariosMd });
 
   const body = generatePlanMarkdown(plan);

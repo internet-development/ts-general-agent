@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
+import { stampVersion, checkVersion } from '@common/memory-version.js';
 import { getSocialMechanics, PROJECT_SOCIAL_MECHANICS, type SocialMechanics } from '@local-tools/self-extract.js';
 
 //NOTE(self): Path to Bluesky conversation state
@@ -76,13 +77,18 @@ function loadState(): BlueskyConversationState {
   try {
     if (existsSync(BLUESKY_CONVERSATIONS_PATH)) {
       const data = JSON.parse(readFileSync(BLUESKY_CONVERSATIONS_PATH, 'utf-8'));
-      conversationState = {
-        conversations: data.conversations || {},
-        lastCleanup: data.lastCleanup || null,
-      };
-      logger.info('Loaded Bluesky conversation state', {
-        conversationCount: Object.keys(conversationState.conversations).length,
-      });
+      if (!checkVersion(data)) {
+        logger.info('Memory file version mismatch, resetting', { path: BLUESKY_CONVERSATIONS_PATH });
+        conversationState = getDefaultState();
+      } else {
+        conversationState = {
+          conversations: data.conversations || {},
+          lastCleanup: data.lastCleanup || null,
+        };
+        logger.info('Loaded Bluesky conversation state', {
+          conversationCount: Object.keys(conversationState.conversations).length,
+        });
+      }
     } else {
       conversationState = getDefaultState();
     }
@@ -102,7 +108,7 @@ function saveState(): void {
       mkdirSync(dir, { recursive: true });
     }
     const tmpPath = BLUESKY_CONVERSATIONS_PATH + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify(conversationState, null, 2));
+    writeFileSync(tmpPath, JSON.stringify(stampVersion(conversationState), null, 2));
     renameSync(tmpPath, BLUESKY_CONVERSATIONS_PATH);
   } catch (err) {
     logger.error('Failed to save Bluesky conversation state', { error: String(err) });

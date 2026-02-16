@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { logger } from '@modules/logger.js';
+import { resetJsonlIfVersionMismatch, stampJsonlVersion } from '@common/memory-version.js';
 import { COMMITMENT_MAX_ATTEMPTS, COMMITMENT_STALE_THRESHOLD_MS } from '@common/config.js';
 
 const QUEUE_FILE = '.memory/pending_commitments.jsonl';
@@ -71,6 +72,12 @@ function loadQueue(): Commitment[] {
 
   ensureQueueDir();
 
+  if (resetJsonlIfVersionMismatch(QUEUE_FILE)) {
+    logger.info('Memory file version mismatch, resetting', { path: QUEUE_FILE });
+    queueCache = [];
+    return queueCache;
+  }
+
   if (!fs.existsSync(QUEUE_FILE)) {
     queueCache = [];
     return queueCache;
@@ -113,6 +120,7 @@ function saveQueue(): void {
   try {
     const content = queueCache.map((c) => JSON.stringify(c)).join('\n');
     fs.writeFileSync(QUEUE_FILE, content + '\n');
+    stampJsonlVersion(QUEUE_FILE);
   } catch (err) {
     logger.error('Failed to save commitment queue', { error: String(err) });
   }
