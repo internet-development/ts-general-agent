@@ -21,6 +21,8 @@ Common provides foundational utilities that any layer can import without creatin
 - **`config.ts`** — All timing constants, thresholds, and interval values. Single source of truth for scheduler configuration.
 - **`strings.ts`** — Text utilities (truncation, grapheme-aware slicing).
 - **`image-processor.ts`** — Image resizing for Bluesky upload limits.
+- **`exec.ts`** — Shell command execution wrapper.
+- **`design-catalog.ts`** — Design inspiration sources and browse URLs for expression.
 
 ## Adding to Common
 

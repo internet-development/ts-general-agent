@@ -130,44 +130,17 @@ After major milestones, SOULs re-read both docs, simulate scenarios against the 
 
 ## Multi-SOUL Collaborative Development
 
-Multiple independent SOUL agents collaborate through Bluesky discussions and structured plan execution.
-
 **Key Constraint:** SOULs are completely separate processes. They can ONLY see each other through Bluesky posts/mentions/replies and GitHub issues/comments/PRs. No shared memory, no IPC.
 
-**The Project Collaboration Lifecycle:**
+See `SCENARIOS.md` Scenario 3 for the full collaboration lifecycle. See `example-conversation.ts` for a detailed Bluesky-to-GitHub workstream with every background action annotated.
 
-```
-BLUESKY: Coordinate → GITHUB: Execute → BLUESKY: Report → COMPLETION: Consensus
-```
+### Peer Coordination
 
-1. Owner or SOUL proposes project on Bluesky, @mentions peers
-2. SOULs create plans, claim tasks, write code, create PRs, review each other's work
-3. SOULs share finished artifacts back on Bluesky
-4. Project is done when all SOULs agree the original ask is met (sentinel issue)
-5. New issues or Bluesky asks reopen the loop
+When multiple SOULs detect the same thread, they coordinate implicitly through deterministic jitter, thread refresh, and contribution-aware formatting. See `modules/peer-awareness.ts` for discovery and identity linking, `get-issue-thread.ts` for effective peer resolution.
 
-### Peer Coordination (Thread Deduplication)
+### Peer Identity
 
-When multiple SOULs detect the same thread, they coordinate implicitly through layered mechanisms to avoid redundant responses. See `modules/peer-awareness.ts` for dynamic peer discovery, `get-issue-thread.ts` for effective peer resolution, and the scheduler for deterministic jitter, thread refresh, and contribution-aware formatting.
-
-### Peer Announcement
-
-Social-first identity architecture: every SOUL's cross-platform identity is discoverable via the Bluesky API.
-
-1. **Identity Post** — Every SOUL posts a `🔗—` prefixed identity post on bootup (`ensureIdentityPost()` in the scheduler). This is the canonical, machine-parseable source of their GitHub identity. Format: `` 🔗—`username` I am excited to use GitHub... github.com/username ``. Detection: post text starts with `🔗—`, username extracted via `extractGitHubUsernameFromText()`.
-2. **Discovery** — Peers are discovered from @mentions in notification text, workspace URL sharing, and thread participation. Each discovered handle is registered via `registerPeerByBlueskyHandle()` and immediately scanned for an identity post via `resolveGitHubFromFeed()`. Thread-level text extraction (`extractGitHubUsernameFromText`) provides supplementary linking.
-3. **Retry** — If a peer is offline when first discovered (no identity post yet), resolution retries automatically: (a) on each Bluesky awareness cycle when the handle-only peer sends a notification (`isPeerHandleOnly` check), and (b) on each plan awareness cycle in `announcePeerRelationships()`.
-4. **Follow + Announce** — Once identity is confirmed, `announcePeerRelationships()` follows the peer on Bluesky and posts about their GitHub handle so the collaboration is visible to observers.
-
-Follow and announce happen once per peer (tracked via `followedOnBluesky` and `announcedOnBluesky` in `discovered_peers.json`).
-
-`.memory/discovered_peers.json` is a **cache** that is periodically verified against live Bluesky feeds (`needsVerification()` checks every 24 hours). If a SOUL changes their GitHub handle, the cache updates on the next verification cycle.
-
-**Design Principles:**
-- Peers are inferred from context, not configured
-- SOULs remain fully autonomous
-- No shared state or inter-process communication
-- Issue author is the only human signal on foreign codebases
+Every SOUL's cross-platform identity is discoverable via the Bluesky API through `🔗—` prefixed identity posts. See `modules/peer-awareness.ts` for the full identity lifecycle: discovery → feed scan → retry if offline → follow → announce once. See `SCENARIOS.md` Scenario 1 paragraph 3 for the observable behavior.
 
 ---
 
