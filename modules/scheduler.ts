@@ -167,6 +167,7 @@ import { extractCommitments, type ReplyForExtraction } from '@local-tools/self-c
 import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
 import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { MEMORY_VERSION } from '@common/memory-version.js';
+import { ensureHttps } from '@common/strings.js';
 import {
   AWARENESS_INTERVAL_MS,
   GITHUB_AWARENESS_INTERVAL_MS,
@@ -3796,7 +3797,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       const unannounced = getUnannouncedPeers();
       for (const peer of unannounced) {
         try {
-          const postText = `Working with @${peer.blueskyHandle} (github.com/${peer.githubUsername}) — looking forward to building together.`;
+          const postText = `Working with @${peer.blueskyHandle} (${ensureHttps(`github.com/${peer.githubUsername}`)}) — looking forward to building together.`;
 
           const postToolCall: ToolCall = {
             id: `peer-announce-${Date.now()}`,

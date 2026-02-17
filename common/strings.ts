@@ -51,6 +51,13 @@ export function createSlug(text: any): string {
     .replace(/-+$/, '');
 }
 
+//NOTE(self): Ensure a URL has a protocol prefix so Bluesky creates a clickable link facet
+//NOTE(self): Bare "github.com/..." becomes "https://github.com/..." — use this when building post text
+export function ensureHttps(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
+}
+
 //NOTE(self): Truncate text to a grapheme limit, preserving whole grapheme clusters
 //NOTE(self): Used wherever text may flow to Bluesky (300 grapheme limit) or similar services
 export function truncateGraphemes(text: string, maxGraphemes: number = PORTABLE_MAX_GRAPHEMES): string {

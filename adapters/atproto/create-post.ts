@@ -122,20 +122,41 @@ async function resolveHandleToDid(handle: string): Promise<string | null> {
 }
 
 //NOTE(self): Detect URLs in text and create link facets
-//NOTE(self): Strips trailing punctuation (.,:;!?) that isn't part of the URL
+//NOTE(self): Handles both protocol URLs (https://...) and bare domain URLs (github.com/...)
+//NOTE(self): Bare URLs get https:// prepended in the facet URI so they're clickable
 function detectUrls(text: string): { url: string; start: number; end: number }[] {
-  const urlRegex = /https?:\/\/[^\s<>"\]]+/g;
   const matches: { url: string; start: number; end: number }[] = [];
+  const claimed = new Set<number>();
 
+  //NOTE(self): Pass 1: Protocol URLs (https://... or http://...)
+  const protocolRegex = /https?:\/\/[^\s<>"\]]+/g;
   let match;
-  while ((match = urlRegex.exec(text)) !== null) {
+  while ((match = protocolRegex.exec(text)) !== null) {
     let url = match[0];
     //NOTE(self): Strip trailing punctuation that's almost certainly sentence-ending, not part of URL
     url = url.replace(/[.,;:!?)]+$/, '');
+    for (let i = match.index; i < match.index + url.length; i++) claimed.add(i);
     matches.push({
       url,
       start: match.index,
       end: match.index + url.length,
+    });
+  }
+
+  //NOTE(self): Pass 2: Bare domain URLs (e.g. github.com/username)
+  //NOTE(self): Only match well-known domains to avoid false positives
+  const bareRegex = /(^|[\s(])((?:github\.com|gitlab\.com|bitbucket\.org|npmjs\.com|crates\.io|pypi\.org)\/[^\s<>"\])]+)/g;
+  while ((match = bareRegex.exec(text)) !== null) {
+    const prefix = match[1];
+    let bare = match[2];
+    bare = bare.replace(/[.,;:!?)]+$/, '');
+    const start = match.index + prefix.length;
+    //NOTE(self): Skip if this range was already claimed by a protocol URL
+    if (claimed.has(start)) continue;
+    matches.push({
+      url: `https://${bare}`,
+      start,
+      end: start + bare.length,
     });
   }
 

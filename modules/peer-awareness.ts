@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from '
 import { dirname } from 'path';
 import { logger } from '@modules/logger.js';
 import { stampVersion, checkVersion } from '@common/memory-version.js';
+import { ensureHttps } from '@common/strings.js';
 import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
 
 //NOTE(self): Path to discovered peers state
@@ -132,7 +133,7 @@ export const IDENTITY_POST_MARKER = '🔗—';
 
 //NOTE(self): Build the text for an identity post
 export function buildIdentityPostText(githubUsername: string): string {
-  return `🔗—\`${githubUsername}\` I am excited to use GitHub to work on projects with my friends! github.com/${githubUsername}`;
+  return `🔗—\`${githubUsername}\` I am excited to use GitHub to work on projects with my friends! ${ensureHttps(`github.com/${githubUsername}`)}`;
 }
 
 //NOTE(self): Scan a Bluesky feed for an identity post

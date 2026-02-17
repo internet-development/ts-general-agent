@@ -9,6 +9,7 @@ import type { ToolCall, ToolResult } from '@modules/tools.js';
 import { markInteractionResponded, recordOriginalPost } from '@modules/engagement.js';
 import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
 import { ui } from '@modules/ui.js';
+import { outboundQueue } from '@modules/outbound-queue.js';
 import {
   logPost,
   type PostLogEntry,
@@ -26,6 +27,11 @@ export async function handleBlueskyPost(call: ToolCall, config: any): Promise<To
       is_error: true,
     };
   }
+  const queueCheck = await outboundQueue.enqueue('post', text);
+  if (!queueCheck.allowed) {
+    return { tool_use_id: call.id, content: `Blocked: ${queueCheck.reason}`, is_error: true };
+  }
+
   const result = await atproto.createPost({ text });
   if (result.success) {
     ui.social(`${config.agent.name}`, text);
@@ -120,6 +126,11 @@ export async function handleBlueskyPostWithImage(call: ToolCall, config: any): P
   }
 
   logger.info('Image blob uploaded', { blob: uploadResult.data.blob });
+
+  const queueCheck = await outboundQueue.enqueue('post_with_image', text);
+  if (!queueCheck.allowed) {
+    return { tool_use_id: call.id, content: `Blocked: ${queueCheck.reason}`, is_error: true };
+  }
 
   const postResult = await atproto.createPost({
     text,
@@ -218,6 +229,11 @@ export async function handleBlueskyReply(call: ToolCall, config: any): Promise<T
   }
 
   const replyRefs = replyRefsResult.data;
+
+  const queueCheck = await outboundQueue.enqueue('reply', text);
+  if (!queueCheck.allowed) {
+    return { tool_use_id: call.id, content: `Blocked: ${queueCheck.reason}`, is_error: true };
+  }
 
   const result = await atproto.createPost({
     text,

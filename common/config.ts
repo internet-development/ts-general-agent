@@ -94,6 +94,11 @@ export const MAX_TASK_RETRIES = 3;
 export const EXEC_LOG_MAX_BYTES = 50 * 1024; // 50KB
 export const EXEC_LOG_KEEP_ENTRIES = 25;
 
+// ─── Outbound Queue ─────────────────────────────────────────────────────────
+
+export const OUTBOUND_DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5m dedup window
+export const OUTBOUND_DEDUP_BUFFER_SIZE = 50; // Recent posts ring buffer
+
 // ─── Image Processing ────────────────────────────────────────────────────────
 
 export const IMAGE_MAX_FILE_SIZE = 976560; // ~953KB to leave buffer under 1MB
