@@ -55,12 +55,7 @@ Auto-generated from `## Voice` in SELF.md during reflection cycles. See `modules
 
 Functional runtime data only (not agent memory). **SELF.md is the agent's memory.** Runtime state resets on restart; learnings are integrated into SELF.md during reflection cycles.
 
-**Memory Versioning:** All `.memory/` state files are version-stamped via `common/memory-version.ts`. When the agent version (from `package.json`) changes, state files with mismatched versions are automatically reset. This prevents stale data from a previous version from corrupting the new version.
-
-- JSON files: Use `stampVersion()` on save, `checkVersion()` on load — reset to defaults on mismatch.
-- JSONL files: Use `stampJsonlVersion()` sidecar files, `resetJsonlIfVersionMismatch()` on load — delete and re-create on mismatch.
-
-**Every new state file MUST use this system.** See existing files in `modules/` and `local-tools/` for the pattern.
+**Memory Versioning:** All `.memory/` state files are version-stamped via `common/memory-version.ts`. When the agent version changes, state files with mismatched versions are automatically reset. Every new state file MUST use this system — see `common/AGENTS.md` for the API.
 
 ### `.workrepos/`
 
@@ -158,7 +153,7 @@ The agent doesn't track "5 comments posted" — it remembers "helped @someone un
 
 ## Error Handling
 
-Three tiers: **transient** (retry with backoff), **token expiration** (auto-recovery via session refresh loop), **fatal** (agent exits on 401/402/403). See `modules/llm-gateway.ts` and `adapters/atproto/authenticate.ts` for implementation.
+Three tiers: **transient** (retry with backoff), **token expiration** (auto-recovery via session refresh loop), **fatal** (agent exits on 401/402/403). All error-path `response.json()` calls must be wrapped in try-catch — external APIs return HTML on 502/503. See `adapters/AGENTS.md` for the pattern.
 
 ---
 
@@ -171,5 +166,8 @@ Three tiers: **transient** (retry with backoff), **token expiration** (auto-reco
 
 ## Code Style
 
-- **Comments:** `//NOTE(self):` prefix for all explanatory comments. Makes them searchable and distinct from commented-out code.
+- **Comments:** `//NOTE(self):` prefix (no space before `NOTE`) for all explanatory comments. Makes them searchable and distinct from commented-out code.
+- **Adapter returns:** `ApiResult<T>` for all adapter functions — `{ success: true, data: T } | { success: false, error: string }`. See `adapters/AGENTS.md`.
+- **Decision returns:** Functions that decide whether to act return `{ shouldX: boolean; reason: string }` so the terminal can explain every decision.
 - **Logging:** `logger.info` for all operational messages (there is no cost locally to great logging), `logger.debug` for noisy retry loops, `logger.warn` for caught errors, `logger.error` for unexpected failures.
+- **Prompt templates:** All LLM-facing text lives in skill files (`skills/*/SKILL.md`), not hardcoded in TypeScript. See `skills/AGENTS.md`.

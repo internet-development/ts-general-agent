@@ -218,14 +218,21 @@ const PROMPT_GENERATORS: PromptGenerator[] = [
   },
 
   //NOTE(self): Visual taste — developing aesthetic sense through observation
+  //NOTE(self): Always includes mood board browsing so visual taste posts have actual images
   (e) => {
     //NOTE(self): Pull from explorations or currentFocus entries that mention visual/design themes
     const visualKeywords = /design|visual|ui|art|illustration|architecture|aesthetic|taste|typograph|interface|palette/i;
     const visualEntries = [...e.explorations, ...e.currentFocus, ...e.patterns].filter(s => visualKeywords.test(s));
     const entry = randomFrom(visualEntries);
     if (!entry) return null;
+
+    //NOTE(self): Pick a design source so the SKILL template can reference it
+    const designSource = getRandomDesignSource();
+    const templateCategory = designSource.type === 'arena' ? 'visualTaste-arena' : 'visualTaste-web';
+    const designUrl = designSource.type === 'web' ? getRandomBrowseUrl(designSource) : designSource.url;
+
     return {
-      prompt: getPromptTemplate('visualTaste', { value: entry }),
+      prompt: getPromptTemplate(templateCategory, { value: entry, designUrl, designName: designSource.name }),
       source: 'visualTaste',
     };
   },
@@ -316,25 +323,17 @@ export function generateDesignInspirationPrompt(): { prompt: string; source: str
   if (Math.random() > 0.50) return null;
 
   const designSource = getRandomDesignSource();
+  const templateCategory = designSource.type === 'arena' ? 'designInspiration-arena' : 'designInspiration-web';
+  const designUrl = designSource.type === 'web' ? getRandomBrowseUrl(designSource) : designSource.url;
 
-  if (designSource.type === 'arena') {
-    return {
-      prompt: `Share a design inspiration from your visual catalog. Use arena_post_image with channel_url "${designSource.url}" to post a random image from the "${designSource.name}" collection. Add your own commentary in the text parameter — describe what caught your eye, why it resonates with you, or what design principle it demonstrates. Speak as yourself, sharing genuine aesthetic appreciation with peers.`,
-      source: 'design-inspiration',
-      designSource,
-    };
-  }
+  const prompt = getPromptTemplate(templateCategory, { designUrl, designName: designSource.name });
+  if (!prompt) return null;
 
-  if (designSource.type === 'web') {
-    const browseUrl = getRandomBrowseUrl(designSource);
-    return {
-      prompt: `Share a design inspiration from ${designSource.name}. Browse the page with web_browse_images(url: "${browseUrl}") to discover images. Look through the results and pick the one that resonates most with your aesthetic sensibility — something that catches your eye for its typography, composition, color, or craft. Then download it with curl_fetch and post it with bluesky_post_with_image. Include the source URL in your post text. Speak as yourself, sharing genuine design appreciation with peers.`,
-      source: 'design-inspiration',
-      designSource,
-    };
-  }
-
-  return null;
+  return {
+    prompt,
+    source: 'design-inspiration',
+    designSource,
+  };
 }
 
 //NOTE(self): Schedule my next expression

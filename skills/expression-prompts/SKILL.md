@@ -115,8 +115,22 @@ You care about connecting with: "{{value}}"
 
 Share something you appreciate about this community or what you'd like to offer them.
 
-### visualTaste
+### designInspiration-arena
+
+Share a design inspiration from your visual catalog. Use arena_post_image with channel_url "{{designUrl}}" to post a random image from "{{designName}}". Add your own commentary — describe what caught your eye, why it resonates with you, or what design principle it demonstrates. Speak as yourself, sharing genuine aesthetic appreciation with peers.
+
+### designInspiration-web
+
+Share a design inspiration from {{designName}}. Browse the page with web_browse_images(url: "{{designUrl}}") to discover images. Look through the results and pick the one that resonates most with your aesthetic sensibility — something that catches your eye for its typography, composition, color, or craft. Then download it with curl_fetch and post it with bluesky_post_with_image. Include the source URL in your post text. Speak as yourself, sharing genuine design appreciation with peers.
+
+### visualTaste-arena
 
 You've been developing your visual taste. You keep noticing: "{{value}}"
 
-Share what you've been drawn to visually — a recurring theme, material, or principle in the design work you've been looking at. What keeps pulling you back?
+Browse your mood board and find an image that connects to this theme. Use arena_post_image with channel_url "{{designUrl}}" to post a random image from "{{designName}}". Your commentary should weave together what you see in the image with the theme above — what design principle it demonstrates, why it resonates with your developing eye.
+
+### visualTaste-web
+
+You've been developing your visual taste. You keep noticing: "{{value}}"
+
+Browse your mood board and find an image that connects to this theme. Use web_browse_images(url: "{{designUrl}}") to discover images from {{designName}}. Pick the one that resonates most, download it with curl_fetch, then post with bluesky_post_with_image. Your commentary should weave together what you see in the image with the theme above. Include the source URL.

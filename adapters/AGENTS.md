@@ -89,10 +89,9 @@ Types that mirror the external API belong in adapters. Internal domain types bel
 
 ## Error Handling
 
-Adapters catch and normalize errors. **IMPORTANT**: All error-path `response.json()` calls must be wrapped in try-catch because external APIs (GitHub, Bluesky) can return non-JSON responses (HTML) on 502/503 errors:
+Adapters catch and normalize errors into `ApiResult<T>`. All error-path `response.json()` calls must be wrapped in try-catch — external APIs return HTML on 502/503:
 
 ```typescript
-// CORRECT — safe JSON parsing on error path
 if (!response.ok) {
   let errorMsg = `Failed to ...: ${response.status}`;
   try {
@@ -103,15 +102,7 @@ if (!response.ok) {
   }
   return { success: false, error: errorMsg };
 }
-
-// WRONG — crashes on HTML 502/503 responses
-if (!response.ok) {
-  const error = await response.json(); // THROWS on non-JSON
-  return { success: false, error: error.message || '...' };
-}
 ```
-
-All GitHub and ATProto adapter files follow the safe pattern.
 
 ## Adding a New Adapter
 

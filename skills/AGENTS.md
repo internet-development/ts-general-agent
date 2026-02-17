@@ -18,14 +18,19 @@ Each skill is a folder with a `SKILL.md` file:
 - Multi-section skills (e.g., aspirational-growth) need `renderSkillSection()` + manual assembly
 - **Variables must be passed even if empty** — `renderSkillSection()` replaces `{{var}}` literally
 
-## Loader: `modules/skills.ts`
+## Rendering Functions
 
-Check the file for how it works each time.
+Four ways to use a skill in code (see `modules/skills.ts` for implementation):
+
+- **`buildSystemPrompt(soul, self, 'AGENT-MY-SKILL', vars)`** — Full system prompt: SOUL.md + SELF.md + skill's `## System Prompt` section. Most common for chat modes.
+- **`renderSkillSection('AGENT-MY-SKILL', 'Section Name', vars)`** — Render a single named section with variable interpolation. Use for user messages.
+- **`getSkillSubsection('AGENT-MY-SKILL', 'Section', 'Subsection')`** — Get raw text from a `### Subsection` within a `## Section`. Use for data-driven templates.
+- **`renderSkill('AGENT-MY-SKILL', vars)`** — Render the full skill body (everything after frontmatter) with variables.
 
 ## Adding a Skill
 
 1. Create `skills/my-skill/SKILL.md`
 2. Add frontmatter and sections
-3. Reference as `AGENT-MY-SKILL` in code: `renderSkill('AGENT-MY-SKILL', vars)` or `buildSystemPrompt(soul, self, 'AGENT-MY-SKILL', vars)`
+3. Reference as `AGENT-MY-SKILL` in code
 4. Skills are loaded automatically at startup via `loadAllSkills()`
 5. After self-improvement, `reloadSkills()` picks up changes without restart
