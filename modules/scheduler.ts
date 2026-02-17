@@ -168,6 +168,7 @@ import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
 import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { MEMORY_VERSION } from '@common/memory-version.js';
 import { ensureHttps } from '@common/strings.js';
+import { pruneDuplicatePosts } from '@modules/outbound-queue.js';
 import {
   AWARENESS_INTERVAL_MS,
   GITHUB_AWARENESS_INTERVAL_MS,
@@ -2654,26 +2655,36 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
   }
 
   private async checkExpressionEngagement(): Promise<void> {
-    const needsCheck = getExpressionsNeedingEngagementCheck();
-    if (needsCheck.length === 0) return;
-
     const session = getSession();
     if (!session) {
       logger.info('No session for engagement check');
       return;
     }
 
+    //NOTE(self): Always fetch feed — used for both dupe pruning and engagement check
+    const feedResult = await getAuthorFeed(session.did, { limit: 20 });
+    if (!feedResult.success) {
+      logger.info('Failed to fetch author feed', { error: feedResult.error });
+      return;
+    }
+
+    //NOTE(self): Prune duplicates on every cycle — self-healing for dupes that slipped past the in-memory buffer
+    try {
+      const pruned = await pruneDuplicatePosts(feedResult.data.feed);
+      if (pruned > 0) {
+        logger.info('Pruned duplicate posts', { count: pruned });
+      }
+    } catch (error) {
+      logger.warn('Duplicate pruning error', { error: String(error) });
+    }
+
+    //NOTE(self): Check expression engagement only if there are posts needing it
+    const needsCheck = getExpressionsNeedingEngagementCheck();
+    if (needsCheck.length === 0) return;
+
     ui.startSpinner(`Checking engagement on ${needsCheck.length} post${needsCheck.length === 1 ? '' : 's'}`);
 
     try {
-      //NOTE(self): Fetch my recent posts to get engagement data
-      const feedResult = await getAuthorFeed(session.did, { limit: 20 });
-      if (!feedResult.success) {
-        logger.info('Failed to fetch author feed', { error: feedResult.error });
-        ui.stopSpinner('Engagement check failed', false);
-        return;
-      }
-
       //NOTE(self): Build map of URI -> engagement
       const engagementMap = new Map<string, { likes: number; replies: number; reposts: number }>();
       for (const item of feedResult.data.feed) {

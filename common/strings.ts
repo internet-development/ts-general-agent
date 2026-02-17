@@ -58,6 +58,18 @@ export function ensureHttps(url: string): string {
   return `https://${url}`;
 }
 
+//NOTE(self): Normalize post text for dedup comparison
+//NOTE(self): Strips @mentions, lowercases, collapses whitespace, takes first 50 chars
+//NOTE(self): Used by outbound queue (pre-send) and dupe cleanup (post-send)
+export function normalizePostText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/@[\w.-]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 50);
+}
+
 //NOTE(self): Truncate text to a grapheme limit, preserving whole grapheme clusters
 //NOTE(self): Used wherever text may flow to Bluesky (300 grapheme limit) or similar services
 export function truncateGraphemes(text: string, maxGraphemes: number = PORTABLE_MAX_GRAPHEMES): string {
