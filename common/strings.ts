@@ -59,12 +59,13 @@ export function ensureHttps(url: string): string {
 }
 
 //NOTE(self): Normalize post text for dedup comparison
-//NOTE(self): Strips @mentions, lowercases, collapses whitespace, takes first 50 chars
+//NOTE(self): Strips @mentions, URLs, lowercases, collapses whitespace, takes first 50 chars
 //NOTE(self): Used by outbound queue (pre-send) and dupe cleanup (post-send)
 export function normalizePostText(text: string): string {
   return text
     .toLowerCase()
     .replace(/@[\w.-]+/g, '')
+    .replace(/https?:\/\/\S+/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 50);
