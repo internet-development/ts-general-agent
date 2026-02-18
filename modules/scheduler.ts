@@ -586,8 +586,10 @@ export class AgentScheduler {
 
   private async checkRemoteVersion(): Promise<void> {
     try {
-      const response = await fetch(REMOTE_PACKAGE_JSON_URL, {
-        headers: { 'Accept': 'application/json' },
+      //NOTE(self): Cache-bust raw.githubusercontent.com CDN which can lag behind repo state
+      const url = `${REMOTE_PACKAGE_JSON_URL}?cb=${Date.now()}`;
+      const response = await fetch(url, {
+        headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
         signal: AbortSignal.timeout(15_000),
       });
 
