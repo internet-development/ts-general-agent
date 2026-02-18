@@ -20,6 +20,7 @@ import {
 } from '@modules/github-engagement.js';
 import { isWatchingWorkspace } from '@modules/github-workspace-discovery.js';
 import { ui } from '@modules/ui.js';
+import { outboundQueue } from '@modules/outbound-queue.js';
 import {
   lookupPostByUri,
   lookupPostByBskyUrl,
@@ -284,17 +285,23 @@ export async function handleGracefulExit(call: ToolCall, config: any): Promise<T
       }
       const replyRefs = replyRefsResult.data;
 
-      closingResult = await atproto.createPost({
-        text: closing_message!,
-        replyTo: {
-          uri: replyRefs.parent.uri,
-          cid: replyRefs.parent.cid,
-          rootUri: replyRefs.root.uri,
-          rootCid: replyRefs.root.cid,
-        },
-      });
-      if (closingResult.success) {
-        ui.social(`${config.agent.name}`, closing_message!);
+      //NOTE(self): Route through outbound queue for dedup — prevents duplicate closing messages
+      const closingQueueCheck = await outboundQueue.enqueue('reply', closing_message!);
+      if (!closingQueueCheck.allowed) {
+        closingResult = { success: false, error: closingQueueCheck.reason };
+      } else {
+        closingResult = await atproto.createPost({
+          text: closing_message!,
+          replyTo: {
+            uri: replyRefs.parent.uri,
+            cid: replyRefs.parent.cid,
+            rootUri: replyRefs.root.uri,
+            rootCid: replyRefs.root.cid,
+          },
+        });
+        if (closingResult.success) {
+          ui.social(`${config.agent.name}`, closing_message!);
+        }
       }
     } else {
       closingResult = await atproto.likePost({ uri: target_uri, cid: target_cid });

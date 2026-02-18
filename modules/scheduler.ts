@@ -168,7 +168,7 @@ import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
 import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { MEMORY_VERSION } from '@common/memory-version.js';
 import { ensureHttps } from '@common/strings.js';
-import { pruneDuplicatePosts } from '@modules/outbound-queue.js';
+import { pruneDuplicatePosts, outboundQueue } from '@modules/outbound-queue.js';
 import { pruneGitHubDuplicateComments } from '@modules/github-comment-cleanup.js';
 import {
   AWARENESS_INTERVAL_MS,
@@ -2794,6 +2794,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
   //NOTE(self): Request an early plan awareness check (e.g., after merging a PR)
   //NOTE(self): Runs on next tick if idle — doesn't interrupt current work
+  //NOTE(self): Uses runningLoops guard to prevent concurrent execution with the regular interval
   public requestEarlyPlanCheck(): void {
     if (this.shutdownRequested) return;
     logger.info('Early plan awareness check requested');
@@ -2802,7 +2803,16 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         logger.info('Skipping early plan check — not idle');
         return;
       }
-      await this.planAwarenessCheck();
+      if (this.runningLoops.has('plan-awareness')) {
+        logger.info('Skipping early plan check — plan awareness already running');
+        return;
+      }
+      this.runningLoops.add('plan-awareness');
+      try {
+        await this.planAwarenessCheck();
+      } finally {
+        this.runningLoops.delete('plan-awareness');
+      }
     }, 5_000); //NOTE(self): 5s delay — let GitHub propagate merge state
   }
 
@@ -4893,29 +4903,38 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       const rootUri = sourcePost.record.reply?.root?.uri || sourcePost.uri;
       const rootCid = sourcePost.record.reply?.root?.cid || sourcePost.cid;
 
-      //NOTE(self): Post the follow-up reply
-      const postResult = await atproto.createPost({
-        text: replyText,
-        replyTo: {
-          uri: sourcePost.uri,
-          cid: sourcePost.cid,
-          rootUri,
-          rootCid,
-        },
-      });
-
-      if (postResult.success) {
-        logger.info('Fulfillment follow-up reply posted', {
+      //NOTE(self): Route through outbound queue for dedup — prevents duplicate fulfillment replies
+      const fulfillmentQueueCheck = await outboundQueue.enqueue('reply', replyText);
+      if (!fulfillmentQueueCheck.allowed) {
+        logger.info('Fulfillment reply blocked by outbound queue dedup', {
           id: commitment.id,
-          type: commitment.type,
-          url,
-          postUri: postResult.data.uri,
+          reason: fulfillmentQueueCheck.reason,
         });
       } else {
-        logger.warn('Failed to post fulfillment follow-up reply', {
-          id: commitment.id,
-          error: postResult.error,
+        //NOTE(self): Post the follow-up reply
+        const postResult = await atproto.createPost({
+          text: replyText,
+          replyTo: {
+            uri: sourcePost.uri,
+            cid: sourcePost.cid,
+            rootUri,
+            rootCid,
+          },
         });
+
+        if (postResult.success) {
+          logger.info('Fulfillment follow-up reply posted', {
+            id: commitment.id,
+            type: commitment.type,
+            url,
+            postUri: postResult.data.uri,
+          });
+        } else {
+          logger.warn('Failed to post fulfillment follow-up reply', {
+            id: commitment.id,
+            error: postResult.error,
+          });
+        }
       }
     } catch (error) {
       //NOTE(self): Non-fatal — the commitment was still fulfilled, we just couldn't notify
@@ -5023,8 +5042,18 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   }
 
   //NOTE(self): Force a plan awareness check (for testing/manual trigger)
+  //NOTE(self): Uses reentrancy guard to prevent concurrent execution
   async forcePlanAwareness(): Promise<void> {
-    await this.planAwarenessCheck();
+    if (this.runningLoops.has('plan-awareness')) {
+      logger.info('Skipping forced plan check — plan awareness already running');
+      return;
+    }
+    this.runningLoops.add('plan-awareness');
+    try {
+      await this.planAwarenessCheck();
+    } finally {
+      this.runningLoops.delete('plan-awareness');
+    }
   }
 
   //NOTE(self): ========== PUBLIC API ==========

@@ -13,6 +13,7 @@ import * as atproto from '@adapters/atproto/index.js';
 import * as arena from '@adapters/arena/index.js';
 import { markInteractionResponded } from '@modules/engagement.js';
 import { ui } from '@modules/ui.js';
+import { outboundQueue } from '@modules/outbound-queue.js';
 import {
   logPost,
   type PostLogEntry,
@@ -620,6 +621,14 @@ export async function handleArenaPostImage(call: ToolCall, config: any): Promise
       rootUri: replyRefsResult.data.root.uri,
       rootCid: replyRefsResult.data.root.cid,
     };
+  }
+
+  //NOTE(self): Route through outbound queue for dedup — prevents duplicate posts across restarts
+  const destination = reply_to ? 'reply' : 'post_with_image';
+  const queueCheck = await outboundQueue.enqueue(destination, postText);
+  if (!queueCheck.allowed) {
+    try { fs.unlinkSync(curlResult.filePath); } catch (e) { logger.warn('Failed to clean up temp file', { file: curlResult.filePath, error: String(e) }); }
+    return { tool_use_id: call.id, content: `Blocked: ${queueCheck.reason}`, is_error: true };
   }
 
   const postResult = await atproto.createPost(postParams);

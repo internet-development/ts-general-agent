@@ -2,6 +2,7 @@
 //NOTE(self): Central gatekeeper for all outbound Bluesky posts.
 //NOTE(self): Serializes sending (one at a time via mutex), enforces pacing cooldowns,
 //NOTE(self): and rejects near-duplicate text within a 5-minute window.
+//NOTE(self): Dedup buffer is persisted to disk so restarts don't lose dedup memory.
 //NOTE(self): Callers await enqueue() and get back { allowed: true } or { allowed: false, reason }.
 
 import * as fs from 'fs';
@@ -15,6 +16,7 @@ import { deletePost } from '@adapters/atproto/delete-post.js';
 import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
 
 const AUDIT_LOG_FILE = '.memory/logs/outbound-queue.log';
+const DEDUP_STATE_FILE = '.memory/outbound_dedup.json';
 
 export type OutboundDestination = 'post' | 'reply' | 'post_with_image';
 
@@ -28,10 +30,46 @@ interface RecentEntry {
   timestamp: number;
 }
 
+//NOTE(self): Load persisted dedup entries from disk (prunes expired entries on load)
+function loadDedupState(): RecentEntry[] {
+  try {
+    if (!fs.existsSync(DEDUP_STATE_FILE)) return [];
+    const data = JSON.parse(fs.readFileSync(DEDUP_STATE_FILE, 'utf8'));
+    if (!Array.isArray(data)) return [];
+    const cutoff = Date.now() - OUTBOUND_DEDUP_WINDOW_MS;
+    const valid = data.filter(
+      (e: any) => typeof e.normalized === 'string' && typeof e.timestamp === 'number' && e.timestamp > cutoff
+    );
+    if (valid.length > 0) {
+      logger.info('Loaded outbound dedup state from disk', { count: valid.length });
+    }
+    return valid;
+  } catch (err) {
+    logger.warn('Failed to load outbound dedup state', { error: String(err) });
+    return [];
+  }
+}
+
+//NOTE(self): Persist dedup entries to disk
+function saveDedupState(entries: RecentEntry[]): void {
+  try {
+    const dir = path.dirname(DEDUP_STATE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(DEDUP_STATE_FILE, JSON.stringify(entries));
+  } catch (err) {
+    logger.warn('Failed to save outbound dedup state', { error: String(err) });
+  }
+}
+
 class OutboundQueue {
-  private recentPosts: RecentEntry[] = [];
+  private recentPosts: RecentEntry[];
   //NOTE(self): Promise-based mutex — only one message processes at a time
   private mutexPromise: Promise<void> = Promise.resolve();
+
+  constructor() {
+    //NOTE(self): Load persisted dedup state — survives restarts
+    this.recentPosts = loadDedupState();
+  }
 
   //NOTE(self): Main entry point — callers await this before posting
   async enqueue(destination: OutboundDestination, text: string): Promise<OutboundResult> {
@@ -63,7 +101,7 @@ class OutboundQueue {
       await pacing.waitForCooldown(pacingType);
       pacing.recordAction(pacingType, text.slice(0, 80));
 
-      //NOTE(self): Step 4: Record in dedup buffer
+      //NOTE(self): Step 4: Record in dedup buffer and persist
       this.recordPost(normalized);
 
       //NOTE(self): Step 5: Audit log
@@ -97,7 +135,7 @@ class OutboundQueue {
     return { allowed: true };
   }
 
-  //NOTE(self): Record a post in the ring buffer
+  //NOTE(self): Record a post in the ring buffer and persist to disk
   private recordPost(normalized: string): void {
     this.recentPosts.push({ normalized, timestamp: Date.now() });
 
@@ -105,6 +143,9 @@ class OutboundQueue {
     if (this.recentPosts.length > OUTBOUND_DEDUP_BUFFER_SIZE) {
       this.recentPosts = this.recentPosts.slice(-OUTBOUND_DEDUP_BUFFER_SIZE);
     }
+
+    //NOTE(self): Persist to disk — survives restarts
+    saveDedupState(this.recentPosts);
   }
 
   //NOTE(self): Append JSONL audit entry (follows commitment-queue pattern)
