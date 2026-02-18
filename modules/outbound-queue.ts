@@ -35,16 +35,10 @@ class OutboundQueue {
 
   //NOTE(self): Main entry point — callers await this before posting
   async enqueue(destination: OutboundDestination, text: string): Promise<OutboundResult> {
-    //NOTE(self): Step 1: Dedup check (before mutex — fast reject)
     const normalized = normalizePostText(text);
-    const dedupResult = this.checkDedup(normalized);
-    if (!dedupResult.allowed) {
-      this.auditLog('rejected', destination, text, dedupResult.reason!);
-      ui.queue('Blocked duplicate', dedupResult.reason);
-      return dedupResult;
-    }
 
-    //NOTE(self): Step 2: Serialize via mutex — wait for any in-flight message
+    //NOTE(self): Step 1: Serialize via mutex — all checks happen inside to prevent TOCTOU races
+    //NOTE(self): Two concurrent enqueue() calls must not both pass the dedup check before either records
     let release: () => void;
     const prev = this.mutexPromise;
     this.mutexPromise = new Promise<void>((resolve) => {
@@ -53,6 +47,15 @@ class OutboundQueue {
 
     try {
       await prev;
+
+      //NOTE(self): Step 2: Dedup check (inside mutex — prevents race condition)
+      const dedupResult = this.checkDedup(normalized);
+      if (!dedupResult.allowed) {
+        this.auditLog('rejected', destination, text, dedupResult.reason!);
+        ui.queue('Blocked duplicate', dedupResult.reason);
+        return dedupResult;
+      }
+
       ui.queue('Queued', `${destination}: ${text.slice(0, 60)}…`);
 
       //NOTE(self): Step 3: Pacing — respect cooldowns

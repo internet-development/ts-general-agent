@@ -169,6 +169,7 @@ import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { MEMORY_VERSION } from '@common/memory-version.js';
 import { ensureHttps } from '@common/strings.js';
 import { pruneDuplicatePosts } from '@modules/outbound-queue.js';
+import { pruneGitHubDuplicateComments } from '@modules/github-comment-cleanup.js';
 import {
   AWARENESS_INTERVAL_MS,
   GITHUB_AWARENESS_INTERVAL_MS,
@@ -313,6 +314,10 @@ export class AgentScheduler {
   //NOTE(self): Track when the scheduler started — self-improvement is gated on 48h uptime
   private readonly startedAt = Date.now();
   private static readonly IMPROVEMENT_BURN_IN_MS = IMPROVEMENT_BURN_IN_MS;
+  //NOTE(self): Reentrancy guard — prevents concurrent execution of setInterval callbacks
+  //NOTE(self): setInterval fires regardless of whether the previous async callback finished,
+  //NOTE(self): which causes duplicate posts, duplicate task claims, and duplicate GitHub comments
+  private runningLoops: Set<string> = new Set();
 
   constructor(config: Partial<SchedulerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -511,7 +516,13 @@ export class AgentScheduler {
 
     this.sessionRefreshTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
-      await this.ensureSessionOrReauth();
+      if (this.runningLoops.has('session-refresh')) return;
+      this.runningLoops.add('session-refresh');
+      try {
+        await this.ensureSessionOrReauth();
+      } finally {
+        this.runningLoops.delete('session-refresh');
+      }
     }, interval);
   }
 
@@ -563,7 +574,13 @@ export class AgentScheduler {
 
     this.versionCheckTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
-      await this.checkRemoteVersion();
+      if (this.runningLoops.has('version-check')) return;
+      this.runningLoops.add('version-check');
+      try {
+        await this.checkRemoteVersion();
+      } finally {
+        this.runningLoops.delete('version-check');
+      }
     }, interval);
   }
 
@@ -620,11 +637,14 @@ export class AgentScheduler {
   private startAwarenessLoop(): void {
     this.awarenessTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
-      if (this.state.currentMode !== 'idle') {
-        //NOTE(self): Don't interrupt other modes
-        return;
+      if (this.state.currentMode !== 'idle') return;
+      if (this.runningLoops.has('awareness')) return;
+      this.runningLoops.add('awareness');
+      try {
+        await this.awarenessCheck();
+      } finally {
+        this.runningLoops.delete('awareness');
       }
-      await this.awarenessCheck();
     }, getTimerJitter(this.appConfig.agent.name, 'awareness', this.config.awarenessInterval));
   }
 
@@ -889,11 +909,14 @@ export class AgentScheduler {
   private startGitHubAwarenessLoop(): void {
     this.githubAwarenessTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
-      if (this.state.currentMode !== 'idle') {
-        //NOTE(self): Don't interrupt other modes
-        return;
+      if (this.state.currentMode !== 'idle') return;
+      if (this.runningLoops.has('github-awareness')) return;
+      this.runningLoops.add('github-awareness');
+      try {
+        await this.githubAwarenessCheck();
+      } finally {
+        this.runningLoops.delete('github-awareness');
       }
-      await this.githubAwarenessCheck();
     }, getTimerJitter(this.appConfig.agent.name, 'github-awareness', this.config.githubAwarenessInterval));
   }
 
@@ -2649,8 +2672,13 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     this.engagementCheckTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
       if (this.state.currentMode !== 'idle') return;
-
-      await this.checkExpressionEngagement();
+      if (this.runningLoops.has('engagement-check')) return;
+      this.runningLoops.add('engagement-check');
+      try {
+        await this.checkExpressionEngagement();
+      } finally {
+        this.runningLoops.delete('engagement-check');
+      }
     }, getTimerJitter(this.appConfig.agent.name, 'engagement-check', ENGAGEMENT_CHECK_INTERVAL_MS));
   }
 
@@ -2751,11 +2779,14 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
   private startPlanAwarenessLoop(): void {
     this.planAwarenessTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
-      if (this.state.currentMode !== 'idle') {
-        //NOTE(self): Don't interrupt other modes
-        return;
+      if (this.state.currentMode !== 'idle') return;
+      if (this.runningLoops.has('plan-awareness')) return;
+      this.runningLoops.add('plan-awareness');
+      try {
+        await this.planAwarenessCheck();
+      } finally {
+        this.runningLoops.delete('plan-awareness');
       }
-      await this.planAwarenessCheck();
     }, getTimerJitter(this.appConfig.agent.name, 'plan-awareness', this.config.planAwarenessInterval));
   }
 
@@ -3225,6 +3256,20 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
             }
           } catch (err) {
             logger.warn('Error closing superseded plan', { issueNumber: olderIssueNumber, error: String(err) });
+          }
+        }
+      }
+
+      //NOTE(self): Prune duplicate GitHub comments on plan issues — self-healing like pruneDuplicatePosts()
+      for (const [, wsPlans] of Object.entries(allPlansByWorkspace)) {
+        for (const issueNumber of wsPlans.issueNumbers) {
+          try {
+            const pruned = await pruneGitHubDuplicateComments(wsPlans.owner, wsPlans.repo, issueNumber, this.appConfig.github.username);
+            if (pruned > 0) {
+              logger.info('Pruned duplicate GitHub comments', { owner: wsPlans.owner, repo: wsPlans.repo, issueNumber, count: pruned });
+            }
+          } catch (err) {
+            logger.warn('GitHub comment cleanup failed (non-fatal)', { owner: wsPlans.owner, repo: wsPlans.repo, issueNumber, error: String(err) });
           }
         }
       }
@@ -4912,7 +4957,13 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     this.commitmentTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
       if (this.state.currentMode !== 'idle') return;
-      await this.commitmentFulfillmentCheck();
+      if (this.runningLoops.has('commitment-fulfillment')) return;
+      this.runningLoops.add('commitment-fulfillment');
+      try {
+        await this.commitmentFulfillmentCheck();
+      } finally {
+        this.runningLoops.delete('commitment-fulfillment');
+      }
     }, getTimerJitter(this.appConfig.agent.name, 'commitment-fulfillment', COMMITMENT_CHECK_INTERVAL_MS));
   }
 

@@ -53,8 +53,13 @@ function loadState(): PeerRegistryState {
     if (existsSync(DISCOVERED_PEERS_PATH)) {
       const data = JSON.parse(readFileSync(DISCOVERED_PEERS_PATH, 'utf-8'));
       if (!checkVersion(data)) {
-        logger.info('Memory file version mismatch, resetting', { path: DISCOVERED_PEERS_PATH });
-        registryState = getDefaultState();
+        //NOTE(self): Version mismatch — migrate but PRESERVE announcement/follow state
+        //NOTE(self): Resetting these flags causes duplicate peer announcements on Bluesky
+        logger.info('Memory file version mismatch, migrating peer registry', { path: DISCOVERED_PEERS_PATH });
+        const oldPeers: Record<string, DiscoveredPeer> = data.peers || {};
+        registryState = { peers: oldPeers };
+        //NOTE(self): Re-save with current version stamp
+        saveState();
       } else {
         registryState = {
           peers: data.peers || {},

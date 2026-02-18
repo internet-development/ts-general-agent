@@ -55,7 +55,7 @@ Auto-generated from `## Voice` in SELF.md during reflection cycles. See `modules
 
 Functional runtime data only (not agent memory). **SELF.md is the agent's memory.** Runtime state resets on restart; learnings are integrated into SELF.md during reflection cycles.
 
-**Memory Versioning:** All `.memory/` state files are version-stamped via `common/memory-version.ts`. When the agent version changes, state files with mismatched versions are automatically reset. Every new state file MUST use this system — see `common/AGENTS.md` for the API.
+**Memory Versioning:** All `.memory/` state files are version-stamped via `common/memory-version.ts`. When the agent version changes, most state files with mismatched versions are automatically reset. Exception: `discovered_peers.json` migrates data in-place (preserving `announcedOnBluesky`/`followedOnBluesky` flags to prevent duplicate peer announcements). Every new state file MUST use this system — see `common/AGENTS.md` for the API.
 
 ### `.workrepos/`
 
@@ -171,3 +171,6 @@ Three tiers: **transient** (retry with backoff), **token expiration** (auto-reco
 - **Decision returns:** Functions that decide whether to act return `{ shouldX: boolean; reason: string }` so the terminal can explain every decision.
 - **Logging:** `logger.info` for all operational messages (there is no cost locally to great logging), `logger.debug` for noisy retry loops, `logger.warn` for caught errors, `logger.error` for unexpected failures.
 - **Prompt templates:** All LLM-facing text lives in skill files (`skills/*/SKILL.md`), not hardcoded in TypeScript. See `skills/AGENTS.md`.
+- **Timer reentrancy:** All `setInterval` callbacks that call `async` functions MUST use a reentrancy guard (`runningLoops` Set in the scheduler). `setInterval` fires regardless of whether the previous callback finished — without a guard, concurrent executions cause duplicate posts and duplicate GitHub comments. See `modules/scheduler.ts` for the pattern.
+- **Outbound dedup:** All Bluesky posts flow through `outbound-queue.ts`. The dedup check and recording MUST happen inside the same mutex-protected section to prevent TOCTOU (time-of-check-time-of-use) races between concurrent callers.
+- **GitHub comments:** MUST NOT include the agent's username or self-identification — the GitHub UI already shows the author. Voice phrases use `{{details}}` for content, not `{{username}}` footers.

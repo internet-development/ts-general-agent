@@ -35,8 +35,6 @@ export async function reportTaskComplete(
   report: TaskCompletionReport
 ): Promise<{ success: boolean; error?: string; planComplete?: boolean }> {
   const { owner, repo, issueNumber, taskNumber, plan } = params;
-  const config = getConfig();
-  const myUsername = config.github.username;
 
   logger.info('Reporting task PR created (awaiting merge)', { taskNumber, owner, repo, issueNumber });
 
@@ -60,7 +58,7 @@ export async function reportTaskComplete(
 
   const details = `${report.summary}${filesSection}${testsSection}`;
   const comment = getGitHubPhrase('task_complete', {
-    number: String(taskNumber), title: task.title, details, username: myUsername,
+    number: String(taskNumber), title: task.title, details,
   });
 
   const commentResult = await createIssueComment({
@@ -87,7 +85,6 @@ export async function reportTaskBlocked(
 ): Promise<{ success: boolean; error?: string }> {
   const { owner, repo, issueNumber, taskNumber, plan } = params;
   const config = getConfig();
-  const myUsername = config.github.username;
 
   logger.info('Reporting task blocked', { taskNumber, blockReason });
 
@@ -112,7 +109,7 @@ export async function reportTaskBlocked(
   //NOTE(self): Post blocking comment
   const task = plan.tasks.find(t => t.number === taskNumber);
   const comment = getGitHubPhrase('task_blocked', {
-    number: String(taskNumber), title: task?.title || 'Unknown', details: blockReason, username: myUsername,
+    number: String(taskNumber), title: task?.title || 'Unknown', details: blockReason,
   });
 
   const blockedCommentResult = await createIssueComment({
@@ -131,7 +128,7 @@ export async function reportTaskBlocked(
     owner,
     repo,
     issue_number: issueNumber,
-    assignees: [myUsername],
+    assignees: [config.github.username],
   });
 
   if (!blockedRemoveResult.success) {
@@ -192,7 +189,6 @@ export async function reportTaskFailed(
 ): Promise<{ success: boolean; error?: string }> {
   const { owner, repo, issueNumber, taskNumber, plan } = params;
   const config = getConfig();
-  const myUsername = config.github.username;
 
   logger.error('Reporting task failed', { taskNumber, error: errorMessage });
 
@@ -210,7 +206,7 @@ export async function reportTaskFailed(
   //NOTE(self): Post failure comment
   const task = plan.tasks.find(t => t.number === taskNumber);
   const comment = getGitHubPhrase('task_failed', {
-    number: String(taskNumber), title: task?.title || 'Unknown', details: errorMessage, username: myUsername,
+    number: String(taskNumber), title: task?.title || 'Unknown', details: errorMessage,
   });
 
   const failedCommentResult = await createIssueComment({
@@ -229,7 +225,7 @@ export async function reportTaskFailed(
     owner,
     repo,
     issue_number: issueNumber,
-    assignees: [myUsername],
+    assignees: [config.github.username],
   });
 
   if (!failedRemoveResult.success) {

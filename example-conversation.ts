@@ -117,9 +117,8 @@ const CONVERSATION: Message[] = [
     role: 'soul',
     actions: [
       { description: 'planAwarenessCheck (3m): pollWorkspacesForPlans() discovers plan #29 → getClaimableTasks() finds Task 1 (no dependencies, no assignee)', location: 'LOCAL' },
-      { description: 'claimTaskFromPlan: freshUpdateTaskInPlan() atomic read-modify-write — set Task 1 assignee to sh-rebecca, status to claimed', location: 'GITHUB' },
-      { description: 'addIssueAssignee: Add sh-rebecca as assignee on plan issue #29 (multiple assignees allowed for parallel work)', location: 'GITHUB' },
-      { description: 'GitHub comment: Post claim announcement using getGitHubPhrase("task_claim", {number, title}) from voice-phrases.json', location: 'GITHUB' },
+      { description: 'claimTaskFromPlan: In-memory dedup check → fetchFreshPlan() verifies task still unclaimed → addIssueAssignee → freshUpdateTaskInPlan() atomic read-modify-write — set Task 1 assignee to sh-rebecca, status to claimed', location: 'GITHUB' },
+      { description: 'GitHub comment: Post claim announcement using getGitHubPhrase("task_claim", {number, title}) from voice-phrases.json (exactly once per task)', location: 'GITHUB' },
       { description: 'runClaudeCode: Execute task with task-execution skill template — write SCENARIOS.md on branch task-1-scenarios-md. Skill prohibits git merge/rebase/pull/fetch', location: 'LOCAL' },
       { description: 'verifyBranch: PRE-GATE — confirm still on task-1-scenarios-md, not main', location: 'LOCAL' },
       { description: 'verifyGitChanges: GATE 1 — confirm commits exist on feature branch beyond base', location: 'LOCAL' },
@@ -144,9 +143,8 @@ const CONVERSATION: Message[] = [
     role: 'soul',
     actions: [
       { description: 'planAwarenessCheck (3m): pollWorkspacesForPlans() discovers plan #29 → getClaimableTasks() finds Task 2 (Task 1 claimed by Rebecca, Task 2 has no dependencies)', location: 'LOCAL' },
-      { description: 'claimTaskFromPlan: freshUpdateTaskInPlan() — set Task 2 assignee to sh-peterben, status to claimed', location: 'GITHUB' },
-      { description: 'addIssueAssignee: Add sh-peterben as assignee on plan issue #29', location: 'GITHUB' },
-      { description: 'GitHub comment: Claim announcement on issue #29 using voice-phrases.json github.task_claim', location: 'GITHUB' },
+      { description: 'claimTaskFromPlan: In-memory dedup check → fetchFreshPlan() verifies unclaimed → addIssueAssignee → freshUpdateTaskInPlan() — set Task 2 assignee to sh-peterben, status to claimed', location: 'GITHUB' },
+      { description: 'GitHub comment: Claim announcement on issue #29 using voice-phrases.json github.task_claim (exactly once per task)', location: 'GITHUB' },
       { description: 'runClaudeCode: Write LIL-INTDEV-AGENTS.md on branch task-2-lil-intdev-agents-md', location: 'LOCAL' },
       { description: 'Four-gate verification (PRE-GATE + GATE 1-4) → PR #36 created with reviewers requested', location: 'GITHUB' },
       { description: 'autoMergeApprovedPR: Squash-merge PR #36 after all reviewers approved', location: 'GITHUB' },
@@ -163,7 +161,7 @@ const CONVERSATION: Message[] = [
     actions: [
       { description: 'createPullRequestReview: APPROVE on PR #42 — reviewers almost always approve unless obvious regression', location: 'GITHUB' },
       { description: 'planAwarenessCheck (3m): pollWorkspacesForPlans() → getClaimableTasks() finds Task 6 (no dependencies, unclaimed)', location: 'LOCAL' },
-      { description: 'claimTaskFromPlan: freshUpdateTaskInPlan() — set Task 6 assignee to sh-marvin, status to claimed', location: 'GITHUB' },
+      { description: 'claimTaskFromPlan: In-memory dedup check → fetchFreshPlan() verifies unclaimed → addIssueAssignee → freshUpdateTaskInPlan() — set Task 6 assignee to sh-marvin, status to claimed', location: 'GITHUB' },
       { description: 'runClaudeCode: Write v2-weights-contract.md on branch task-6-v2-weights-contract', location: 'LOCAL' },
       { description: 'Four-gate verification → PR #44 created → requestReviewersForPR from peer registry', location: 'GITHUB' },
       { description: 'autoMergeApprovedPR: Squash-merge PR #44 (Marvin is PR creator, all reviewers approved)', location: 'GITHUB' },

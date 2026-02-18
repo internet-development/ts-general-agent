@@ -7,9 +7,16 @@ import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
 import {
   freshUpdateTaskInPlan,
+  fetchFreshPlan,
   type ParsedPlan,
 } from '@local-tools/self-plan-parse.js';
 import { getGitHubPhrase } from '@modules/voice-phrases.js';
+
+//NOTE(self): In-memory claim tracker — prevents duplicate claim comments
+//NOTE(self): Key: "owner/repo#issueNumber/task-N", Value: timestamp of claim
+//NOTE(self): Concurrent planAwarenessCheck calls can both reach claimTaskFromPlan
+//NOTE(self): before either updates the plan body; this guard prevents double-posting
+const claimedTasks: Map<string, number> = new Map();
 
 export interface ClaimTaskParams {
   owner: string;
@@ -34,6 +41,13 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
   const myUsername = config.github.username;
 
   logger.info('Attempting to claim task', { owner, repo, issueNumber, taskNumber, myUsername });
+
+  //NOTE(self): In-memory claim dedup — reject if we already claimed this task recently
+  const claimKey = `${owner}/${repo}#${issueNumber}/task-${taskNumber}`;
+  if (claimedTasks.has(claimKey)) {
+    logger.info('Blocked duplicate claim attempt (in-memory guard)', { claimKey });
+    return { success: false, claimed: false, error: `Task ${taskNumber} already claimed by us (dedup)` };
+  }
 
   //NOTE(self): Find the task in the plan
   const task = plan.tasks.find(t => t.number === taskNumber);
@@ -60,6 +74,20 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
     }
   }
 
+  //NOTE(self): Fresh plan check — re-read the plan body from GitHub to verify task is still unclaimed
+  //NOTE(self): The plan passed in may be stale if another concurrent path already claimed this task
+  const freshResult = await fetchFreshPlan(owner, repo, issueNumber);
+  if (freshResult.success && freshResult.plan) {
+    const freshTask = freshResult.plan.tasks.find(t => t.number === taskNumber);
+    if (freshTask?.assignee) {
+      logger.info('Task already claimed (fresh plan check)', { taskNumber, assignee: freshTask.assignee });
+      return { success: false, claimed: false, claimedBy: freshTask.assignee, error: `Task ${taskNumber} already claimed by ${freshTask.assignee}` };
+    }
+  }
+
+  //NOTE(self): Mark in-memory BEFORE any API calls to prevent concurrent claim attempts
+  claimedTasks.set(claimKey, Date.now());
+
   //NOTE(self): Attempt to claim via GitHub assignee API (atomic operation)
   const claimResult = await claimTask({
     owner,
@@ -69,12 +97,11 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
   });
 
   if (!claimResult.success) {
+    claimedTasks.delete(claimKey);
     return { success: false, claimed: false, error: claimResult.error };
   }
 
   //NOTE(self): We got the claim! Update the plan body to reflect this
-  //NOTE(self): Task-level safety is already provided by task.assignee check above
-  //NOTE(self): and freshUpdateTaskInPlan below (atomic read-modify-write)
   //NOTE(self): Use freshUpdateTaskInPlan to avoid clobbering concurrent writes
   const updateResult = await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
     status: 'claimed',
@@ -83,7 +110,6 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
 
   if (!updateResult.success) {
     logger.warn('Claimed task but failed to update plan body', { error: updateResult.error });
-    //NOTE(self): Still count as claimed since we have the assignee
   }
 
   //NOTE(self): Post a comment announcing the claim

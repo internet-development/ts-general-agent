@@ -59,7 +59,7 @@ Import from module files directly (e.g., `@modules/engagement.js`). Modules don'
 
 ### Scheduler → Everything
 
-The scheduler is the orchestration hub. See `modules/scheduler.ts` for the full loop architecture.
+The scheduler is the orchestration hub. See `modules/scheduler.ts` for the full loop architecture. All `setInterval` callbacks use a reentrancy guard (`runningLoops` Set) — see root `AGENTS.md` Code Style for why.
 
 ### Tool Execution Flow
 

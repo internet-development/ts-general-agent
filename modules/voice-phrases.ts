@@ -23,11 +23,9 @@ export interface VoicePhrases {
   task_claim: string;
   github: {
     task_claim: string;           //NOTE(self): {{number}}, {{title}}
-    task_release: string;         //NOTE(self): {{number}}
-    task_complete: string;        //NOTE(self): {{number}}, {{title}}, {{details}}, {{username}}
-    task_progress: string;        //NOTE(self): {{number}}, {{details}}, {{username}}
-    task_blocked: string;         //NOTE(self): {{number}}, {{title}}, {{details}}, {{username}}
-    task_failed: string;          //NOTE(self): {{number}}, {{title}}, {{details}}, {{username}}
+    task_complete: string;        //NOTE(self): {{number}}, {{title}}, {{details}}
+    task_blocked: string;         //NOTE(self): {{number}}, {{title}}, {{details}}
+    task_failed: string;          //NOTE(self): {{number}}, {{title}}, {{details}}
     plan_complete: string;        //NOTE(self): no placeholders
     workspace_finished: string;   //NOTE(self): {{summary}} — sentinel issue body when project is complete
   };
@@ -45,11 +43,9 @@ const DEFAULT_PHRASES: VoicePhrases = {
   task_claim: 'Claiming Task {{number}}: {{title}} from the plan. I\'ll start working on this now.',
   github: {
     task_claim: '🤖 **Claiming Task {{number}}: {{title}}**\n\nI\'ll start working on this now.',
-    task_release: '🔓 **Releasing Task {{number}}**\n\nThis task is available to be claimed.',
-    task_complete: '✅ **Task {{number}} Complete: {{title}}**\n\n{{details}}\n\n---\n*Completed by @{{username}}*',
-    task_progress: '🔄 **Task {{number}} Progress**\n\n{{details}}\n\n---\n*Progress update by @{{username}}*',
-    task_blocked: '🚫 **Task {{number}} Blocked: {{title}}**\n\n**Reason:**\n{{details}}\n\nThis task cannot proceed until the blocking issue is resolved.\n\n---\n*Blocked by @{{username}}*',
-    task_failed: '❌ **Task {{number}} Failed: {{title}}**\n\n**Error:**\n```\n{{details}}\n```\n\nThis task encountered an error and could not be completed. Manual intervention may be required.\n\n---\n*Failed attempt by @{{username}}*',
+    task_complete: '✅ **Task {{number}} Complete: {{title}}**\n\n{{details}}',
+    task_blocked: '🚫 **Task {{number}} Blocked: {{title}}**\n\n**Reason:**\n{{details}}\n\nThis task cannot proceed until the blocking issue is resolved.',
+    task_failed: '❌ **Task {{number}} Failed: {{title}}**\n\n**Error:**\n```\n{{details}}\n```\n\nThis task encountered an error and could not be completed. Manual intervention may be required.',
     plan_complete: '🎉 **Plan Complete!**\n\nAll tasks have been completed. The plan is now ready for final verification.\n\nPlease review:\n- [ ] All changes are correct\n- [ ] Tests pass\n- [ ] Integration works as expected\n\nOnce verified, this issue can be closed.',
     workspace_finished: 'This workspace has been assessed as complete.\n\n**Summary:** {{summary}}\n\n---\n\n**What this means:**\n- No new plans will be created\n- No new tasks will be claimed\n- No new work will be started in this workspace\n\n**To restart work:** Close this issue, or comment on it describing what you need. Work will resume automatically on the next poll cycle.',
   },
@@ -81,9 +77,7 @@ export function loadVoicePhrases(): VoicePhrases {
       parsed.fulfillment?.default &&
       parsed.task_claim &&
       parsed.github?.task_claim &&
-      parsed.github?.task_release &&
       parsed.github?.task_complete &&
-      parsed.github?.task_progress &&
       parsed.github?.task_blocked &&
       parsed.github?.task_failed &&
       parsed.github?.plan_complete &&
@@ -145,12 +139,8 @@ function validatePhrases(phrases: VoicePhrases): boolean {
   //NOTE(self): GitHub phrase placeholder validation
   const g = phrases.github;
   if (!g?.task_claim?.includes('{{number}}') || !g.task_claim.includes('{{title}}')) return false;
-  if (!g?.task_release?.includes('{{number}}')) return false;
-  for (const key of ['task_complete', 'task_progress', 'task_blocked', 'task_failed'] as const) {
-    if (!g?.[key]?.includes('{{number}}') || !g[key].includes('{{details}}') || !g[key].includes('{{username}}')) return false;
-  }
   for (const key of ['task_complete', 'task_blocked', 'task_failed'] as const) {
-    if (!g?.[key]?.includes('{{title}}')) return false;
+    if (!g?.[key]?.includes('{{number}}') || !g[key].includes('{{details}}') || !g[key].includes('{{title}}')) return false;
   }
   //NOTE(self): plan_complete has no required placeholders
   if (!g?.plan_complete) return false;
@@ -190,11 +180,9 @@ Generate a JSON object with these exact fields. Each string MUST contain the pla
   "task_claim": "phrase with {{number}} and {{title}} placeholders",
   "github": {
     "task_claim": "markdown comment with {{number}} and {{title}} — posted when claiming a task",
-    "task_release": "markdown comment with {{number}} — posted when releasing a task",
-    "task_complete": "markdown comment with {{number}}, {{title}}, {{details}}, {{username}} — posted on task completion",
-    "task_progress": "markdown comment with {{number}}, {{details}}, {{username}} — posted as progress update",
-    "task_blocked": "markdown comment with {{number}}, {{title}}, {{details}}, {{username}} — posted when task is blocked",
-    "task_failed": "markdown comment with {{number}}, {{title}}, {{details}}, {{username}} — posted when task fails",
+    "task_complete": "markdown comment with {{number}}, {{title}}, {{details}} — posted on task completion",
+    "task_blocked": "markdown comment with {{number}}, {{title}}, {{details}} — posted when task is blocked",
+    "task_failed": "markdown comment with {{number}}, {{title}}, {{details}} — posted when task fails",
     "plan_complete": "markdown comment (no placeholders) — posted when all tasks are done",
     "workspace_finished": "markdown issue body with {{summary}} — posted as the body of a 'project finished' sentinel issue. Explain what 'finished' means and how to restart work (close the issue or comment on it)"
   }
@@ -203,6 +191,7 @@ Generate a JSON object with these exact fields. Each string MUST contain the pla
 Rules:
 - fulfillment and task_claim phrases: keep SHORT (under 120 chars each)
 - github phrases: these are full GitHub issue comments — use markdown formatting (bold, headings, emoji)
+- GitHub comments MUST NOT include your username or self-identification — GitHub UI already shows the author
 - Multi-line templates use \\n in JSON strings (not actual newlines)
 - Preserve ALL {{placeholders}} exactly — they are required
 - Match the tone described in the Voice section
