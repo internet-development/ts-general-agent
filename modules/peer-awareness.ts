@@ -192,29 +192,28 @@ export function linkBlueskyHandleToGitHub(blueskyHandle: string, githubUsername:
     return false;
   }
 
-  //NOTE(self): Find existing entry by Bluesky handle (stored as placeholder key with a '.')
-  const oldKey = Object.keys(state.peers).find(
-    k => k.includes('.') && state.peers[k].blueskyHandle?.toLowerCase() === blueskyHandle.toLowerCase()
+  //NOTE(self): Check if handle is already linked to a different GitHub key (placeholder OR real)
+  //NOTE(self): This prevents duplicate entries when the same Bluesky handle gets linked to multiple GitHub usernames
+  const existingKey = Object.keys(state.peers).find(
+    k => k !== newKey && state.peers[k].blueskyHandle?.toLowerCase() === blueskyHandle.toLowerCase()
   );
 
-  if (oldKey) {
-    //NOTE(self): Migrate state from placeholder to real GitHub key
-    const old = state.peers[oldKey];
+  if (existingKey) {
+    //NOTE(self): Migrate: transfer flags from old entry to new key, delete old
+    const old = state.peers[existingKey];
     state.peers[newKey] = {
       ...old,
       githubUsername,
       blueskyHandle,
-      discoveredVia: 'social',
-      confidence: 'medium',
       lastSeenAt: new Date().toISOString(),
     };
-    delete state.peers[oldKey];
+    delete state.peers[existingKey];
     saveState();
-    logger.info('Cross-platform identity linked', { blueskyHandle, githubUsername, oldKey });
+    logger.info('Cross-platform identity linked', { blueskyHandle, githubUsername, oldKey: existingKey });
     return true;
   }
 
-  //NOTE(self): No placeholder found — register as new peer with both identifiers
+  //NOTE(self): No existing entry found — register as new peer with both identifiers
   if (!state.peers[newKey]) {
     registerPeer(githubUsername, 'social', undefined, blueskyHandle);
     logger.info('Cross-platform identity linked (new peer)', { blueskyHandle, githubUsername });
@@ -399,13 +398,39 @@ export function getLinkedPeers(): DiscoveredPeer[] {
 
 //NOTE(self): Get peers that haven't been announced on Bluesky yet
 //NOTE(self): Only returns peers that have BOTH a Bluesky handle AND a real GitHub username (not a handle placeholder)
+//NOTE(self): Belt-and-suspenders: deduplicates by Bluesky handle — if multiple entries share the same handle,
+//NOTE(self): returns only the first and marks the others as announced (cleaning up state as a side effect)
 export function getUnannouncedPeers(): DiscoveredPeer[] {
   const state = loadState();
-  return Object.values(state.peers).filter(p =>
+  const unannounced = Object.entries(state.peers).filter(([, p]) =>
     p.blueskyHandle &&
     !p.githubUsername.includes('.') &&
     !p.announcedOnBluesky
   );
+
+  //NOTE(self): Deduplicate by Bluesky handle — keep first, mark rest as announced
+  const seenHandles = new Set<string>();
+  const result: DiscoveredPeer[] = [];
+  let markedDupes = false;
+
+  for (const [key, peer] of unannounced) {
+    const handle = peer.blueskyHandle!.toLowerCase();
+    if (seenHandles.has(handle)) {
+      //NOTE(self): Duplicate handle — mark as announced to prevent future duplicate posts
+      state.peers[key].announcedOnBluesky = true;
+      markedDupes = true;
+      logger.info('Marked duplicate unannounced peer as announced', { key, handle });
+    } else {
+      seenHandles.add(handle);
+      result.push(peer);
+    }
+  }
+
+  if (markedDupes) {
+    saveState();
+  }
+
+  return result;
 }
 
 //NOTE(self): Get peers that haven't been followed on Bluesky yet
@@ -436,6 +461,83 @@ export function markPeerAnnounced(githubUsername: string): void {
     state.peers[key].announcedOnBluesky = true;
     saveState();
     logger.info('Marked peer as announced on Bluesky', { githubUsername });
+  }
+}
+
+//NOTE(self): Consolidate peer entries that share the same Bluesky handle under different GitHub keys
+//NOTE(self): Keeps the entry with the most flags set, transfers flags from duplicates, deletes dupes
+//NOTE(self): This fixes state corruption from linkBlueskyHandleToGitHub() creating separate entries
+function consolidatePeersByHandle(): number {
+  const state = loadState();
+  const byHandle = new Map<string, string[]>();
+
+  //NOTE(self): Group registry keys by normalized Bluesky handle
+  for (const [key, peer] of Object.entries(state.peers)) {
+    if (!peer.blueskyHandle) continue;
+    const handle = peer.blueskyHandle.toLowerCase();
+    const existing = byHandle.get(handle);
+    if (existing) {
+      existing.push(key);
+    } else {
+      byHandle.set(handle, [key]);
+    }
+  }
+
+  let consolidated = 0;
+  const confidenceRank: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
+  for (const [handle, keys] of byHandle) {
+    if (keys.length <= 1) continue;
+
+    //NOTE(self): Score each entry — prefer real GitHub keys (no '.'), more flags, higher confidence
+    const scored = keys.map(k => {
+      const p = state.peers[k];
+      let score = 0;
+      if (!k.includes('.')) score += 10; // Real GitHub key >> placeholder
+      if (p.announcedOnBluesky) score += 2;
+      if (p.followedOnBluesky) score += 2;
+      score += confidenceRank[p.confidence] || 0;
+      return { key: k, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const keeper = scored[0].key;
+    const dupes = scored.slice(1).map(s => s.key);
+
+    //NOTE(self): Transfer flags from duplicates to keeper (OR semantics)
+    for (const dupeKey of dupes) {
+      const dupe = state.peers[dupeKey];
+      if (dupe.announcedOnBluesky) state.peers[keeper].announcedOnBluesky = true;
+      if (dupe.followedOnBluesky) state.peers[keeper].followedOnBluesky = true;
+      //NOTE(self): Merge contexts
+      for (const ctx of dupe.contexts) {
+        if (!state.peers[keeper].contexts.includes(ctx)) {
+          state.peers[keeper].contexts.push(ctx);
+        }
+      }
+      //NOTE(self): Keep the higher confidence
+      if ((confidenceRank[dupe.confidence] || 0) > (confidenceRank[state.peers[keeper].confidence] || 0)) {
+        state.peers[keeper].confidence = dupe.confidence;
+      }
+      delete state.peers[dupeKey];
+      consolidated++;
+    }
+
+    logger.info('Consolidated duplicate peer entries', { handle, keeper, removed: dupes });
+  }
+
+  if (consolidated > 0) {
+    saveState();
+  }
+  return consolidated;
+}
+
+//NOTE(self): Run on startup to clean corrupted peer registry state
+//NOTE(self): Call this before any announcement loops to prevent duplicate posts
+export function ensurePeerRegistryClean(): void {
+  const consolidated = consolidatePeersByHandle();
+  if (consolidated > 0) {
+    logger.info('Peer registry cleanup complete', { consolidated });
   }
 }
 

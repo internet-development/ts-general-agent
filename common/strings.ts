@@ -67,6 +67,7 @@ export function normalizePostText(text: string): string {
     .toLowerCase()
     .replace(/@[\w.-]+/g, '')
     .replace(/https?:\/\/\S+/g, '')
+    .replace(/(?:[\w-]+\.)+[\w]{2,}\/\S*/g, '') //NOTE(self): bare domain URLs like github.com/...
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 200);

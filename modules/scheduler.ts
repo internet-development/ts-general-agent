@@ -145,7 +145,7 @@ import {
   type ReviewablePR,
   DISCUSSION_LABEL,
 } from '@modules/github-workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, isPeerHandleOnly, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified } from '@modules/peer-awareness.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, isPeerHandleOnly, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified, ensurePeerRegistryClean } from '@modules/peer-awareness.js';
 import { processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
@@ -3818,6 +3818,9 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
   //NOTE(self): 4. Immediate duplicate pruning — clean the feed NOW, not 15 minutes later
   private async startupFeedWarmup(): Promise<void> {
     try {
+      //NOTE(self): Clean peer registry BEFORE any announcement loops — consolidate duplicate entries
+      ensurePeerRegistryClean();
+
       const session = getSession();
       if (!session) return;
 
