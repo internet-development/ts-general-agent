@@ -1,8 +1,10 @@
 //NOTE(self): Outbound Queue Module
 //NOTE(self): Central gatekeeper for all outbound Bluesky posts.
 //NOTE(self): Serializes sending (one at a time via mutex), enforces pacing cooldowns,
-//NOTE(self): and rejects near-duplicate text within a 5-minute window.
-//NOTE(self): Dedup buffer is persisted to disk so restarts don't lose dedup memory.
+//NOTE(self): and rejects near-duplicate text via two dedup layers:
+//NOTE(self):   1. recentPosts — time-windowed ring buffer for rapid-fire dedup (5-min window)
+//NOTE(self):   2. feedTexts — content set populated from the agent's own feed on startup,
+//NOTE(self):      catches cross-restart duplicates regardless of how long the agent was down
 //NOTE(self): Callers await enqueue() and get back { allowed: true } or { allowed: false, reason }.
 
 import * as fs from 'fs';
@@ -63,12 +65,35 @@ function saveDedupState(entries: RecentEntry[]): void {
 
 class OutboundQueue {
   private recentPosts: RecentEntry[];
+  //NOTE(self): Content-based dedup set — populated from the agent's own feed on startup
+  //NOTE(self): Does NOT expire — persists for the entire session, catches cross-restart duplicates
+  //NOTE(self): New posts are added here too so they're protected for the full session
+  private feedTexts: Set<string> = new Set();
   //NOTE(self): Promise-based mutex — only one message processes at a time
   private mutexPromise: Promise<void> = Promise.resolve();
 
   constructor() {
-    //NOTE(self): Load persisted dedup state — survives restarts
+    //NOTE(self): Load persisted dedup state — survives rapid restarts (within 5-min window)
     this.recentPosts = loadDedupState();
+  }
+
+  //NOTE(self): Warm up dedup from the agent's own Bluesky feed on startup
+  //NOTE(self): This is the cross-restart dedup layer — the feed IS the source of truth
+  //NOTE(self): Called once during scheduler startup with the agent's own feed
+  warmupFromFeed(feedItems: AtprotoFeedItem[]): void {
+    const ownPosts = feedItems.filter((item) => !item.reason);
+    let loaded = 0;
+    for (const item of ownPosts) {
+      const text = item.post.record.text;
+      if (!text) continue;
+      const normalized = normalizePostText(text);
+      if (!normalized) continue;
+      this.feedTexts.add(normalized);
+      loaded++;
+    }
+    if (loaded > 0) {
+      logger.info('Outbound queue warmed from feed', { loaded, feedItems: ownPosts.length });
+    }
   }
 
   //NOTE(self): Main entry point — callers await this before posting
@@ -115,37 +140,45 @@ class OutboundQueue {
     }
   }
 
-  //NOTE(self): Check if normalized text matches any recent post within the dedup window
+  //NOTE(self): Check both dedup layers: time-windowed (rapid-fire) and feed-based (cross-restart)
   private checkDedup(normalized: string): OutboundResult {
     const now = Date.now();
     const cutoff = now - OUTBOUND_DEDUP_WINDOW_MS;
 
-    //NOTE(self): Prune expired entries
+    //NOTE(self): Layer 1: Time-windowed ring buffer (rapid-fire guard)
     this.recentPosts = this.recentPosts.filter((e) => e.timestamp > cutoff);
-
-    const duplicate = this.recentPosts.find((e) => e.normalized === normalized);
-    if (duplicate) {
-      const agoSeconds = Math.round((now - duplicate.timestamp) / 1000);
+    const recentDup = this.recentPosts.find((e) => e.normalized === normalized);
+    if (recentDup) {
+      const agoSeconds = Math.round((now - recentDup.timestamp) / 1000);
       return {
         allowed: false,
         reason: `Near-duplicate of post sent ${agoSeconds}s ago`,
       };
     }
 
+    //NOTE(self): Layer 2: Feed-based content set (cross-restart guard)
+    //NOTE(self): Populated from the agent's own Bluesky feed on startup — doesn't expire
+    if (this.feedTexts.has(normalized)) {
+      return {
+        allowed: false,
+        reason: 'Duplicate of post already in feed (cross-restart dedup)',
+      };
+    }
+
     return { allowed: true };
   }
 
-  //NOTE(self): Record a post in the ring buffer and persist to disk
+  //NOTE(self): Record a post in both dedup layers
   private recordPost(normalized: string): void {
+    //NOTE(self): Layer 1: Time-windowed ring buffer
     this.recentPosts.push({ normalized, timestamp: Date.now() });
-
-    //NOTE(self): Enforce ring buffer size
     if (this.recentPosts.length > OUTBOUND_DEDUP_BUFFER_SIZE) {
       this.recentPosts = this.recentPosts.slice(-OUTBOUND_DEDUP_BUFFER_SIZE);
     }
-
-    //NOTE(self): Persist to disk — survives restarts
     saveDedupState(this.recentPosts);
+
+    //NOTE(self): Layer 2: Feed content set — survives for the entire session
+    this.feedTexts.add(normalized);
   }
 
   //NOTE(self): Append JSONL audit entry (follows commitment-queue pattern)
@@ -172,40 +205,68 @@ class OutboundQueue {
 //NOTE(self): Singleton export
 export const outboundQueue = new OutboundQueue();
 
-//NOTE(self): Scan a feed for near-duplicate posts and delete zero-engagement copies
-//NOTE(self): Keeps the oldest post per normalized-text group, deletes newer dupes with no engagement
-//NOTE(self): Runs from the engagement check loop to self-heal dupes that slipped past the in-memory buffer
+//NOTE(self): Scan a feed for near-duplicate posts and delete copies
+//NOTE(self): Keeps the oldest post per group, deletes newer dupes
+//NOTE(self): For top-level posts: groups by normalized text alone
+//NOTE(self): For replies: groups by normalized text + thread root URI (same text in same thread = dupe)
+//NOTE(self): Reposts (reason field) are always excluded — those aren't authored by us
+//NOTE(self): Runs from the engagement check loop to self-heal dupes that slipped past the outbound queue
 export async function pruneDuplicatePosts(feed: AtprotoFeedItem[]): Promise<number> {
-  //NOTE(self): Filter to top-level posts only (skip replies, reposts)
-  const topLevelPosts = feed.filter((item) => !item.reply && !item.reason);
+  //NOTE(self): Exclude reposts only — include both top-level posts AND replies
+  const ownPosts = feed.filter((item) => !item.reason);
 
-  //NOTE(self): Group by normalized text
+  //NOTE(self): Group by normalized text, scoped appropriately:
+  //NOTE(self): Top-level posts share a common scope key (duplicates regardless of URI)
+  //NOTE(self): Replies are scoped to their thread root (only duplicates within the same thread)
   const groups = new Map<string, AtprotoFeedItem[]>();
-  for (const item of topLevelPosts) {
+  for (const item of ownPosts) {
     const text = item.post.record.text;
     if (!text) continue;
-    const key = normalizePostText(text);
-    if (!key) continue;
-    const group = groups.get(key) || [];
+    const normalized = normalizePostText(text);
+    if (!normalized) continue;
+
+    const isReply = !!item.reply;
+    const scopeKey = isReply ? item.reply!.root.uri : '__top_level__';
+    const groupKey = `${normalized}|${scopeKey}`;
+
+    const group = groups.get(groupKey) || [];
     group.push(item);
-    groups.set(key, group);
+    groups.set(groupKey, group);
   }
 
   let deleted = 0;
+  let skippedDueToEngagement = 0;
 
-  for (const [, group] of groups) {
+  for (const [groupKey, group] of groups) {
     if (group.length < 2) continue;
+
+    logger.info('Found duplicate group', {
+      count: group.length,
+      text: group[0].post.record.text.slice(0, 80),
+      isReply: !!group[0].reply,
+    });
 
     //NOTE(self): Sort by createdAt ascending — keep the oldest
     group.sort((a, b) =>
       new Date(a.post.record.createdAt).getTime() - new Date(b.post.record.createdAt).getTime()
     );
 
-    //NOTE(self): Skip the oldest (index 0), check newer dupes for zero engagement
+    //NOTE(self): Skip the oldest (index 0), delete newer dupes
     for (let i = 1; i < group.length; i++) {
       const post = group[i].post;
       const engagement = (post.likeCount || 0) + (post.replyCount || 0) + (post.repostCount || 0);
-      if (engagement > 0) continue;
+
+      if (engagement > 0) {
+        skippedDueToEngagement++;
+        logger.info('Skipping duplicate with engagement', {
+          uri: post.uri,
+          text: post.record.text.slice(0, 60),
+          likes: post.likeCount || 0,
+          replies: post.replyCount || 0,
+          reposts: post.repostCount || 0,
+        });
+        continue;
+      }
 
       const result = await deletePost(post.uri);
       if (result.success) {
@@ -217,6 +278,10 @@ export async function pruneDuplicatePosts(feed: AtprotoFeedItem[]): Promise<numb
         logger.warn('Failed to prune duplicate post', { uri: post.uri, error: result.error });
       }
     }
+  }
+
+  if (skippedDueToEngagement > 0) {
+    logger.info('Duplicate pruning summary', { deleted, skippedDueToEngagement });
   }
 
   return deleted;

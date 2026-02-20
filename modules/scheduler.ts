@@ -26,6 +26,7 @@ import { pacing } from '@modules/pacing.js';
 import * as atproto from '@adapters/atproto/index.js';
 import { getAuthorFeed } from '@adapters/atproto/get-timeline.js';
 import { getPostThread } from '@adapters/atproto/get-post-thread.js';
+import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
 import { getSession, ensureValidSession, authenticate as reauthenticate, isTokenExpired } from '@adapters/atproto/authenticate.js';
 import {
   prioritizeNotifications,
@@ -68,6 +69,7 @@ import {
   getEngagementPatterns,
   checkInvitation,
   getInvitationPrompt,
+  warmupExpressionScheduleFromFeed,
 } from '@modules/expression.js';
 import {
   recordFriction,
@@ -399,8 +401,9 @@ export class AgentScheduler {
       return;
     }
 
-    //NOTE(self): Check own feed for identity post; create one if missing
-    await this.ensureIdentityPost();
+    //NOTE(self): Single feed fetch on startup — shared for identity check, dedup warmup, expression warmup
+    //NOTE(self): The feed IS the source of truth — derive state from it instead of maintaining separate copies
+    await this.startupFeedWarmup();
 
     //NOTE(self): Initialize expression schedule if needed
     const expressionSchedule = loadExpressionSchedule();
@@ -2692,15 +2695,21 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     }
 
     //NOTE(self): Always fetch feed — used for both dupe pruning and engagement check
-    const feedResult = await getAuthorFeed(session.did, { limit: 20 });
+    //NOTE(self): 50 items gives meaningful coverage — 20 was too few after replies/reposts are mixed in
+    const feedResult = await getAuthorFeed(session.did, { limit: 50 });
     if (!feedResult.success) {
       logger.info('Failed to fetch author feed', { error: feedResult.error });
       return;
     }
 
-    //NOTE(self): Prune duplicates on every cycle — self-healing for dupes that slipped past the in-memory buffer
+    //NOTE(self): Prune duplicates on every cycle — self-healing for dupes that slipped past the outbound queue
     try {
-      const pruned = await pruneDuplicatePosts(feedResult.data.feed);
+      const feedItems = feedResult.data.feed;
+      const ownPosts = feedItems.filter((item: any) => !item.reason);
+      const replies = feedItems.filter((item: any) => !!item.reply && !item.reason);
+      logger.info('Duplicate pruning scan', { totalFeedItems: feedItems.length, ownPosts: ownPosts.length, replies: replies.length });
+
+      const pruned = await pruneDuplicatePosts(feedItems);
       if (pruned > 0) {
         logger.info('Pruned duplicate posts', { count: pruned });
       }
@@ -3702,24 +3711,50 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
     }
   }
 
-  //NOTE(self): Ensure our own identity post exists on Bluesky
-  //NOTE(self): Every SOUL posts a 🔗— prefixed identity post linking Bluesky handle to GitHub profile
-  //NOTE(self): This is the canonical source of cross-platform identity — other SOULs discover it via feed scan
-  private async ensureIdentityPost(): Promise<void> {
+  //NOTE(self): Single feed fetch on startup — the feed IS the source of truth for:
+  //NOTE(self): 1. Identity post existence check
+  //NOTE(self): 2. Outbound queue dedup warmup (cross-restart protection)
+  //NOTE(self): 3. Expression schedule warmup (last post time → next expression timing)
+  private async startupFeedWarmup(): Promise<void> {
     try {
       const session = getSession();
       if (!session) return;
 
-      const githubUsername = this.appConfig.github.username;
-      if (!githubUsername) return;
-
-      const feedResult = await getAuthorFeed(session.did, { limit: 50, filter: 'posts_no_replies' });
+      //NOTE(self): Fetch without filter — we need replies too for dedup warmup
+      const feedResult = await getAuthorFeed(session.did, { limit: 50 });
       if (!feedResult.success) {
-        logger.warn('Could not check own feed for identity post', { error: feedResult.error });
+        logger.warn('Could not fetch own feed for startup warmup', { error: feedResult.error });
+        //NOTE(self): Fall back to identity-only check with filtered feed
+        await this.ensureIdentityPost([]);
         return;
       }
 
-      const existingIdentity = scanFeedForIdentityPost(feedResult.data.feed);
+      const feed = feedResult.data.feed;
+      logger.info('Startup feed warmup', { feedItems: feed.length });
+
+      //NOTE(self): 1. Identity post check (scanFeedForIdentityPost skips replies internally)
+      await this.ensureIdentityPost(feed);
+
+      //NOTE(self): 2. Warm outbound queue dedup from feed — cross-restart duplicate prevention
+      outboundQueue.warmupFromFeed(feed);
+
+      //NOTE(self): 3. Warm expression schedule from feed — respect posting intervals across restarts
+      warmupExpressionScheduleFromFeed(feed, session.did);
+    } catch (err) {
+      logger.warn('Startup feed warmup error (non-fatal)', { error: String(err) });
+    }
+  }
+
+  //NOTE(self): Ensure our own identity post exists on Bluesky
+  //NOTE(self): Every SOUL posts a 🔗— prefixed identity post linking Bluesky handle to GitHub profile
+  //NOTE(self): This is the canonical source of cross-platform identity — other SOULs discover it via feed scan
+  //NOTE(self): Accepts pre-fetched feed data from startupFeedWarmup to avoid redundant API calls
+  private async ensureIdentityPost(feed: AtprotoFeedItem[]): Promise<void> {
+    try {
+      const githubUsername = this.appConfig.github.username;
+      if (!githubUsername) return;
+
+      const existingIdentity = scanFeedForIdentityPost(feed);
       if (existingIdentity) {
         logger.info('Identity post found', { githubUsername: existingIdentity });
         return;

@@ -59,8 +59,9 @@ export function ensureHttps(url: string): string {
 }
 
 //NOTE(self): Normalize post text for dedup comparison
-//NOTE(self): Strips @mentions, URLs, lowercases, collapses whitespace, takes first 50 chars
+//NOTE(self): Strips @mentions, URLs, lowercases, collapses whitespace, takes first 200 chars
 //NOTE(self): Used by outbound queue (pre-send) and dupe cleanup (post-send)
+//NOTE(self): 200 chars is generous for Bluesky's 300-grapheme limit after stripping mentions/URLs
 export function normalizePostText(text: string): string {
   return text
     .toLowerCase()
@@ -68,7 +69,7 @@ export function normalizePostText(text: string): string {
     .replace(/https?:\/\/\S+/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 50);
+    .slice(0, 200);
 }
 
 //NOTE(self): Truncate text to a grapheme limit, preserving whole grapheme clusters

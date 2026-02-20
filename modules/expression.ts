@@ -2,12 +2,13 @@
 //NOTE(self): Handles my scheduled self-expression - posting thoughts from my SELF.
 //NOTE(self): Expression is how I discover who I am. Each post is a hypothesis about my identity.
 //NOTE(self): The prompts come from SELF.md - the richer my self-knowledge, the richer my expression.
-//NOTE(self): State is in-memory only - resets on restart. I use SELF.md for persistent memory.
+//NOTE(self): Schedule is in-memory but warmed from feed on startup — last post time derived from API.
 
 import { extractFromSelf, randomFrom, type SelfExtract } from '@local-tools/self-extract.js';
 import { logger } from '@modules/logger.js';
 import { getSkillSection, getSkillSubsection } from '@modules/skills.js';
 import { getRandomDesignSource, getRandomBrowseUrl, type DesignSource } from '@common/design-catalog.js';
+import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
 
 //NOTE(self): Load prompt template from skill by category, with variable interpolation
 function getPromptTemplate(category: string, vars: Record<string, string>): string {
@@ -282,6 +283,29 @@ export function loadExpressionSchedule(): ExpressionSchedule {
 export function saveExpressionSchedule(schedule: ExpressionSchedule): boolean {
   expressionSchedule = schedule;
   return true;
+}
+
+//NOTE(self): Warm up expression schedule from the agent's own Bluesky feed
+//NOTE(self): Finds the most recent top-level post and sets lastExpression to its timestamp
+//NOTE(self): This way the agent respects the 3-4h interval even across restarts
+export function warmupExpressionScheduleFromFeed(feedItems: AtprotoFeedItem[], agentDid: string): void {
+  //NOTE(self): Find the most recent top-level post by this agent (not replies, not reposts)
+  const ownTopLevel = feedItems
+    .filter((item) => !item.reply && !item.reason && item.post.author.did === agentDid)
+    .sort((a, b) =>
+      new Date(b.post.record.createdAt).getTime() - new Date(a.post.record.createdAt).getTime()
+    );
+
+  if (ownTopLevel.length > 0) {
+    const lastPost = ownTopLevel[0];
+    expressionSchedule.lastExpression = lastPost.post.record.createdAt;
+    logger.info('Expression schedule warmed from feed', {
+      lastExpression: lastPost.post.record.createdAt,
+      text: lastPost.post.record.text?.slice(0, 60),
+    });
+  } else {
+    logger.info('No top-level posts found in feed — expression schedule starts fresh');
+  }
 }
 
 //NOTE(self): Generate an expression prompt from my SELF.md
