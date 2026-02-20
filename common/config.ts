@@ -17,6 +17,7 @@ export const REFLECTION_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30m
 export const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000; // 5m
 export const ENGAGEMENT_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15m
 export const COMMITMENT_CHECK_INTERVAL_MS = 15_000; // 15s
+export const RITUAL_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30m — check for due daily rituals
 
 // ─── Self-Improvement ────────────────────────────────────────────────────────
 

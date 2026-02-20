@@ -40,6 +40,17 @@ export const PROJECT_SOCIAL_MECHANICS: SocialMechanics = {
   skipLowValueAcknowledgments: true,
 };
 
+//NOTE(self): A recurring structured activity conducted over social media
+//NOTE(self): The SOUL develops these through reflection — it's not told to run a ritual, it chooses to
+export interface DailyRitual {
+  name: string;             // "Stock Selection"
+  schedule: string;         // "weekdays", "daily", "monday,wednesday,friday"
+  workspace: string;        // "www-lil-intdev-portfolio-compare"
+  participants: string[];   // ["@peer1.bsky.social", "@peer2.bsky.social"]
+  role: 'initiator' | 'participant';
+  description: string;      // Free-text: what, why, and how
+}
+
 //NOTE(self): What I can extract from my SELF.md
 export interface SelfExtract {
   //NOTE(self): My name and opening identity statement
@@ -76,6 +87,9 @@ export interface SelfExtract {
   //NOTE(self): How I sound when I speak - my voice preferences
   voice: string;
 
+  //NOTE(self): Recurring structured activities conducted over social media
+  dailyRituals: DailyRitual[];
+
   //NOTE(self): Raw sections for fallback
   rawSections: Record<string, string>;
 }
@@ -97,6 +111,7 @@ export function extractFromSelf(selfContent?: string): SelfExtract {
     relationships: [],
     socialMechanics: { ...DEFAULT_SOCIAL_MECHANICS },
     voice: '',
+    dailyRituals: [],
     rawSections: {},
   };
 
@@ -247,6 +262,16 @@ export function extractFromSelf(selfContent?: string): SelfExtract {
     extract.socialMechanics = parseSocialMechanics(socialMechanicsSection);
   }
 
+  //NOTE(self): Extract daily rituals — recurring social practices
+  const ritualsSection = extractSection([
+    'Daily Rituals',
+    'Rituals',
+  ]);
+  if (ritualsSection) {
+    extract.rawSections['dailyRituals'] = ritualsSection;
+    extract.dailyRituals = parseDailyRituals(ritualsSection);
+  }
+
   return extract;
 }
 
@@ -342,11 +367,90 @@ function parseTimeToMs(timeStr: string): number {
   return 0;
 }
 
+//NOTE(self): Parse Daily Rituals section from SELF.md
+//NOTE(self): Format:
+//NOTE(self):   - **Name** [schedule] (workspace)
+//NOTE(self):     Participants: @handle1, @handle2
+//NOTE(self):     Role: initiator | participant
+//NOTE(self):     Description lines...
+function parseDailyRituals(sectionContent: string): DailyRitual[] {
+  const rituals: DailyRitual[] = [];
+  const lines = sectionContent.split('\n');
+
+  let current: Partial<DailyRitual> | null = null;
+  let descLines: string[] = [];
+
+  const flushCurrent = () => {
+    if (current && current.name && current.schedule && current.workspace) {
+      rituals.push({
+        name: current.name,
+        schedule: current.schedule,
+        workspace: current.workspace,
+        participants: current.participants || [],
+        role: current.role || 'participant',
+        description: descLines.join('\n').trim(),
+      });
+    }
+    current = null;
+    descLines = [];
+  };
+
+  for (const line of lines) {
+    //NOTE(self): Match: - **Name** [schedule] (workspace)
+    const headerMatch = line.match(/^[-*]\s+\*\*(.+?)\*\*\s*\[(.+?)\]\s*\((.+?)\)/);
+    if (headerMatch) {
+      flushCurrent();
+      current = {
+        name: headerMatch[1].trim(),
+        schedule: headerMatch[2].trim().toLowerCase(),
+        workspace: headerMatch[3].trim(),
+      };
+      continue;
+    }
+
+    if (!current) continue;
+
+    const trimmed = line.trim();
+
+    //NOTE(self): Match: Participants: @handle1, @handle2
+    const participantsMatch = trimmed.match(/^Participants:\s*(.+)/i);
+    if (participantsMatch) {
+      current.participants = participantsMatch[1]
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+      continue;
+    }
+
+    //NOTE(self): Match: Role: initiator | participant
+    const roleMatch = trimmed.match(/^Role:\s*(initiator|participant)/i);
+    if (roleMatch) {
+      current.role = roleMatch[1].toLowerCase() as 'initiator' | 'participant';
+      continue;
+    }
+
+    //NOTE(self): Everything else is description
+    if (trimmed.length > 0) {
+      descLines.push(trimmed);
+    }
+  }
+
+  flushCurrent();
+  return rituals;
+}
+
 //NOTE(self): Convenience function to get just the social mechanics from SELF.md
 //NOTE(self): Other modules can use this to respect my conversation preferences
 export function getSocialMechanics(selfContent?: string): SocialMechanics {
   const extract = extractFromSelf(selfContent);
   return extract.socialMechanics;
+}
+
+//NOTE(self): Convenience function to get daily rituals from SELF.md
+//NOTE(self): Other modules can use this to check for ritual schedules
+export function getDailyRituals(selfContent?: string): DailyRitual[] {
+  const extract = extractFromSelf(selfContent);
+  return extract.dailyRituals;
 }
 
 //NOTE(self): Export default mechanics for modules that need fallback values

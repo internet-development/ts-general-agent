@@ -447,7 +447,7 @@ export function hasUrgentNotifications(notifications: PrioritizedNotification[])
 //NOTE(self): Detect verbose SOUL-style closing/acknowledgment messages
 //NOTE(self): SOULs write "Thanks for coordinating! I'll stop here so we don't loop" — 80+ chars but zero value
 //NOTE(self): Questions and code blocks always return false (substantive content)
-function isLowValueClosing(text: string): boolean {
+export function isLowValueClosing(text: string): boolean {
   const trimmed = text.trim();
 
   //NOTE(self): Questions are always substantive
@@ -462,12 +462,19 @@ function isLowValueClosing(text: string): boolean {
     /\b(see you (?:on|in)|let'?s keep the rest in)\b/i,
     /\b(tag .+ (?:on|in|when)|wait for the .+ PR)\b/i,
     /\bdon'?t (?:keep )?loop/i,
+    //NOTE(self): Future-looking closings — "looking forward to X!", "can't wait to see Y!"
+    //NOTE(self): These are almost never followed by substantive content
+    /\b(looking forward|can'?t wait)\b/i,
   ];
 
   const hasClosingIntent = closingIntentPatterns.some(p => p.test(trimmed));
 
   //NOTE(self): Gratitude-only patterns — starts with thanks/agreement, short, no question, no code
-  const gratitudePattern = /^(thanks|thank you|thx|ty|appreciate|perfect|sounds good|sounds great|great|awesome|wonderful|excellent|amazing|totally|deal|love it|all good|makes sense|aligned|nice|yep|agreed)/i;
+  //NOTE(self): Expanded to catch common LLM-generated closings that agents write:
+  //NOTE(self): "Absolutely, great approach!", "Definitely looking forward to it!", "Likewise!"
+  //NOTE(self): The < 200 char guard prevents false positives on substantive messages that happen
+  //NOTE(self): to start with an agreement word
+  const gratitudePattern = /^(thanks|thank you|thx|ty|appreciate|perfect|sounds good|sounds great|great|awesome|wonderful|excellent|amazing|totally|deal|love it|all good|makes sense|aligned|nice|yep|agreed|absolutely|definitely|exactly|for sure|likewise|same here|will do|on it|right on|looking forward|excited to|excited about)/i;
   const isGratitudeOnly = gratitudePattern.test(trimmed) && trimmed.length < 200;
 
   return hasClosingIntent || isGratitudeOnly;

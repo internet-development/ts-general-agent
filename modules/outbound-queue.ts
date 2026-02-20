@@ -15,6 +15,7 @@ import { ui } from '@modules/ui.js';
 import { OUTBOUND_DEDUP_WINDOW_MS, OUTBOUND_DEDUP_BUFFER_SIZE } from '@common/config.js';
 import { normalizePostText } from '@common/strings.js';
 import { deletePost } from '@adapters/atproto/delete-post.js';
+import { isLowValueClosing } from '@modules/engagement.js';
 import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
 
 const AUDIT_LOG_FILE = '.memory/logs/outbound-queue.log';
@@ -235,7 +236,6 @@ export async function pruneDuplicatePosts(feed: AtprotoFeedItem[]): Promise<numb
   }
 
   let deleted = 0;
-  let skippedDueToEngagement = 0;
 
   for (const [groupKey, group] of groups) {
     if (group.length < 2) continue;
@@ -251,37 +251,89 @@ export async function pruneDuplicatePosts(feed: AtprotoFeedItem[]): Promise<numb
       new Date(a.post.record.createdAt).getTime() - new Date(b.post.record.createdAt).getTime()
     );
 
-    //NOTE(self): Skip the oldest (index 0), delete newer dupes
+    //NOTE(self): Delete ALL newer copies — a duplicate is a duplicate regardless of engagement
+    //NOTE(self): 4 identical posts on the feed is worse than losing a few likes on copies
     for (let i = 1; i < group.length; i++) {
       const post = group[i].post;
       const engagement = (post.likeCount || 0) + (post.replyCount || 0) + (post.repostCount || 0);
 
-      if (engagement > 0) {
-        skippedDueToEngagement++;
-        logger.info('Skipping duplicate with engagement', {
-          uri: post.uri,
-          text: post.record.text.slice(0, 60),
-          likes: post.likeCount || 0,
-          replies: post.replyCount || 0,
-          reposts: post.repostCount || 0,
-        });
-        continue;
-      }
-
       const result = await deletePost(post.uri);
       if (result.success) {
         deleted++;
-        auditLog('pruned', 'duplicate', post.record.text, `kept older post, this had 0 engagement`);
+        const engagementNote = engagement > 0
+          ? `had ${post.likeCount || 0} likes, ${post.replyCount || 0} replies, ${post.repostCount || 0} reposts`
+          : '0 engagement';
+        auditLog('pruned', 'duplicate', post.record.text, `kept oldest copy — deleted dupe (${engagementNote})`);
         ui.queue('Pruned duplicate', post.record.text.slice(0, 60));
-        logger.info('Pruned duplicate post', { uri: post.uri, text: post.record.text.slice(0, 60) });
+        logger.info('Pruned duplicate post', {
+          uri: post.uri,
+          text: post.record.text.slice(0, 60),
+          engagement,
+        });
       } else {
         logger.warn('Failed to prune duplicate post', { uri: post.uri, error: result.error });
       }
     }
   }
 
-  if (skippedDueToEngagement > 0) {
-    logger.info('Duplicate pruning summary', { deleted, skippedDueToEngagement });
+  return deleted;
+}
+
+//NOTE(self): Prune thank-you chains — threads where the agent posted multiple low-value closings
+//NOTE(self): Uses isLowValueClosing() (same heuristic that prevents sending them) to detect them retroactively
+//NOTE(self): Keeps the first closing per thread, deletes subsequent ones — you only say goodbye once
+export async function pruneThankYouChains(feed: AtprotoFeedItem[]): Promise<number> {
+  //NOTE(self): Only look at our own replies (not top-level posts, not reposts)
+  const ownReplies = feed.filter((item) => !!item.reply && !item.reason);
+
+  //NOTE(self): Group by thread root URI
+  const threadGroups = new Map<string, AtprotoFeedItem[]>();
+  for (const item of ownReplies) {
+    const rootUri = item.reply!.root.uri;
+    const group = threadGroups.get(rootUri) || [];
+    group.push(item);
+    threadGroups.set(rootUri, group);
+  }
+
+  let deleted = 0;
+
+  for (const [rootUri, replies] of threadGroups) {
+    //NOTE(self): Sort by createdAt ascending
+    replies.sort((a, b) =>
+      new Date(a.post.record.createdAt).getTime() - new Date(b.post.record.createdAt).getTime()
+    );
+
+    //NOTE(self): Find which of our replies are low-value closings
+    const closings = replies.filter((item) => {
+      const text = item.post.record.text;
+      return text && isLowValueClosing(text);
+    });
+
+    //NOTE(self): If 2+ closings in the same thread, keep the first and delete the rest
+    if (closings.length < 2) continue;
+
+    logger.info('Found thank-you chain', {
+      threadRoot: rootUri,
+      closingCount: closings.length,
+      texts: closings.map((c) => c.post.record.text.slice(0, 50)),
+    });
+
+    //NOTE(self): Skip index 0 (keep the first closing), delete the rest
+    for (let i = 1; i < closings.length; i++) {
+      const post = closings[i].post;
+      const result = await deletePost(post.uri);
+      if (result.success) {
+        deleted++;
+        auditLog('pruned', 'thank-you-chain', post.record.text, 'kept first closing, deleted follow-up');
+        ui.queue('Pruned closing', post.record.text.slice(0, 60));
+        logger.info('Pruned excess closing reply', {
+          uri: post.uri,
+          text: post.record.text.slice(0, 60),
+        });
+      } else {
+        logger.warn('Failed to prune closing reply', { uri: post.uri, error: result.error });
+      }
+    }
   }
 
   return deleted;

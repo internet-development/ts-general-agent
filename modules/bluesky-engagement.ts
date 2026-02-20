@@ -115,10 +115,79 @@ function saveState(): void {
   }
 }
 
-//NOTE(self): Get or create a conversation record
+//NOTE(self): Get a conversation record (returns null if untracked)
 export function getConversation(rootUri: string): ConversationRecord | null {
   const state = loadState();
   return state.conversations[rootUri] || null;
+}
+
+//NOTE(self): Create or update a conversation record
+//NOTE(self): MUST be called when processing notifications so ourReplyCount and
+//NOTE(self): other state fields actually work — without this, the entire conversation
+//NOTE(self): tracking system is inert (getConversation returns null, shouldRespondInConversation
+//NOTE(self): always allows, maxRepliesBeforeExit never triggers, etc.)
+export function trackConversation(
+  rootUri: string,
+  rootCid?: string,
+  rootAuthorDid?: string,
+  rootAuthorHandle?: string,
+  source: ConversationRecord['source'] = 'notification'
+): ConversationRecord {
+  const state = loadState();
+
+  //NOTE(self): If already tracked, just update lastChecked and return
+  if (state.conversations[rootUri]) {
+    state.conversations[rootUri].lastChecked = new Date().toISOString();
+    saveState();
+    return state.conversations[rootUri];
+  }
+
+  //NOTE(self): Create new conversation record
+  const now = new Date().toISOString();
+  const record: ConversationRecord = {
+    rootUri,
+    rootCid: rootCid || '',
+    rootAuthorDid: rootAuthorDid || '',
+    rootAuthorHandle: rootAuthorHandle || '',
+    firstSeen: now,
+    lastChecked: now,
+    threadDepth: 0,
+    participants: {},
+    ourReplyCount: 0,
+    ourLastReplyAt: null,
+    ourLastReplyUri: null,
+    state: 'new',
+    source,
+    reengagementCount: 0,
+  };
+
+  state.conversations[rootUri] = record;
+  saveState();
+  logger.info('Tracking new Bluesky conversation', { rootUri, rootAuthorHandle, source });
+  return record;
+}
+
+//NOTE(self): Record that we posted a reply in a conversation
+//NOTE(self): Increments ourReplyCount and updates timestamps — this is what enables
+//NOTE(self): maxRepliesBeforeExit, rapid back-and-forth detection, and the output self-check
+export function recordOurReply(rootUri: string, replyUri: string): void {
+  const state = loadState();
+  let conversation = state.conversations[rootUri];
+
+  //NOTE(self): Auto-track if not already tracked (safety net for code paths that skip tracking)
+  if (!conversation) {
+    trackConversation(rootUri);
+    conversation = state.conversations[rootUri];
+    if (!conversation) return;
+  }
+
+  conversation.ourReplyCount++;
+  conversation.ourLastReplyAt = new Date().toISOString();
+  conversation.ourLastReplyUri = replyUri;
+  conversation.state = 'awaiting_response';
+  conversation.lastChecked = new Date().toISOString();
+  saveState();
+  logger.info('Recorded our Bluesky reply', { rootUri, replyUri, ourReplyCount: conversation.ourReplyCount });
 }
 
 //NOTE(self): Record a participant's activity in the thread

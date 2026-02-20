@@ -151,6 +151,39 @@ The agent doesn't track "5 comments posted" — it remembers "helped @someone un
 
 ---
 
+## Daily Rituals
+
+Rituals are recurring structured activities conducted **over social media** — not background cron jobs. The SOUL defines them in `SELF.md` and develops them through reflection. The infrastructure reads `## Daily Rituals` from SELF.md and initiates social threads on Bluesky.
+
+**SELF.md format:**
+```markdown
+## Daily Rituals
+
+- **Name** [schedule] (workspace-repo)
+  Participants: @handle1.bsky.social, @handle2.bsky.social
+  Role: initiator
+  Description of what this ritual involves.
+```
+
+**Flow:**
+```
+SELF.md defines ritual → Ritual check loop fires → Initiator posts on Bluesky tagging peers
+    → Peers see mention in notification loop → Peers respond with their analysis
+    → Each SOUL creates a GitHub issue (via create_memo) with formal analysis
+    → Plan awareness synthesizes issues into a plan → Task execution creates PRs
+```
+
+**Conventions:**
+- **Initiators** post the opening thread, tagging participants with specific questions
+- **Participants** respond through normal notification processing — ritual context is injected into their system prompt when a thread is recognized as a ritual
+- **Artifacts** are created via `create_memo` during the conversation, flowing into plan awareness
+- **Schedule:** "daily", "weekdays", or comma-separated day names ("monday,wednesday,friday")
+- **State:** `.memory/ritual_state.json` tracks initiation dates, thread URIs, and run history
+- **Dedup:** `hasInitiatedToday()` prevents double-posting; ritual state persists across restarts
+- **Recognition:** Participants recognize ritual threads by matching the thread's workspace against their SELF.md rituals. Once recognized, the thread URI is stored for full ritual context injection
+
+---
+
 ## Error Handling
 
 Three tiers: **transient** (retry with backoff), **token expiration** (auto-recovery via session refresh loop), **fatal** (agent exits on 401/402/403). All error-path `response.json()` calls must be wrapped in try-catch — external APIs return HTML on 502/503. See `adapters/AGENTS.md` for the pattern.
@@ -173,7 +206,11 @@ Three tiers: **transient** (retry with backoff), **token expiration** (auto-reco
 - **Prompt templates:** All LLM-facing text lives in skill files (`skills/*/SKILL.md`), not hardcoded in TypeScript. See `skills/AGENTS.md`.
 - **Timer reentrancy:** All `setInterval` callbacks that call `async` functions MUST use a reentrancy guard (`runningLoops` Set in the scheduler). This includes ad-hoc callers like `requestEarlyPlanCheck()` and `forcePlanAwareness()` — every entry point to `planAwarenessCheck()` MUST check the guard. `setInterval` fires regardless of whether the previous callback finished — without a guard, concurrent executions cause duplicate posts and duplicate GitHub comments. See `modules/scheduler.ts` for the pattern.
 - **Outbound dedup:** ALL Bluesky posts — including replies, expressions, image shares, closing messages, and fulfillment links — MUST flow through `outbound-queue.ts`. No direct `atproto.createPost()` calls that bypass the outbound queue. The dedup check and recording MUST happen inside the same mutex-protected section to prevent TOCTOU races. Two dedup layers: (1) time-windowed ring buffer (`recentPosts`, 5-min window) for rapid-fire prevention; (2) feed-sourced content set (`feedTexts`, no expiry) for cross-restart prevention — populated from the agent's own Bluesky feed during `startupFeedWarmup`. The feed is the source of truth, not disk state.
-- **Startup feed warmup:** On startup, one feed fetch serves three purposes: identity post check, outbound dedup warmup, and expression schedule warmup. The expression schedule's `lastExpression` is derived from the most recent top-level post in the feed, so the 3-4h interval is respected across restarts. See `startupFeedWarmup()` in `scheduler.ts`.
+- **Startup feed warmup:** On startup, one feed fetch (50 items) serves four purposes: identity post check, outbound dedup warmup, expression schedule warmup, and immediate duplicate pruning. The expression schedule's `lastExpression` is derived from the most recent top-level post in the feed, so the 3-4h interval is respected across restarts. Duplicates are deleted before any loops start — the owner never sees them. See `startupFeedWarmup()` in `scheduler.ts`.
 - **GitHub claim dedup:** Task claims use a disk-persisted lock (`.memory/claimed_tasks.json`) set synchronously BEFORE any async work. This prevents TOCTOU races where two concurrent callers both pass the check before either records. Before posting a claim comment, existing issue comments are checked for duplicates. See `local-tools/self-task-claim.ts`.
-- **Feed pruning (safety net):** `pruneDuplicatePosts` in `outbound-queue.ts` scans the agent's own feed for duplicates that slipped past the outbound queue. It includes BOTH top-level posts and replies (not just top-level). Top-level posts are grouped by normalized text; replies are grouped by normalized text + thread root URI. Zero-engagement copies are deleted; engaged duplicates are logged and skipped. The scheduler fetches 50 feed items (not 20) to ensure meaningful coverage. `normalizePostText` uses 200 chars (not 50) for robust comparison.
+- **Feed pruning:** Two passes, both in `outbound-queue.ts`, running on startup AND every 15 minutes:
+  - `pruneDuplicatePosts` — exact-text duplicate deletion. Top-level grouped by normalized text; replies grouped by normalized text + thread root URI. Duplicates deleted regardless of engagement. Oldest kept.
+  - `pruneThankYouChains` — groups the agent's own replies by thread root, applies `isLowValueClosing()` from `engagement.ts` to each, keeps only the first closing per thread and deletes the rest. Prevents "thank you tennis" from accumulating on the feed.
+- **Bluesky conversation tracking:** Every conversation the agent responds to MUST be tracked via `trackConversation()` in `bluesky-engagement.ts`. When the agent posts a reply, `recordOurReply()` MUST be called to increment `ourReplyCount`. Without this, `maxRepliesBeforeExit`, rapid back-and-forth detection, the output self-check, re-engagement caps, and conversation conclusion all fail silently. The scheduler tracks conversations when processing notifications; `handleBlueskyReply` records replies and performs the output self-check.
+- **Output self-check (prevention > pruning):** `handleBlueskyReply()` runs `isLowValueClosing()` on the agent's OWN reply text before posting. If the agent has already replied once (`ourReplyCount >= 1`) and the new reply is a closing/acknowledgment, it auto-converts to a like — warm acknowledgment without noise. This is the primary prevention mechanism. Pruning (`pruneDuplicatePosts`, `pruneThankYouChains`) is the safety net that catches anything that slipped through. The philosophy: don't post it in the first place, rather than cleaning up after.
 - **GitHub comments:** MUST NOT include the agent's username or self-identification — the GitHub UI already shows the author. Voice phrases use `{{details}}` for content, not `{{username}}` footers.

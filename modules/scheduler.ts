@@ -1,5 +1,5 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my ten loops of being:
+//NOTE(self): Coordinates my eleven loops of being:
 //NOTE(self): 0. Session Refresh (15m) - proactive Bluesky token refresh to prevent expiration
 //NOTE(self): 0b. Version Check (5m) - check remote package.json, shut down if version mismatch
 //NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
@@ -11,6 +11,7 @@
 //NOTE(self): 6. Commitment Fulfillment (15s) - fulfilling promises made in replies
 //NOTE(self): 7. Heartbeat (5m) - show signs of life so owner knows agent is running
 //NOTE(self): 8. Engagement Check (15m) - check how expressions are being received
+//NOTE(self): 9. Ritual Check (30m) - daily social rituals initiated from SELF.md
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';
@@ -48,6 +49,8 @@ import {
 import {
   extractFromSelf,
   assessSelfRichness,
+  getDailyRituals,
+  type DailyRitual,
 } from '@local-tools/self-extract.js';
 import {
   recordExperience,
@@ -156,6 +159,8 @@ import {
   getConversation as getBlueskyConversation,
   cleanupOldConversations as cleanupOldBlueskyConversations,
   markConversationConcluded as markBlueskyConversationConcluded,
+  trackConversation as trackBlueskyConversation,
+  recordParticipantActivity as recordBlueskyParticipantActivity,
 } from '@modules/bluesky-engagement.js';
 import {
   enqueueCommitment,
@@ -170,7 +175,7 @@ import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
 import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { MEMORY_VERSION } from '@common/memory-version.js';
 import { ensureHttps } from '@common/strings.js';
-import { pruneDuplicatePosts, outboundQueue } from '@modules/outbound-queue.js';
+import { pruneDuplicatePosts, pruneThankYouChains, outboundQueue } from '@modules/outbound-queue.js';
 import { pruneGitHubDuplicateComments } from '@modules/github-comment-cleanup.js';
 import {
   AWARENESS_INTERVAL_MS,
@@ -193,7 +198,17 @@ import {
   STUCK_TASK_TIMEOUT_MS,
   MAX_TASK_RETRIES,
   IMPROVEMENT_BURN_IN_MS,
+  RITUAL_CHECK_INTERVAL_MS,
 } from '@common/config.js';
+import {
+  loadRitualState,
+  hasInitiatedToday,
+  recordRitualInitiation,
+  recordRitualParticipation,
+  isRitualThread,
+  getRitualHistory,
+  registerRitualThread,
+} from '@modules/ritual-state.js';
 
 //NOTE(self): Agent version — shared constant from common/memory-version.ts
 const LOCAL_VERSION = MEMORY_VERSION;
@@ -261,7 +276,7 @@ interface SchedulerState {
   lastImprovementCheck: number;
   lastPlanAwarenessCheck: number;
   lastCommitmentCheck: number;
-  currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving' | 'github_responding' | 'plan_executing';
+  currentMode: 'idle' | 'awareness' | 'responding' | 'expressing' | 'reflecting' | 'improving' | 'github_responding' | 'plan_executing' | 'ritual-initiation';
   pendingNotifications: PrioritizedNotification[];
   pendingGitHubConversations: PendingGitHubConversation[];
   consecutiveErrors: number;
@@ -306,6 +321,7 @@ export class AgentScheduler {
   private engagementCheckTimer: NodeJS.Timeout | null = null;
   private planAwarenessTimer: NodeJS.Timeout | null = null;
   private commitmentTimer: NodeJS.Timeout | null = null;
+  private ritualCheckTimer: NodeJS.Timeout | null = null;
   private sessionRefreshTimer: NodeJS.Timeout | null = null;
   private versionCheckTimer: NodeJS.Timeout | null = null;
   private shutdownRequested = false;
@@ -447,6 +463,7 @@ export class AgentScheduler {
     this.startHeartbeatLoop();
     this.startPlanAwarenessLoop();
     this.startCommitmentFulfillmentLoop();
+    this.startRitualCheckLoop();
 
     //NOTE(self): Start UI timer updates
     this.startTimerUpdates();
@@ -497,6 +514,10 @@ export class AgentScheduler {
     if (this.commitmentTimer) {
       clearInterval(this.commitmentTimer);
       this.commitmentTimer = null;
+    }
+    if (this.ritualCheckTimer) {
+      clearTimeout(this.ritualCheckTimer);
+      this.ritualCheckTimer = null;
     }
     if (this.sessionRefreshTimer) {
       clearInterval(this.sessionRefreshTimer);
@@ -1408,6 +1429,17 @@ export class AgentScheduler {
         return true;
       }
 
+      //NOTE(self): Track conversations for notifications that passed the filter
+      //NOTE(self): This enables ourReplyCount, maxRepliesBeforeExit, rapid back-and-forth
+      //NOTE(self): detection, re-engagement caps, and the output self-check in handleBlueskyReply
+      for (const pn of worthResponding) {
+        const record = pn.notification.record as { reply?: { root?: { uri?: string; cid?: string } } };
+        const rootUri = record?.reply?.root?.uri || pn.notification.uri;
+        const rootCid = record?.reply?.root?.cid || pn.notification.cid;
+        trackBlueskyConversation(rootUri, rootCid, pn.notification.author.did, pn.notification.author.handle, 'notification');
+        recordBlueskyParticipantActivity(rootUri, pn.notification.author.did, pn.notification.author.handle, pn.notification.author.displayName);
+      }
+
       //NOTE(self): Capture experiences from notifications BEFORE responding
       //NOTE(self): These are what the SOUL will reflect on later
       //NOTE(self): Full text matters - don't truncate, let the SOUL have the full context
@@ -1645,9 +1677,76 @@ export class AgentScheduler {
         : 'No workspace currently exists. You can suggest creating one if a conversation warrants collaborative development.';
       const workspaceSection = renderSkillSection('AGENT-WORKSPACE-DECISION', 'Workspace Context', { workspaceState });
 
+      //NOTE(self): Build ritual context section — inject if any notification is in a ritual thread
+      let ritualSection = '';
+      const selfRituals = getDailyRituals(selfContent);
+      if (selfRituals.length > 0) {
+        for (const pn of worthResponding) {
+          const record = pn.notification.record as { reply?: { root?: { uri?: string } }; text?: string };
+          const rootUri = record?.reply?.root?.uri || pn.notification.uri;
+          const ritualMatch = isRitualThread(rootUri);
+
+          if (ritualMatch.isRitual && ritualMatch.ritualName) {
+            //NOTE(self): Found a ritual thread — build context
+            const matchedRitual = selfRituals.find(r => r.name === ritualMatch.ritualName);
+            if (matchedRitual) {
+              const now = new Date();
+              const today = now.toISOString().slice(0, 10);
+              const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+              const history = getRitualHistory(matchedRitual.name, 5);
+              const recentHistory = history.length > 0
+                ? history.map(h => `- ${h.date}: ${h.notes || 'No notes recorded'}${h.artifactUri ? ` [artifact](${h.artifactUri})` : ''}`).join('\n')
+                : 'No previous history.';
+
+              ritualSection = '\n' + renderSkillSection('AGENT-RITUAL-CONTEXT', 'Ritual Thread Context', {
+                ritualName: matchedRitual.name,
+                ritualDescription: matchedRitual.description,
+                participants: matchedRitual.participants.join(', '),
+                workspace: matchedRitual.workspace,
+                today,
+                dayOfWeek,
+                recentHistory,
+              }) + '\n';
+              break; //NOTE(self): One ritual context is enough
+            }
+          } else if (!ritualMatch.isRitual) {
+            //NOTE(self): For participants: check if the notification mentions a workspace matching a ritual
+            //NOTE(self): This is how participants recognize ritual threads they haven't seen before
+            const notifText = record?.text || '';
+            for (const ritual of selfRituals) {
+              if (ritual.role === 'participant' && notifText.includes(ritual.workspace)) {
+                //NOTE(self): This looks like a ritual thread — register it
+                registerRitualThread(ritual.name, rootUri);
+
+                const now = new Date();
+                const today = now.toISOString().slice(0, 10);
+                const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+                const history = getRitualHistory(ritual.name, 5);
+                const recentHistory = history.length > 0
+                  ? history.map(h => `- ${h.date}: ${h.notes || 'No notes recorded'}${h.artifactUri ? ` [artifact](${h.artifactUri})` : ''}`).join('\n')
+                  : 'No previous history.';
+
+                ritualSection = '\n' + renderSkillSection('AGENT-RITUAL-CONTEXT', 'Ritual Thread Context', {
+                  ritualName: ritual.name,
+                  ritualDescription: ritual.description,
+                  participants: ritual.participants.join(', '),
+                  workspace: ritual.workspace,
+                  today,
+                  dayOfWeek,
+                  recentHistory,
+                }) + '\n';
+                break;
+              }
+            }
+            if (ritualSection) break;
+          }
+        }
+      }
+
       const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-BLUESKY-RESPONSE', {
         blueskyPeerSection,
         workspaceSection: workspaceSection ? '\n' + workspaceSection + '\n' : '',
+        ritualSection,
         blueskyUsername: config.bluesky.username,
         githubUsername: config.github.username,
         ownerHandle: config.owner.blueskyHandle,
@@ -2702,19 +2801,20 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
       return;
     }
 
-    //NOTE(self): Prune duplicates on every cycle — self-healing for dupes that slipped past the outbound queue
+    //NOTE(self): Prune feed on every cycle — self-healing for dupes and thank-you chains
     try {
       const feedItems = feedResult.data.feed;
       const ownPosts = feedItems.filter((item: any) => !item.reason);
       const replies = feedItems.filter((item: any) => !!item.reply && !item.reason);
-      logger.info('Duplicate pruning scan', { totalFeedItems: feedItems.length, ownPosts: ownPosts.length, replies: replies.length });
+      logger.info('Feed pruning scan', { totalFeedItems: feedItems.length, ownPosts: ownPosts.length, replies: replies.length });
 
-      const pruned = await pruneDuplicatePosts(feedItems);
-      if (pruned > 0) {
-        logger.info('Pruned duplicate posts', { count: pruned });
+      const dupes = await pruneDuplicatePosts(feedItems);
+      const chains = await pruneThankYouChains(feedItems);
+      if (dupes + chains > 0) {
+        logger.info('Feed pruning complete', { duplicates: dupes, thankYouChains: chains });
       }
     } catch (error) {
-      logger.warn('Duplicate pruning error', { error: String(error) });
+      logger.warn('Feed pruning error', { error: String(error) });
     }
 
     //NOTE(self): Check expression engagement only if there are posts needing it
@@ -3715,12 +3815,13 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
   //NOTE(self): 1. Identity post existence check
   //NOTE(self): 2. Outbound queue dedup warmup (cross-restart protection)
   //NOTE(self): 3. Expression schedule warmup (last post time → next expression timing)
+  //NOTE(self): 4. Immediate duplicate pruning — clean the feed NOW, not 15 minutes later
   private async startupFeedWarmup(): Promise<void> {
     try {
       const session = getSession();
       if (!session) return;
 
-      //NOTE(self): Fetch without filter — we need replies too for dedup warmup
+      //NOTE(self): Fetch without filter — we need replies too for dedup warmup and pruning
       const feedResult = await getAuthorFeed(session.did, { limit: 50 });
       if (!feedResult.success) {
         logger.warn('Could not fetch own feed for startup warmup', { error: feedResult.error });
@@ -3740,6 +3841,20 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
 
       //NOTE(self): 3. Warm expression schedule from feed — respect posting intervals across restarts
       warmupExpressionScheduleFromFeed(feed, session.did);
+
+      //NOTE(self): 4. Prune feed immediately — don't wait for the 15-min engagement loop
+      //NOTE(self): The owner should never see duplicate posts or thank-you chains when they look at the feed
+      try {
+        const dupes = await pruneDuplicatePosts(feed);
+        const chains = await pruneThankYouChains(feed);
+        const total = dupes + chains;
+        if (total > 0) {
+          logger.info('Startup feed cleanup complete', { duplicates: dupes, thankYouChains: chains });
+          ui.info('Startup cleanup', `Pruned ${dupes} duplicate${dupes === 1 ? '' : 's'}, ${chains} closing chain${chains === 1 ? '' : 's'}`);
+        }
+      } catch (err) {
+        logger.warn('Startup feed cleanup error (non-fatal)', { error: String(err) });
+      }
     } catch (err) {
       logger.warn('Startup feed warmup error (non-fatal)', { error: String(err) });
     }
@@ -5088,6 +5203,217 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       await this.planAwarenessCheck();
     } finally {
       this.runningLoops.delete('plan-awareness');
+    }
+  }
+
+  //NOTE(self): ========== RITUAL CHECK LOOP ==========
+  //NOTE(self): Daily rituals are social practices conducted on Bluesky
+  //NOTE(self): The SOUL defines them in SELF.md — the loop checks if it's time to initiate
+
+  private startRitualCheckLoop(): void {
+    //NOTE(self): 10-minute delayed start — let startup warmup complete first
+    const initialDelay = 10 * 60 * 1000;
+
+    const checkRituals = async () => {
+      if (this.shutdownRequested) return;
+
+      try {
+        if (this.state.currentMode === 'idle') {
+          if (this.runningLoops.has('ritual-initiation')) {
+            logger.info('Skipping ritual check — already running');
+          } else {
+            this.runningLoops.add('ritual-initiation');
+            try {
+              await this.ritualCheck();
+            } finally {
+              this.runningLoops.delete('ritual-initiation');
+            }
+          }
+        }
+
+        //NOTE(self): Schedule next check with jitter
+        this.ritualCheckTimer = setTimeout(checkRituals, getTimerJitter(this.appConfig.agent.name, 'ritual-check', RITUAL_CHECK_INTERVAL_MS));
+      } catch (error) {
+        //NOTE(self): CRITICAL: always reschedule to prevent permanent chain breakage
+        logger.error('Ritual check failed', { error: String(error) });
+        this.ritualCheckTimer = setTimeout(checkRituals, RITUAL_CHECK_INTERVAL_MS);
+      }
+    };
+
+    //NOTE(self): Start after initial delay
+    this.ritualCheckTimer = setTimeout(checkRituals, initialDelay);
+  }
+
+  //NOTE(self): Check if any rituals are due for initiation today
+  private async ritualCheck(): Promise<void> {
+    const selfContent = readSelf(this.appConfig.paths.selfmd);
+    const rituals = getDailyRituals(selfContent);
+
+    if (rituals.length === 0) return;
+
+    const now = new Date();
+    const dayName = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
+
+    for (const ritual of rituals) {
+      //NOTE(self): Only initiators kick off threads
+      if (ritual.role !== 'initiator') continue;
+
+      //NOTE(self): Check if schedule matches today
+      if (!this.ritualScheduleMatchesToday(ritual.schedule, dayName)) continue;
+
+      //NOTE(self): Already initiated today?
+      if (hasInitiatedToday(ritual.name)) continue;
+
+      //NOTE(self): Don't initiate during quiet hours
+      if (this.isQuietHours()) continue;
+
+      //NOTE(self): Don't interrupt active work
+      if (this.state.currentMode !== 'idle') continue;
+
+      logger.info('Ritual due for initiation', { name: ritual.name, schedule: ritual.schedule });
+      await this.initiateRitual(ritual);
+    }
+  }
+
+  //NOTE(self): Check if a schedule string matches today
+  //NOTE(self): Supports: "daily", "weekdays", "monday,wednesday,friday"
+  private ritualScheduleMatchesToday(schedule: string, dayName: string): boolean {
+    const s = schedule.toLowerCase().trim();
+    if (s === 'daily') return true;
+    if (s === 'weekdays') return !['saturday', 'sunday'].includes(dayName);
+    if (s === 'weekends') return ['saturday', 'sunday'].includes(dayName);
+    //NOTE(self): Comma-separated day names
+    const days = s.split(',').map(d => d.trim());
+    return days.includes(dayName);
+  }
+
+  //NOTE(self): Initiate a ritual by posting on Bluesky
+  private async initiateRitual(ritual: DailyRitual): Promise<void> {
+    this.state.currentMode = 'ritual-initiation';
+    ui.startSpinner(`Initiating ${ritual.name} ritual`);
+
+    try {
+      const config = this.appConfig;
+      const soul = readSoul(config.paths.soul);
+      const selfContent = readSelf(config.paths.selfmd);
+
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
+
+      //NOTE(self): Build recent history context
+      const history = getRitualHistory(ritual.name, 5);
+      const recentHistory = history.length > 0
+        ? history.map(h => `- ${h.date}: ${h.notes || 'No notes recorded'}${h.artifactUri ? ` [artifact](${h.artifactUri})` : ''}`).join('\n')
+        : 'No previous history — this is your first time running this ritual.';
+
+      //NOTE(self): Build self context — extract the ritual's own section from SELF.md
+      const extract = extractFromSelf(selfContent);
+      const selfContext = extract.rawSections['dailyRituals'] || '';
+
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-RITUAL-INITIATION', {
+        ritualName: ritual.name,
+        ritualDescription: ritual.description,
+        participants: ritual.participants.join(', '),
+        workspace: ritual.workspace,
+        blueskyUsername: config.bluesky.username,
+      });
+
+      const userMessage = renderSkillSection('AGENT-RITUAL-INITIATION', 'User Message Template', {
+        ritualName: ritual.name,
+        today,
+        dayOfWeek,
+        recentHistory,
+        selfContext,
+      });
+
+      const messages: Message[] = [{ role: 'user', content: userMessage }];
+
+      let response = await chatWithTools({
+        system: systemPrompt,
+        messages,
+        tools: AGENT_TOOLS,
+      });
+
+      //NOTE(self): Execute tool calls — the SOUL posts on Bluesky
+      let threadUri: string | null = null;
+
+      while (response.toolCalls.length > 0) {
+        const results = await executeTools(response.toolCalls);
+
+        //NOTE(self): Extract the posted thread URI from results
+        for (let i = 0; i < response.toolCalls.length; i++) {
+          const tc = response.toolCalls[i];
+          const result = results[i];
+          if (!result.is_error && (tc.name === 'bluesky_post' || tc.name === 'bluesky_post_with_image')) {
+            try {
+              const parsed = JSON.parse(result.content);
+              if (parsed.uri) {
+                threadUri = parsed.uri;
+              }
+            } catch { /* ignore parse errors */ }
+          }
+        }
+
+        messages.push(createAssistantToolUseMessage(response.text || '', response.toolCalls));
+        messages.push(createToolResultMessage(results));
+
+        response = await chatWithTools({
+          system: systemPrompt,
+          messages,
+          tools: AGENT_TOOLS,
+        });
+      }
+
+      //NOTE(self): Record the initiation
+      if (threadUri) {
+        recordRitualInitiation(ritual.name, threadUri);
+        recordExperience('learned_something', `Initiated ${ritual.name} ritual — posted opening analysis and tagged ${ritual.participants.join(', ')}`, { source: 'bluesky' });
+        ui.stopSpinner(`${ritual.name} ritual initiated`);
+        logger.info('Ritual initiated successfully', { name: ritual.name, threadUri });
+      } else {
+        ui.stopSpinner(`${ritual.name} ritual — no post created`, false);
+        logger.warn('Ritual initiation did not produce a post', { name: ritual.name });
+      }
+    } catch (error) {
+      ui.stopSpinner('Ritual initiation failed', false);
+
+      if (isFatalError(error)) {
+        ui.error('Fatal API Error', error.message);
+        logger.error('Fatal API error during ritual initiation', { code: error.code, message: error.message });
+        this.stop();
+        process.exit(1);
+      }
+
+      logger.error('Ritual initiation error', { name: ritual.name, error: String(error) });
+    } finally {
+      this.state.currentMode = 'idle';
+    }
+  }
+
+  //NOTE(self): Force a ritual check (for testing/manual trigger from terminal)
+  async forceRitual(ritualName?: string): Promise<void> {
+    if (this.runningLoops.has('ritual-initiation')) {
+      logger.info('Skipping forced ritual — already running');
+      return;
+    }
+    this.runningLoops.add('ritual-initiation');
+    try {
+      if (ritualName) {
+        //NOTE(self): Force a specific ritual
+        const selfContent = readSelf(this.appConfig.paths.selfmd);
+        const rituals = getDailyRituals(selfContent);
+        const ritual = rituals.find(r => r.name.toLowerCase() === ritualName.toLowerCase());
+        if (ritual) {
+          await this.initiateRitual(ritual);
+        } else {
+          logger.warn('Ritual not found in SELF.md', { ritualName });
+        }
+      } else {
+        await this.ritualCheck();
+      }
+    } finally {
+      this.runningLoops.delete('ritual-initiation');
     }
   }
 

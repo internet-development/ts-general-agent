@@ -6,10 +6,12 @@ import { processBase64ImageForUpload, processFileImageForUpload } from '@common/
 import * as atproto from '@adapters/atproto/index.js';
 import * as fs from 'fs';
 import type { ToolCall, ToolResult } from '@modules/tools.js';
-import { markInteractionResponded, recordOriginalPost } from '@modules/engagement.js';
+import { markInteractionResponded, recordOriginalPost, isLowValueClosing } from '@modules/engagement.js';
 import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
 import { ui } from '@modules/ui.js';
 import { outboundQueue } from '@modules/outbound-queue.js';
+import { getConversation, trackConversation, recordOurReply, markConversationConcluded } from '@modules/bluesky-engagement.js';
+import { isRitualThread, recordRitualParticipation } from '@modules/ritual-state.js';
 import {
   logPost,
   type PostLogEntry,
@@ -230,6 +232,32 @@ export async function handleBlueskyReply(call: ToolCall, config: any): Promise<T
 
   const replyRefs = replyRefsResult.data;
 
+  //NOTE(self): Output-level self-check — prevent the agent from posting its own low-value closings
+  //NOTE(self): The agent has free will to generate anything, but this acts as a wisdom check:
+  //NOTE(self): "I was about to say 'thanks!', but actually, a like says the same thing without noise"
+  //NOTE(self): Only kicks in after we've already replied once — first reply is always allowed
+  const rootUri = replyRefs.root.uri;
+  trackConversation(rootUri, replyRefs.root.cid);
+  const conversation = getConversation(rootUri);
+  if (conversation && conversation.ourReplyCount >= 1 && isLowValueClosing(text)) {
+    //NOTE(self): Auto-convert to a like — warm acknowledgment without creating noise
+    logger.info('Self-check: converting low-value reply to like', {
+      text: text.slice(0, 80),
+      ourReplyCount: conversation.ourReplyCount,
+      rootUri,
+    });
+    ui.queue('Self-check', `Converted closing to like: "${text.slice(0, 50)}…"`);
+    await atproto.likePost({ uri: post_uri, cid: post_cid }).catch(err =>
+      logger.warn('Failed to like post during self-check', { error: String(err), post_uri })
+    );
+    markConversationConcluded(rootUri, `Self-check: our reply was a closing after ${conversation.ourReplyCount} replies`);
+    return {
+      tool_use_id: call.id,
+      content: 'CONVERTED TO LIKE: Your reply was a closing/acknowledgment ("' + text.slice(0, 60) + '…"). After replying ' + conversation.ourReplyCount + ' time(s), a like is warmer and less noisy than another message. The post was liked instead. Move on to the next notification or use graceful_exit if you want to close formally.',
+      is_error: true,
+    };
+  }
+
   const queueCheck = await outboundQueue.enqueue('reply', text);
   if (!queueCheck.allowed) {
     return { tool_use_id: call.id, content: `Blocked: ${queueCheck.reason}`, is_error: true };
@@ -247,6 +275,14 @@ export async function handleBlueskyReply(call: ToolCall, config: any): Promise<T
   if (result.success) {
     ui.social(`${config.agent.name} (reply)`, text);
     markInteractionResponded(post_uri, result.data.uri);
+    //NOTE(self): Record our reply in conversation state — enables ourReplyCount tracking
+    recordOurReply(rootUri, result.data.uri);
+    //NOTE(self): Track ritual participation if this reply is in a ritual thread
+    const ritualMatch = isRitualThread(rootUri);
+    if (ritualMatch.isRitual && ritualMatch.ritualName) {
+      recordRitualParticipation(ritualMatch.ritualName);
+      logger.info('Recorded ritual participation via reply', { ritualName: ritualMatch.ritualName, rootUri });
+    }
     logger.info('Reply sent', { post_uri, reply_uri: result.data.uri });
     return { tool_use_id: call.id, content: JSON.stringify({ success: true, uri: result.data.uri }) };
   }
