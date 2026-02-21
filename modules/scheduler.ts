@@ -965,7 +965,7 @@ export class AgentScheduler {
       const notifResult = await getGitHubNotifications({
         participating: true, //NOTE(self): Only where we're directly involved
         since: githubSeenAt?.toISOString(),
-        per_page: 20,
+        per_page: 50, //NOTE(self): 50 per page + pagination — a human reads all their notifications
       });
 
       if (!notifResult.success) {

@@ -40,6 +40,8 @@ export interface GetNotificationsParams {
 }
 
 //NOTE(self): Fetch GitHub notifications for the authenticated user
+//NOTE(self): Paginates through ALL available pages — a human checks all their notifications, not just the first page
+//NOTE(self): Without pagination, mention notifications can be permanently lost when seenAt advances past unfetched pages
 export async function getNotifications(
   params: GetNotificationsParams = {}
 ): Promise<GitHubResult<GitHubNotification[]>> {
@@ -53,7 +55,8 @@ export async function getNotifications(
     if (params.all) searchParams.set('all', 'true');
     if (params.participating) searchParams.set('participating', 'true');
     if (params.since) searchParams.set('since', params.since);
-    searchParams.set('per_page', String(params.per_page || 20));
+    const perPage = params.per_page || 50;
+    searchParams.set('per_page', String(perPage));
 
     const url = `${GITHUB_API}/notifications?${searchParams}`;
     const response = await githubFetch(url, {
@@ -65,11 +68,32 @@ export async function getNotifications(
       return { success: false, error: error.message || 'Failed to fetch notifications' };
     }
 
-    const data = await response.json();
+    let data: GitHubNotification[] = await response.json();
+
+    //NOTE(self): Paginate if first page was full — fetch ALL remaining pages
+    //NOTE(self): A human reads all their notifications; so do we. Missing one means missing a mention.
+    if (data.length >= perPage) {
+      let nextUrl = parseLinkNext(response.headers.get('link'));
+      while (nextUrl) {
+        const pageResponse = await githubFetch(nextUrl, { headers: getAuthHeaders() });
+        if (!pageResponse.ok) break;
+        const pageData: GitHubNotification[] = await pageResponse.json();
+        data = data.concat(pageData);
+        nextUrl = parseLinkNext(pageResponse.headers.get('link'));
+      }
+    }
+
     return { success: true, data };
   } catch (error) {
     return { success: false, error: String(error) };
   }
+}
+
+//NOTE(self): Parse Link header for rel="next" URL (GitHub pagination)
+function parseLinkNext(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+  return match ? match[1] : null;
 }
 
 //NOTE(self): Mark a notification as read
