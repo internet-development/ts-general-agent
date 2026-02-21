@@ -17,7 +17,7 @@ import type { GitHubPullRequest } from '@adapters/github/types.js';
 import { parsePlan, getClaimableTasks, freshUpdateTaskInPlan, fetchFreshPlan, type ParsedPlan, type ParsedTask } from '@local-tools/self-plan-parse.js';
 import { handlePlanComplete } from '@local-tools/self-task-report.js';
 import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
-import { registerPeer, isPeerByBlueskyHandle } from '@modules/peer-awareness.js';
+import { registerPeer, isPeerByBlueskyHandle, getPeerUsernames } from '@modules/peer-awareness.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { createIssue } from '@adapters/github/create-issue.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
@@ -1312,6 +1312,47 @@ async function extractSentinelFeedback(
   }
 }
 
+//NOTE(self): Scan workspace for human comments on open issues (excluding the sentinel)
+//NOTE(self): Returns info about the first human comment found, or null if no human activity
+async function checkWorkspaceWideHumanActivity(
+  owner: string,
+  repo: string,
+  sentinelIssueNumber: number
+): Promise<{ issueNumber: number; username: string } | null> {
+  try {
+    const openIssuesResult = await listIssues({ owner, repo, state: 'open', per_page: 10 });
+    if (!openIssuesResult.success) return null;
+
+    const peerUsernames = getPeerUsernames();
+    const config = getConfig();
+    const agentUsername = config.github.username.toLowerCase();
+
+    //NOTE(self): Build set of known SOUL/bot usernames to exclude
+    const soulUsernames = new Set([agentUsername, ...peerUsernames.map(u => u.toLowerCase())]);
+
+    for (const issue of openIssuesResult.data) {
+      //NOTE(self): Skip the sentinel itself, PRs, and finished-labeled issues
+      if (issue.number === sentinelIssueNumber) continue;
+      if (issue.pull_request) continue;
+
+      //NOTE(self): Fetch comments on this issue
+      const threadResult = await getIssueThread({ owner, repo, issue_number: issue.number }, agentUsername);
+      if (!threadResult.success) continue;
+
+      //NOTE(self): Check for non-SOUL human comments
+      const humanComment = threadResult.data.comments.find(c => !soulUsernames.has(c.user.login.toLowerCase()));
+      if (humanComment) {
+        return { issueNumber: issue.number, username: humanComment.user.login };
+      }
+    }
+
+    return null;
+  } catch (err) {
+    logger.warn('Failed to check workspace-wide human activity', { owner, repo, error: String(err) });
+    return null;
+  }
+}
+
 //NOTE(self): Verify the finished sentinel — called every plan awareness cycle
 //NOTE(self): CREATOR-ONLY PROCESSING: only the SOUL that created the sentinel processes comments
 //NOTE(self): Three valid outcomes (from owner requirements, Issue #67):
@@ -1387,7 +1428,27 @@ export async function verifyFinishedSentinel(owner: string, repo: string): Promi
     );
 
     if (nonCreatorComments.length === 0) {
-      return true; //NOTE(self): No comments, workspace is still finished
+      //NOTE(self): No comments on sentinel — scan workspace-wide for human activity on other open issues
+      const humanActivity = await checkWorkspaceWideHumanActivity(owner, repo, issueNumber);
+      if (humanActivity) {
+        //NOTE(self): Human commented on another issue — close sentinel to resume workspace
+        await createIssueComment({
+          owner,
+          repo,
+          issue_number: issueNumber,
+          body: `Human activity detected on #${humanActivity.issueNumber} — closing sentinel to resume workspace.`,
+        });
+        await updateIssue({ owner, repo, issue_number: issueNumber, state: 'closed' });
+        state.workspaces[key].finishedIssueNumber = undefined;
+        saveState();
+        logger.info('Human activity on workspace issue — sentinel closed, workspace reactivated', {
+          owner, repo, issueNumber,
+          activityIssue: humanActivity.issueNumber,
+          humanUser: humanActivity.username,
+        });
+        return false;
+      }
+      return true; //NOTE(self): No human activity anywhere, workspace is still finished
     }
 
     //NOTE(self): Check if any comments contain work requests (vs just agreement)

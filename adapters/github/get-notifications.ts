@@ -144,6 +144,9 @@ export function filterActionableNotifications(
     //NOTE(self): Include review requests
     if (n.reason === 'review_requested') return true;
 
+    //NOTE(self): Include assignment notifications — being assigned is clearly actionable
+    if (n.reason === 'assign') return true;
+
     //NOTE(self): Skip subscribed/manual (too noisy)
     return false;
   });

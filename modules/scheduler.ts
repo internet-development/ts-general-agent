@@ -111,6 +111,7 @@ import {
   getEffectivePeers,
   formatThreadForContext,
   type IssueThread,
+  type AnalyzeConversationOptions,
 } from '@adapters/github/get-issue-thread.js';
 import {
   getGitHubSeenAt,
@@ -963,7 +964,8 @@ export class AgentScheduler {
       //NOTE(self): Check GitHub notifications
       const githubSeenAt = getGitHubSeenAt();
       const notifResult = await getGitHubNotifications({
-        participating: true, //NOTE(self): Only where we're directly involved
+        //NOTE(self): No participating filter — filterActionableNotifications handles noise at application layer
+        //NOTE(self): participating:true was silently dropping @mentions in repos we hadn't interacted with
         since: githubSeenAt?.toISOString(),
         per_page: 50, //NOTE(self): 50 per page + pagination — a human reads all their notifications
       });
@@ -1019,7 +1021,13 @@ export class AgentScheduler {
             continue;
           }
 
-          const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, {}, getPeerUsernames());
+          //NOTE(self): Pass workspace context so analyzeConversation treats workspace issues proactively
+          const wsOptions: AnalyzeConversationOptions = {};
+          if (isWatchingWorkspace(owner, repo)) {
+            wsOptions.isWorkspaceIssue = true;
+            wsOptions.repoFullName = `${owner}/${repo}`;
+          }
+          const analysis = analyzeConversation(threadResult.data, this.appConfig.github.username, wsOptions, getPeerUsernames());
 
           if (analysis.shouldRespond) {
             //NOTE(self): Check if we already have this in pending
