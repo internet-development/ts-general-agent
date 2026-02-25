@@ -59,7 +59,6 @@ import {
   handleUpdatePostAttribution,
   handleFormatSourceAttribution,
   handleGracefulExit,
-  handleConcludeConversation,
   handleSelfImprove,
 } from '@local-tools/self-handlers.js';
 
@@ -207,8 +206,6 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         return await handleFormatSourceAttribution(call);
       case 'graceful_exit':
         return await handleGracefulExit(call, config);
-      case 'conclude_conversation':
-        return await handleConcludeConversation(call);
       case 'self_improve':
         return await handleSelfImprove(call);
 

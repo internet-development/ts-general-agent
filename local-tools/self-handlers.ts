@@ -12,11 +12,9 @@ import { runClaudeCode } from '@local-tools/self-improve-run.js';
 import { renderSkillSection } from '@modules/skills.js';
 import {
   markConversationConcluded as markBlueskyConversationConcluded,
-  getConversation as getBlueskyConversation,
 } from '@modules/bluesky-engagement.js';
 import {
   markConversationConcluded as markGitHubConversationConcluded,
-  getConversation as getGitHubConversation,
 } from '@modules/github-engagement.js';
 import { isWatchingWorkspace } from '@modules/github-workspace-discovery.js';
 import { ui } from '@modules/ui.js';
@@ -392,84 +390,6 @@ export async function handleGracefulExit(call: ToolCall, config: any): Promise<T
         closing_message: closing_type === 'message' ? closing_message : '(reacted with heart)',
         reason,
         message: 'Conversation gracefully concluded.',
-      }),
-    };
-  }
-
-  return {
-    tool_use_id: call.id,
-    content: `Error: Unknown platform "${platform}". Must be "bluesky" or "github".`,
-    is_error: true,
-  };
-}
-
-export async function handleConcludeConversation(call: ToolCall): Promise<ToolResult> {
-  const { platform, identifier, reason } = call.input as {
-    platform: 'bluesky' | 'github';
-    identifier: string;
-    reason: string;
-  };
-
-  if (platform === 'bluesky') {
-    const conversation = getBlueskyConversation(identifier);
-    if (!conversation) {
-      logger.info('Concluding untracked Bluesky conversation', { rootUri: identifier, reason });
-    }
-    markBlueskyConversationConcluded(identifier, reason);
-
-    return {
-      tool_use_id: call.id,
-      content: JSON.stringify({
-        success: true,
-        platform: 'bluesky',
-        identifier,
-        reason,
-        message: 'Conversation marked as concluded. You will not respond to further messages in this thread unless explicitly @mentioned again.',
-      }),
-    };
-  }
-
-  if (platform === 'github') {
-    const match = identifier.match(/^([^\/]+)\/([^#]+)#(\d+)$/);
-    if (!match) {
-      return {
-        tool_use_id: call.id,
-        content: 'Error: GitHub identifier must be in owner/repo#number format (e.g., "anthropics/claude-code#123")',
-        is_error: true,
-      };
-    }
-
-    const [, owner, repo, numberStr] = match;
-    const number = parseInt(numberStr, 10);
-
-    const conversation = getGitHubConversation(owner, repo, number);
-    if (!conversation) {
-      logger.info('Concluding untracked GitHub conversation', { owner, repo, number, reason });
-    }
-    markGitHubConversationConcluded(owner, repo, number, reason);
-
-    if (isWatchingWorkspace(owner, repo)) {
-      const closeResult = await github.updateIssue({
-        owner,
-        repo,
-        issue_number: number,
-        state: 'closed',
-      });
-      if (closeResult.success) {
-        logger.info('Auto-closed workspace issue after conclude_conversation', { owner, repo, number });
-      } else {
-        logger.warn('Failed to auto-close workspace issue', { error: closeResult.error });
-      }
-    }
-
-    return {
-      tool_use_id: call.id,
-      content: JSON.stringify({
-        success: true,
-        platform: 'github',
-        identifier,
-        reason,
-        message: 'Conversation marked as concluded. You will not respond to further messages in this issue unless explicitly @mentioned again.',
       }),
     };
   }

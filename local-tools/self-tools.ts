@@ -64,29 +64,6 @@ export const SELF_TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: 'conclude_conversation',
-    description: 'DEPRECATED: Use graceful_exit instead. This tool silently marks a conversation concluded without any closing gesture, which can feel like ghosting. Only use if you truly cannot send any closing message.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        platform: {
-          type: 'string',
-          enum: ['bluesky', 'github'],
-          description: 'Which platform the conversation is on',
-        },
-        identifier: {
-          type: 'string',
-          description: 'For Bluesky: the thread root URI (at://...). For GitHub: owner/repo#number format (e.g., "anthropics/claude-code#123")',
-        },
-        reason: {
-          type: 'string',
-          description: 'Why you\'re concluding this conversation (e.g., "Point made, no need to continue", "Conversation going in circles", "Other party seems satisfied")',
-        },
-      },
-      required: ['platform', 'identifier', 'reason'],
-    },
-  },
-  {
     name: 'self_improve',
     description: 'Invoke Claude Code to improve yourself. You prompt it like a human would - describe what you want changed and why. Claude Code has full access to modify your codebase. Use this for bugs, new features, enhancements, or any change that would make you better.',
     input_schema: {

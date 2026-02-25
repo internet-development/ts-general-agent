@@ -121,13 +121,15 @@ create docs → implement → review → merge → update docs → repeat
 
 After major milestones, SOULs re-read both docs, simulate scenarios against the codebase, fix gaps, and update the docs.
 
+**Recovery mechanisms:** PRs with merge conflicts are auto-closed and their tasks reset to `pending` (see `handleMergeConflictPR` in `github-workspace-discovery.ts`). Tasks stuck in `in_progress`/`claimed` for >30 minutes without an open PR are reset to `pending` with up to 3 retries (see `recoverStuckTasks` in `scheduler.ts`). See `SCENARIOS.md` Scenario 3 for the owner-observable behavior.
+
 ---
 
 ## Multi-SOUL Collaborative Development
 
 **Key Constraint:** SOULs are completely separate processes. They can ONLY see each other through Bluesky posts/mentions/replies and GitHub issues/comments/PRs. No shared memory, no IPC.
 
-See `SCENARIOS.md` Scenario 3 for the full collaboration lifecycle. See `example-conversation.ts` for a detailed Bluesky-to-GitHub workstream with every background action annotated.
+See `SCENARIOS.md` Scenario 3 for the full collaboration lifecycle. See `example-conversation.ts` for a detailed Bluesky-to-GitHub workstream with every background action annotated. See `example-conversation-space.ts` for a space conversation with commitments, fulfillment, and self-reflection.
 
 ### Peer Coordination
 
@@ -211,7 +213,7 @@ On startup, `startSpaceParticipationLoop()` attempts discovery immediately, then
 - `local-tools/self-space-config.ts` — Runtime-adjustable config
 - `skills/space-participation/SKILL.md` — LLM prompt for participation decisions
 
-**Space participation runs in ALL modes** including `--social-only`.
+**Space participation runs in ALL modes** including `--social-only`. See `SCENARIOS.md` Scenario 5 for the expected experience and `example-conversation-space.ts` for a fully annotated conversation.
 
 ### Space Commitments
 
@@ -253,12 +255,10 @@ Three tiers: **transient** (retry with backoff), **token expiration** (auto-reco
 - **Logging:** `logger.info` for all operational messages (there is no cost locally to great logging), `logger.debug` for noisy retry loops, `logger.warn` for caught errors, `logger.error` for unexpected failures.
 - **Prompt templates:** All LLM-facing text lives in skill files (`skills/*/SKILL.md`), not hardcoded in TypeScript. See `skills/AGENTS.md`.
 - **Timer reentrancy:** All `setInterval` callbacks that call `async` functions MUST use a reentrancy guard (`runningLoops` Set in the scheduler). This includes ad-hoc callers like `requestEarlyPlanCheck()` and `forcePlanAwareness()` — every entry point to `planAwarenessCheck()` MUST check the guard. `setInterval` fires regardless of whether the previous callback finished — without a guard, concurrent executions cause duplicate posts and duplicate GitHub comments. See `modules/scheduler.ts` for the pattern.
-- **Outbound dedup:** ALL Bluesky posts — including replies, expressions, image shares, closing messages, and fulfillment links — MUST flow through `outbound-queue.ts`. No direct `atproto.createPost()` calls that bypass the outbound queue. The dedup check and recording MUST happen inside the same mutex-protected section to prevent TOCTOU races. Two dedup layers: (1) time-windowed ring buffer (`recentPosts`, 5-min window) for rapid-fire prevention; (2) feed-sourced content set (`feedTexts`, no expiry) for cross-restart prevention — populated from the agent's own Bluesky feed during `startupFeedWarmup`. The feed is the source of truth, not disk state.
-- **Startup feed warmup:** On startup, one feed fetch (50 items) serves four purposes: identity post check, outbound dedup warmup, expression schedule warmup, and immediate duplicate pruning. The expression schedule's `lastExpression` is derived from the most recent top-level post in the feed, so the 3-4h interval is respected across restarts. Duplicates are deleted before any loops start — the owner never sees them. See `startupFeedWarmup()` in `scheduler.ts`.
-- **GitHub claim dedup:** Task claims use a disk-persisted lock (`.memory/claimed_tasks.json`) set synchronously BEFORE any async work. This prevents TOCTOU races where two concurrent callers both pass the check before either records. Before posting a claim comment, existing issue comments are checked for duplicates. See `local-tools/self-task-claim.ts`.
-- **Feed pruning:** Two passes, both in `outbound-queue.ts`, running on startup AND every 15 minutes:
-  - `pruneDuplicatePosts` — exact-text duplicate deletion. Top-level grouped by normalized text; replies grouped by normalized text + thread root URI. Duplicates deleted regardless of engagement. Oldest kept.
-  - `pruneThankYouChains` — groups the agent's own replies by thread root, applies `isLowValueClosing()` from `engagement.ts` to each, keeps only the first closing per thread and deletes the rest. Prevents "thank you tennis" from accumulating on the feed.
-- **Bluesky conversation tracking:** Every conversation the agent responds to MUST be tracked via `trackConversation()` in `bluesky-engagement.ts`. When the agent posts a reply, `recordOurReply()` MUST be called to increment `ourReplyCount`. Without this, `maxRepliesBeforeExit`, rapid back-and-forth detection, the output self-check, re-engagement caps, and conversation conclusion all fail silently. The scheduler tracks conversations when processing notifications; `handleBlueskyReply` records replies and performs the output self-check.
-- **Output self-check (prevention > pruning):** `handleBlueskyReply()` runs `isLowValueClosing()` on the agent's OWN reply text before posting. If the agent has already replied once (`ourReplyCount >= 1`) and the new reply is a closing/acknowledgment, it auto-converts to a like — warm acknowledgment without noise. This is the primary prevention mechanism. Pruning (`pruneDuplicatePosts`, `pruneThankYouChains`) is the safety net that catches anything that slipped through. The philosophy: don't post it in the first place, rather than cleaning up after.
+- **Outbound dedup:** ALL Bluesky posts MUST flow through `outbound-queue.ts` — no direct `atproto.createPost()` calls. Dedup check and recording MUST happen inside the same mutex-protected section (TOCTOU prevention). See `outbound-queue.ts` for the two dedup layers and `//NOTE(self):` comments explaining each.
+- **Startup feed warmup:** One feed fetch on startup serves four purposes (identity, dedup, expression schedule, pruning). See `startupFeedWarmup()` in `scheduler.ts`.
+- **GitHub claim dedup:** Task claims use a disk-persisted lock set synchronously BEFORE any async work (TOCTOU prevention). See `local-tools/self-task-claim.ts`.
+- **Feed pruning:** Two passes in `outbound-queue.ts` (startup + every 15 minutes): exact-text duplicate deletion and thank-you chain pruning. See `//NOTE(self):` comments in that file for details.
+- **Bluesky conversation tracking:** Every conversation MUST be tracked via `trackConversation()` in `bluesky-engagement.ts`. Every reply MUST call `recordOurReply()`. Without this, reply limits, back-and-forth detection, the output self-check, and conversation conclusion all fail silently.
+- **Output self-check (prevention > pruning):** `handleBlueskyReply()` auto-converts low-value closing replies into likes when the agent has already replied once. See `self-bluesky-handlers.ts`. The philosophy: don't post it in the first place.
 - **GitHub comments:** MUST NOT include the agent's username or self-identification — the GitHub UI already shows the author. Voice phrases use `{{details}}` for content, not `{{username}}` footers.
