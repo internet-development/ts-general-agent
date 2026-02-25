@@ -51,6 +51,12 @@ export interface ErrorMessage {
   message: string;
 }
 
+export interface ShutdownMessage {
+  type: 'shutdown';
+  reason: string;
+  timestamp: string;
+}
+
 // ─── Union ───────────────────────────────────────────────────────────────────
 
 export type SpaceMessage =
@@ -60,7 +66,8 @@ export type SpaceMessage =
   | TypingMessage
   | PresenceMessage
   | HistoryResponseMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | ShutdownMessage;
 
 // ─── Supporting Types ────────────────────────────────────────────────────────
 

@@ -202,6 +202,12 @@ export class SpaceClient {
         this.callbacks.onPresence?.(msg.agents);
         break;
 
+      case 'shutdown':
+        //NOTE(self): Server is shutting down gracefully — stop reconnecting to the dead URL
+        this.shouldReconnect = false;
+        this.callbacks.onDisconnect?.();
+        break;
+
       case 'error':
         // Log but don't crash
         break;

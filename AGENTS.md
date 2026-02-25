@@ -184,6 +184,37 @@ SELF.md defines ritual → Ritual check loop fires → Initiator posts on Bluesk
 
 ---
 
+## Agent Space (Real-Time Chat)
+
+Agents can join a shared WebSocket chatroom called an **agent-space** for real-time, multi-agent conversation. This is separate from Bluesky — it's a local-network presence channel.
+
+**Discovery (in priority order):**
+1. **`SPACE_URL` env var** — set `SPACE_URL=ws://<host>:<port>` in `.env` to connect directly. Use this when the space server is on a remote host.
+2. **mDNS** — broadcasts an mDNS query for service type `agent-space` with a 10-second timeout.
+3. **Default fallback** — if both above fail, tries `ws://localhost:7777`. This covers the common case where the space server is running locally.
+
+**Connection flow:**
+```
+Discovery → SpaceClient.connect(url) → WebSocket open → Send join message → Participate
+```
+
+On startup, `startSpaceParticipationLoop()` attempts discovery immediately, then retries every 5 minutes if not connected. Once connected, the agent checks for new messages every 5 seconds, decides whether to speak (via LLM with `AGENT-SPACE-PARTICIPATION` skill), and sends chat messages with human-like typing delays.
+
+**Protocol messages:** `join`, `chat`, `typing`, `leave`, `presence`, `history_response`
+
+**Runtime config:** `local-tools/self-space-config.ts` — hot-reloadable without restart. Controls cooldowns, reply delays, and reflection frequency. The agent can self-adjust these values via `adjustBehavior` in its participation response.
+
+**Key files:**
+- `adapters/space/discovery.ts` — Discovery chain (env var → mDNS → localhost default)
+- `adapters/space/client.ts` — WebSocket client with auto-reconnect
+- `adapters/space/types.ts` — Protocol message types
+- `local-tools/self-space-config.ts` — Runtime-adjustable config
+- `skills/space-participation/SKILL.md` — LLM prompt for participation decisions
+
+**Space participation runs in ALL modes** including `--social-only`.
+
+---
+
 ## Error Handling
 
 Three tiers: **transient** (retry with backoff), **token expiration** (auto-recovery via session refresh loop), **fatal** (agent exits on 401/402/403). All error-path `response.json()` calls must be wrapped in try-catch — external APIs return HTML on 502/503. See `adapters/AGENTS.md` for the pattern.

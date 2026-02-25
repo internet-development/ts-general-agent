@@ -5650,6 +5650,8 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
         },
         onDisconnect: () => {
           ui.warn('Disconnected from agent space');
+          //NOTE(self): Null out stale client so the discovery timer re-discovers cleanly
+          this.spaceClient = null;
         },
         onChat: (name, content) => {
           ui.info(`[space] ${name}`, content);
