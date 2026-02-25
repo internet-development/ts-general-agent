@@ -351,6 +351,7 @@ export class AgentScheduler {
   //NOTE(self): Space participation cooldown and tracking
   private spacePersonalCooldown = 0;
   private spaceParticipationCount = 0;
+  private spaceAgentId: string = '';
 
   constructor(config: Partial<SchedulerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -5603,6 +5604,10 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   //NOTE(self): Auto-discovers via mDNS, reconnects if disconnected, speaks when meaningful
 
   private startSpaceParticipationLoop(): void {
+    //NOTE(self): Generate stable agent ID once — reused across reconnects to prevent duplicates
+    const agentName = this.appConfig.agent.name;
+    this.spaceAgentId = `${agentName}-${Date.now().toString(36)}`;
+
     //NOTE(self): Attempt initial discovery
     this.attemptSpaceDiscovery();
 
@@ -5628,6 +5633,9 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
   }
 
   private async attemptSpaceDiscovery(): Promise<void> {
+    //NOTE(self): Don't create a new client when the existing one works fine
+    if (this.spaceClient?.isActive()) return;
+
     try {
       const url = await discoverSpace();
       if (!url) return;
@@ -5641,7 +5649,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       }
 
       const agentName = this.appConfig.agent.name;
-      const agentId = `${agentName}-${Date.now().toString(36)}`;
+      const agentId = this.spaceAgentId;
       const agentVersion = LOCAL_VERSION;
 
       this.spaceClient = new SpaceClient(agentName, agentId, agentVersion, {
@@ -5686,10 +5694,26 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     //NOTE(self): Check who's currently typing
     const typingAgents = this.spaceClient.getTypingAgents();
 
-    //NOTE(self): Format recent messages for the LLM
-    const recentMessages = messages
-      .map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.name}: ${m.content}`)
-      .join('\n');
+    //NOTE(self): Partition messages into host/external vs peer agent
+    const peerAgentNames = this.spaceClient.getConnectedAgentNames();
+    const hostMessages = messages.filter(m => !peerAgentNames.has(m.name));
+    const peerMessages = messages.filter(m => peerAgentNames.has(m.name));
+
+    const formatMsgs = (msgs: typeof messages) =>
+      msgs.map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.name}: ${m.content}`).join('\n');
+
+    //NOTE(self): Format as two labeled sections so the LLM distinguishes host prompts from peer context
+    let recentMessages = '';
+    if (hostMessages.length > 0) {
+      recentMessages += `**Messages to respond to (from host/external):**\n${formatMsgs(hostMessages)}`;
+    }
+    if (peerMessages.length > 0) {
+      if (recentMessages) recentMessages += '\n\n';
+      recentMessages += `**What other agents said (context only — share your own view):**\n${formatMsgs(peerMessages)}`;
+    }
+    if (!recentMessages) {
+      recentMessages = formatMsgs(messages);
+    }
 
     //NOTE(self): Get deeper identity context from SELF.md
     const selfContent = readSelf(this.appConfig.paths.selfmd);
@@ -5697,7 +5721,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
     //NOTE(self): Build typing note for system prompt
     const typingNote = typingAgents.length > 0
-      ? `**Note:** ${typingAgents.join(', ')} ${typingAgents.length === 1 ? 'is' : 'are'} currently typing. Consider whether to wait or contribute now.`
+      ? `**Note:** ${typingAgents.join(', ')} ${typingAgents.length === 1 ? 'is' : 'are'} currently typing. You can still share your perspective — multiple agents speaking enriches the conversation.`
       : '';
 
     //NOTE(self): Format typing agents for user message

@@ -41,6 +41,9 @@ export class SpaceClient {
   //NOTE(self): Track which agents are currently typing (auto-clear after 10s)
   private typingAgents: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
+  //NOTE(self): Track connected peer agent names for message partitioning
+  private connectedAgentNames: Set<string> = new Set();
+
   constructor(agentName: string, agentId: string, agentVersion: string, callbacks: SpaceClientCallbacks = {}) {
     this.agentName = agentName;
     this.agentId = agentId;
@@ -106,6 +109,11 @@ export class SpaceClient {
   //NOTE(self): Check if the client is actively connected
   isActive(): boolean {
     return this.connected && this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  //NOTE(self): Get names of all connected peer agents (excluding self)
+  getConnectedAgentNames(): Set<string> {
+    return new Set(this.connectedAgentNames);
   }
 
   //NOTE(self): Get and flush accumulated messages since last check
@@ -185,12 +193,16 @@ export class SpaceClient {
         break;
 
       case 'join':
+        if (msg.name !== this.agentName) {
+          this.connectedAgentNames.add(msg.name);
+        }
         this.callbacks.onJoin?.(msg.name);
         break;
 
       case 'leave':
         //NOTE(self): Clear typing state — agent is gone
         this.clearTypingAgent(msg.name);
+        this.connectedAgentNames.delete(msg.name);
         this.callbacks.onLeave?.(msg.name);
         break;
 
@@ -199,6 +211,13 @@ export class SpaceClient {
         break;
 
       case 'presence':
+        //NOTE(self): Rebuild connected agent names from full presence list
+        this.connectedAgentNames.clear();
+        for (const agent of msg.agents) {
+          if (agent.name !== this.agentName) {
+            this.connectedAgentNames.add(agent.name);
+          }
+        }
         this.callbacks.onPresence?.(msg.agents);
         break;
 
