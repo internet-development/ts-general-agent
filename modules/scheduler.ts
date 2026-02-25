@@ -5072,6 +5072,19 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     commitment: import('@modules/commitment-queue.js').Commitment,
     result: Record<string, unknown>
   ): Promise<void> {
+    //NOTE(self): Route space-sourced commitments back to the chatroom instead of Bluesky
+    if (commitment.source === 'space') {
+      const url = this.extractFulfillmentUrl(commitment.type, result);
+      const announcement = url
+        ? `Done — ${commitment.description}: ${url}`
+        : `Done — ${commitment.description}`;
+      if (this.spaceClient?.isActive()) {
+        this.spaceClient.sendChat(announcement);
+        ui.action('[space] Fulfillment announced', announcement);
+      }
+      return;
+    }
+
     //NOTE(self): Only reply if we have a source thread URI to reply to
     if (!commitment.sourceThreadUri || !commitment.sourceThreadUri.startsWith('at://')) {
       logger.info('No valid source thread URI for fulfillment reply', { id: commitment.id });
@@ -5219,7 +5232,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           recordExperience(
             'helped_someone',
             `Fulfilled commitment: ${commitment.description}`,
-            { source: 'bluesky' }
+            { source: commitment.source === 'space' ? 'space' : 'bluesky' }
           );
 
           //NOTE(self): Reply back on Bluesky with the created resource link
@@ -5784,6 +5797,30 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           this.spaceClient.sendChat(decision.message);
           ui.action('[space] Spoke', decision.message);
           logger.info('Space participation', { reason: decision.reason, message: decision.message });
+
+          //NOTE(self): Extract commitments from space message (non-fatal — space chat works even if extraction fails)
+          try {
+            const spaceReply: ReplyForExtraction = {
+              text: decision.message,
+              threadUri: `space://${this.appConfig.agent.name}/${Date.now()}`,
+            };
+            const extracted = await extractCommitments([spaceReply]);
+            for (const commitment of extracted) {
+              enqueueCommitment({
+                description: commitment.description,
+                type: commitment.type,
+                sourceThreadUri: spaceReply.threadUri,
+                sourceReplyText: decision.message,
+                params: commitment.params,
+                source: 'space',
+              });
+            }
+            if (extracted.length > 0) {
+              ui.info('[space] Commitments extracted', extracted.map(c => `${c.type}: ${c.description}`).join(', '));
+            }
+          } catch (extractError) {
+            logger.warn('Space commitment extraction failed (non-fatal)', { error: String(extractError) });
+          }
 
           //NOTE(self): Set personal cooldown (using runtime config)
           this.spacePersonalCooldown = Date.now() + spaceConfig.cooldownMinMs + Math.random() * (spaceConfig.cooldownMaxMs - spaceConfig.cooldownMinMs);

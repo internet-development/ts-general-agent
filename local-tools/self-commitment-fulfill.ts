@@ -9,6 +9,8 @@ import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.j
 import { commentOnIssue } from '@local-tools/self-github-comment-issue.js';
 import { findExistingWorkspace } from '@local-tools/self-github-create-workspace.js';
 import { listIssues } from '@adapters/github/list-issues.js';
+import * as atproto from '@adapters/atproto/index.js';
+import { outboundQueue } from '@modules/outbound-queue.js';
 
 export interface FulfillmentResult {
   success: boolean;
@@ -51,7 +53,10 @@ async function fulfillCreateIssue(commitment: Commitment): Promise<FulfillmentRe
 
     //NOTE(self): Build a meaningful issue body from the commitment context
     //NOTE(self): The description field contains what the LLM said it would do (e.g., "Write up findings on API design")
-    //NOTE(self): The sourceReplyText is what the SOUL actually said in the Bluesky reply
+    //NOTE(self): The sourceReplyText is what the SOUL actually said in the Bluesky reply or space message
+    const sourceLabel = commitment.source === 'space'
+      ? '*Created from agent space conversation.*'
+      : '*Created from Bluesky thread commitment.*';
     const body = [
       commitment.description,
       '',
@@ -59,7 +64,7 @@ async function fulfillCreateIssue(commitment: Commitment): Promise<FulfillmentRe
       '',
       `> ${commitment.sourceReplyText}`,
       '',
-      `*Created from Bluesky thread commitment.*`,
+      sourceLabel,
     ].join('\n');
 
     const result = await createMemo({
@@ -115,7 +120,9 @@ async function fulfillCreatePlan(commitment: Commitment): Promise<FulfillmentRes
   const plan: PlanDefinition = {
     title: (commitment.params.title as string) || commitment.description,
     goal: commitment.description,
-    context: `Plan created from Bluesky commitment.\n\nOriginal reply: "${commitment.sourceReplyText}"`,
+    context: commitment.source === 'space'
+      ? `Plan created from agent space conversation.\n\nOriginal message: "${commitment.sourceReplyText}"`
+      : `Plan created from Bluesky commitment.\n\nOriginal reply: "${commitment.sourceReplyText}"`,
     tasks: [
       {
         title: 'Define scope and requirements',
@@ -163,6 +170,27 @@ async function fulfillCommentIssue(commitment: Commitment): Promise<FulfillmentR
   };
 }
 
+//NOTE(self): Fulfill a post_bluesky commitment — create a Bluesky post via outbound queue
+async function fulfillPostBluesky(commitment: Commitment): Promise<FulfillmentResult> {
+  const text = (commitment.params.text as string) || commitment.description;
+
+  //NOTE(self): Route through outbound queue for dedup
+  const queueCheck = await outboundQueue.enqueue('post', text);
+  if (!queueCheck.allowed) {
+    return { success: false, error: `Outbound queue blocked: ${queueCheck.reason}` };
+  }
+
+  const result = await atproto.createPost({ text });
+  if (!result.success) {
+    return { success: false, error: result.error };
+  }
+
+  return {
+    success: true,
+    result: { uri: result.data.uri, cid: result.data.cid },
+  };
+}
+
 //NOTE(self): Main dispatch — routes to the right fulfillment strategy
 export async function fulfillCommitment(commitment: Commitment): Promise<FulfillmentResult> {
   logger.info('Fulfilling commitment', { id: commitment.id, type: commitment.type });
@@ -175,6 +203,8 @@ export async function fulfillCommitment(commitment: Commitment): Promise<Fulfill
         return await fulfillCreatePlan(commitment);
       case 'comment_issue':
         return await fulfillCommentIssue(commitment);
+      case 'post_bluesky':
+        return await fulfillPostBluesky(commitment);
       default:
         return { success: false, error: `Unknown commitment type: ${commitment.type}` };
     }

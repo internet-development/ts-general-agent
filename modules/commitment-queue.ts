@@ -16,7 +16,7 @@ const MAX_ATTEMPTS = COMMITMENT_MAX_ATTEMPTS;
 const STALE_THRESHOLD_MS = COMMITMENT_STALE_THRESHOLD_MS;
 
 export type CommitmentStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'abandoned';
-export type CommitmentType = 'create_issue' | 'create_plan' | 'comment_issue';
+export type CommitmentType = 'create_issue' | 'create_plan' | 'comment_issue' | 'post_bluesky';
 
 export interface Commitment {
   id: string;
@@ -26,6 +26,7 @@ export interface Commitment {
   sourceThreadUri: string;
   sourceReplyText: string;
   params: Record<string, unknown>;
+  source?: 'bluesky' | 'space';
   status: CommitmentStatus;
   attemptCount: number;
   lastAttemptAt: string | null;
@@ -133,6 +134,7 @@ export function enqueueCommitment(params: {
   sourceThreadUri: string;
   sourceReplyText: string;
   params: Record<string, unknown>;
+  source?: 'bluesky' | 'space';
 }): Commitment | null {
   const queue = loadQueue();
   const hash = generateHash(params.sourceThreadUri, params.description);
@@ -159,6 +161,7 @@ export function enqueueCommitment(params: {
     sourceThreadUri: params.sourceThreadUri,
     sourceReplyText: params.sourceReplyText,
     params: params.params,
+    source: params.source || 'bluesky',
     status: 'pending',
     attemptCount: 0,
     lastAttemptAt: null,

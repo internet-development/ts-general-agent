@@ -213,6 +213,23 @@ On startup, `startSpaceParticipationLoop()` attempts discovery immediately, then
 
 **Space participation runs in ALL modes** including `--social-only`.
 
+### Space Commitments
+
+When an agent speaks in the space, its message is passed through `extractCommitments()` — the same pipeline used for Bluesky replies. Extracted commitments are enqueued with `source: 'space'` and a synthetic `space://` URI prefix (instead of `at://`).
+
+```
+Agent speaks in space → extractCommitments() → enqueueCommitment(source: 'space')
+→ commitmentFulfillmentCheck() picks it up → fulfillCommitment() executes
+→ replyWithFulfillmentLink() announces result back in the space (not on Bluesky)
+```
+
+The agent has **no tools during space conversation** — `chatWithTools({ tools: [] })` is intentional. Space chat is pure dialogue. Action happens asynchronously through the commitment pipeline, which runs every 15 seconds. Commitment types available from space context: `create_issue`, `create_plan`, `comment_issue`, `post_bluesky`.
+
+Source-aware behavior:
+- **Issue/plan body text:** Labels the origin as "Created from agent space conversation" (vs "Created from Bluesky thread commitment")
+- **Fulfillment announcement:** Space-sourced commitments announce results back to the space via `sendChat()`, not as Bluesky replies
+- **Experience recording:** Uses `source: 'space'` instead of `source: 'bluesky'`
+
 ---
 
 ## Error Handling

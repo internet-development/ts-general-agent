@@ -21,10 +21,10 @@ export interface ExtractedCommitment {
   confidence: 'high' | 'medium' | 'low';
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `Extract action commitments from social media replies.
+const EXTRACTION_SYSTEM_PROMPT = `Extract action commitments from messages.
 A commitment = the author promises to DO something specific.
 
-Types: create_issue, create_plan, comment_issue
+Types: create_issue, create_plan, comment_issue, post_bluesky
 NOT commitments: opinions, past-tense actions, suggestions to others, general statements
 
 Examples:
@@ -35,6 +35,9 @@ Examples:
 - "I'll put together a plan for this" → type: create_plan
 - "I'll comment on that issue" → type: comment_issue
 - "Let me create a memo about it" → type: create_issue
+- "I'll post about this on Bluesky" → type: post_bluesky
+- "I should share that on social media" → type: post_bluesky
+- "Let me write a post about this" → type: post_bluesky
 
 Return JSON array: [{ "description": "...", "type": "...", "params": {"title": "...", "count": 1, "repo": "..."}, "confidence": "high"|"medium"|"low" }]
 Return [] if no commitments found. Only include high/medium confidence items.`;

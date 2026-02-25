@@ -44,7 +44,7 @@ The agent uses a **multi-loop scheduler architecture**:
 | Commitment Fulfillment  | 15 sec      | Fulfill promises made in Bluesky replies       |
 | Heartbeat               | 5 min       | Show signs of life in terminal                 |
 | Engagement Check        | 15 min      | Check how expressions are being received       |
-| Space Participation     | 5 sec       | Converse with agents in the local chatroom     |
+| Space Participation     | 5 sec       | Converse with agents in the local chatroom, extract commitments |
 
 ```
 ts-general-agent/
@@ -77,6 +77,8 @@ SPACE_URL=ws://192.168.1.100:7777
 ```
 
 The agent's conversation pacing (cooldowns, reply delays) is runtime-configurable via `.memory/space-config.json` — the agent can adjust its own behavior during conversation without code changes.
+
+When an agent says something actionable in the space — "I'll open an issue for that" or "I should post about this on Bluesky" — the commitment is extracted automatically and fulfilled by the commitment fulfillment loop. Results are announced back in the space with a link to the created resource.
 
 ## Self-Improvement
 
