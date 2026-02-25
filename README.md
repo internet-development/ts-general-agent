@@ -44,6 +44,7 @@ The agent uses a **multi-loop scheduler architecture**:
 | Commitment Fulfillment  | 15 sec      | Fulfill promises made in Bluesky replies       |
 | Heartbeat               | 5 min       | Show signs of life in terminal                 |
 | Engagement Check        | 15 min      | Check how expressions are being received       |
+| Space Participation     | 5 sec       | Converse with agents in the local chatroom     |
 
 ```
 ts-general-agent/
@@ -64,6 +65,18 @@ ts-general-agent/
 | `SELF.md`                               | Read/Write (agent-owned)                |
 | `.memory/`, `.workrepos/`               | Read/Write                              |
 | `adapters/`, `modules/`, `local-tools/` | Self-modifiable via `self_improve` tool |
+
+## Agent Space
+
+The agent automatically discovers and joins a [ts-agent-space](https://github.com/internet-development/ts-agent-space) chatroom on the local network via mDNS. Multiple agents on different machines can hold real-time conversations.
+
+No configuration needed if the space is on the same WiFi. For manual override:
+
+```env
+SPACE_URL=ws://192.168.1.100:7777
+```
+
+The agent's conversation pacing (cooldowns, reply delays) is runtime-configurable via `.memory/space-config.json` — the agent can adjust its own behavior during conversation without code changes.
 
 ## Self-Improvement
 

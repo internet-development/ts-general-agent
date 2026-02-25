@@ -1,5 +1,5 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my eleven loops of being:
+//NOTE(self): Coordinates my twelve loops of being:
 //NOTE(self): 0. Session Refresh (15m) - proactive Bluesky token refresh to prevent expiration
 //NOTE(self): 0b. Version Check (5m) - check remote package.json, shut down if version mismatch
 //NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
@@ -12,6 +12,7 @@
 //NOTE(self): 7. Heartbeat (5m) - show signs of life so owner knows agent is running
 //NOTE(self): 8. Engagement Check (15m) - check how expressions are being received
 //NOTE(self): 9. Ritual Check (30m) - daily social rituals initiated from SELF.md
+//NOTE(self): 10. Space Participation (60s) - converse with other agents in the local chatroom
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import { logger } from '@modules/logger.js';
@@ -200,7 +201,11 @@ import {
   MAX_TASK_RETRIES,
   IMPROVEMENT_BURN_IN_MS,
   RITUAL_CHECK_INTERVAL_MS,
+  SPACE_CHECK_INTERVAL_MS,
+  SPACE_RECONNECT_INTERVAL_MS,
 } from '@common/config.js';
+import { loadSpaceConfig, updateSpaceConfig, formatSpaceConfigForPrompt } from '@local-tools/self-space-config.js';
+import { discoverSpace, SpaceClient } from '@adapters/space/index.js';
 import {
   loadRitualState,
   hasInitiatedToday,
@@ -237,6 +242,8 @@ export interface SchedulerConfig {
   reflectionEventThreshold: number;
   //NOTE(self): Plan awareness interval (ms) - how often to check for collaborative tasks
   planAwarenessInterval: number;
+  //NOTE(self): Social-only mode - skip GitHub/code/improvement loops
+  socialOnly: boolean;
 }
 
 const DEFAULT_CONFIG: SchedulerConfig = {
@@ -250,6 +257,7 @@ const DEFAULT_CONFIG: SchedulerConfig = {
   quietHoursEnd: QUIET_HOURS_END,
   reflectionEventThreshold: REFLECTION_EVENT_THRESHOLD,
   planAwarenessInterval: PLAN_AWARENESS_INTERVAL_MS,
+  socialOnly: false,
 };
 
 //NOTE(self): GitHub conversation pending action
@@ -325,6 +333,9 @@ export class AgentScheduler {
   private ritualCheckTimer: NodeJS.Timeout | null = null;
   private sessionRefreshTimer: NodeJS.Timeout | null = null;
   private versionCheckTimer: NodeJS.Timeout | null = null;
+  private spaceTimer: NodeJS.Timeout | null = null;
+  private spaceDiscoveryTimer: NodeJS.Timeout | null = null;
+  private spaceClient: SpaceClient | null = null;
   private shutdownRequested = false;
   //NOTE(self): Track stuck tasks for timeout recovery (30 min) and retry limiting (max 3)
   private stuckTaskTracker: Map<string, { firstSeen: number; retryCount: number; abandonNotified?: boolean }> = new Map();
@@ -337,6 +348,9 @@ export class AgentScheduler {
   //NOTE(self): setInterval fires regardless of whether the previous async callback finished,
   //NOTE(self): which causes duplicate posts, duplicate task claims, and duplicate GitHub comments
   private runningLoops: Set<string> = new Set();
+  //NOTE(self): Space participation cooldown and tracking
+  private spacePersonalCooldown = 0;
+  private spaceParticipationCount = 0;
 
   constructor(config: Partial<SchedulerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -453,18 +467,27 @@ export class AgentScheduler {
     //NOTE(self): Register post-merge callback so executor can trigger early plan checks
     registerOnPRMerged(() => this.requestEarlyPlanCheck());
 
-    //NOTE(self): Start the loops
+    if (this.config.socialOnly) {
+      ui.system('Social-only mode', 'GitHub, code work, and self-improvement disabled');
+    }
+
+    //NOTE(self): Always start these loops
     this.startSessionRefreshLoop();
     this.startVersionCheckLoop();
     this.startAwarenessLoop();
-    this.startGitHubAwarenessLoop();
     this.startExpressionLoop();
     this.startReflectionLoop();
     this.startEngagementCheckLoop();
     this.startHeartbeatLoop();
-    this.startPlanAwarenessLoop();
-    this.startCommitmentFulfillmentLoop();
     this.startRitualCheckLoop();
+    this.startSpaceParticipationLoop();
+
+    //NOTE(self): Conditionally start GitHub/code loops (skipped in social-only mode)
+    if (!this.config.socialOnly) {
+      this.startGitHubAwarenessLoop();
+      this.startPlanAwarenessLoop();
+      this.startCommitmentFulfillmentLoop();
+    }
 
     //NOTE(self): Start UI timer updates
     this.startTimerUpdates();
@@ -476,7 +499,9 @@ export class AgentScheduler {
 
     //NOTE(self): Run initial awareness checks
     await this.awarenessCheck();
-    await this.githubAwarenessCheck();
+    if (!this.config.socialOnly) {
+      await this.githubAwarenessCheck();
+    }
   }
 
   //NOTE(self): Stop all loops
@@ -527,6 +552,18 @@ export class AgentScheduler {
     if (this.versionCheckTimer) {
       clearInterval(this.versionCheckTimer);
       this.versionCheckTimer = null;
+    }
+    if (this.spaceTimer) {
+      clearInterval(this.spaceTimer);
+      this.spaceTimer = null;
+    }
+    if (this.spaceDiscoveryTimer) {
+      clearInterval(this.spaceDiscoveryTimer);
+      this.spaceDiscoveryTimer = null;
+    }
+    if (this.spaceClient) {
+      this.spaceClient.disconnect();
+      this.spaceClient = null;
     }
 
     ui.system('Scheduler stopped');
@@ -2334,23 +2371,26 @@ Revise and post again.`;
 
         //NOTE(self): Check for self-improvement opportunity (friction-driven)
         //NOTE(self): Gated on 48h burn-in to prove stability before modifying own code
-        const uptimeMs = Date.now() - this.startedAt;
-        if (uptimeMs < AgentScheduler.IMPROVEMENT_BURN_IN_MS) {
-          logger.info('Self-improvement gated — burn-in period active', {
-            uptimeHours: Math.round(uptimeMs / (60 * 60 * 1000)),
-            requiredHours: 48,
-          });
-        } else if (shouldAttemptImprovement(this.config.improvementMinHours)) {
-          if (this.state.currentMode === 'idle') {
-            await this.improvementCycle();
+        //NOTE(self): Skipped in social-only mode
+        if (!this.config.socialOnly) {
+          const uptimeMs = Date.now() - this.startedAt;
+          if (uptimeMs < AgentScheduler.IMPROVEMENT_BURN_IN_MS) {
+            logger.info('Self-improvement gated — burn-in period active', {
+              uptimeHours: Math.round(uptimeMs / (60 * 60 * 1000)),
+              requiredHours: 48,
+            });
+          } else if (shouldAttemptImprovement(this.config.improvementMinHours)) {
+            if (this.state.currentMode === 'idle') {
+              await this.improvementCycle();
+            }
           }
-        }
 
-        //NOTE(self): Check for aspirational growth opportunity (inspiration-driven)
-        //NOTE(self): Same 48h burn-in gate as friction-driven improvement
-        if (uptimeMs >= AgentScheduler.IMPROVEMENT_BURN_IN_MS && shouldAttemptGrowth(this.config.improvementMinHours)) {
-          if (this.state.currentMode === 'idle') {
-            await this.growthCycle();
+          //NOTE(self): Check for aspirational growth opportunity (inspiration-driven)
+          //NOTE(self): Same 48h burn-in gate as friction-driven improvement
+          if (uptimeMs >= AgentScheduler.IMPROVEMENT_BURN_IN_MS && shouldAttemptGrowth(this.config.improvementMinHours)) {
+            if (this.state.currentMode === 'idle') {
+              await this.growthCycle();
+            }
           }
         }
 
@@ -5556,6 +5596,179 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       reflection: { nextAt: nextReflection, interval: this.config.reflectionInterval },
       improvement: { nextAt: nextImprovement, description: improvementDesc },
     };
+  }
+
+  //NOTE(self): ========== SPACE PARTICIPATION LOOP ==========
+  //NOTE(self): Discover and participate in the local agent space chatroom
+  //NOTE(self): Auto-discovers via mDNS, reconnects if disconnected, speaks when meaningful
+
+  private startSpaceParticipationLoop(): void {
+    //NOTE(self): Attempt initial discovery
+    this.attemptSpaceDiscovery();
+
+    //NOTE(self): Retry discovery every SPACE_RECONNECT_INTERVAL_MS if not connected
+    this.spaceDiscoveryTimer = setInterval(() => {
+      if (this.shutdownRequested) return;
+      if (this.spaceClient?.isActive()) return;
+      this.attemptSpaceDiscovery();
+    }, SPACE_RECONNECT_INTERVAL_MS);
+
+    //NOTE(self): Check for messages and decide to speak every SPACE_CHECK_INTERVAL_MS
+    this.spaceTimer = setInterval(async () => {
+      if (this.shutdownRequested) return;
+      if (!this.spaceClient?.isActive()) return;
+      if (this.runningLoops.has('space-participation')) return;
+      this.runningLoops.add('space-participation');
+      try {
+        await this.spaceParticipationCheck();
+      } finally {
+        this.runningLoops.delete('space-participation');
+      }
+    }, SPACE_CHECK_INTERVAL_MS);
+  }
+
+  private async attemptSpaceDiscovery(): Promise<void> {
+    try {
+      const url = await discoverSpace();
+      if (!url) return;
+
+      ui.info('Space discovered', url);
+
+      const agentName = this.appConfig.agent.name;
+      const agentId = `${agentName}-${Date.now().toString(36)}`;
+      const agentVersion = LOCAL_VERSION;
+
+      this.spaceClient = new SpaceClient(agentName, agentId, agentVersion, {
+        onConnect: () => {
+          ui.success('Joined agent space');
+        },
+        onDisconnect: () => {
+          ui.warn('Disconnected from agent space');
+        },
+        onChat: (name, content) => {
+          ui.info(`[space] ${name}`, content);
+        },
+        onJoin: (name) => {
+          ui.info(`[space] ${name} joined`);
+        },
+        onLeave: (name) => {
+          ui.info(`[space] ${name} left`);
+        },
+      });
+
+      this.spaceClient.connect(url);
+    } catch (error) {
+      logger.info('Space discovery failed', { error: String(error) });
+    }
+  }
+
+  private async spaceParticipationCheck(): Promise<void> {
+    if (!this.spaceClient) return;
+
+    //NOTE(self): Load runtime config fresh each check — hot-reloadable
+    const spaceConfig = loadSpaceConfig();
+
+    //NOTE(self): Personal cooldown — still cooling down after last message
+    if (this.spacePersonalCooldown > Date.now()) return;
+
+    //NOTE(self): Get accumulated messages since last check
+    const messages = this.spaceClient.getAndFlushMessages();
+    if (messages.length === 0) return;
+
+    //NOTE(self): Check who's currently typing
+    const typingAgents = this.spaceClient.getTypingAgents();
+
+    //NOTE(self): Announce we're composing
+    this.spaceClient.sendTyping();
+
+    //NOTE(self): Format recent messages for the LLM
+    const recentMessages = messages
+      .map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.name}: ${m.content}`)
+      .join('\n');
+
+    //NOTE(self): Get deeper identity context from SELF.md
+    const selfContent = readSelf(this.appConfig.paths.selfmd);
+    const selfExcerpt = selfContent.slice(0, 3000);
+
+    //NOTE(self): Build typing note for system prompt
+    const typingNote = typingAgents.length > 0
+      ? `**Note:** ${typingAgents.join(', ')} ${typingAgents.length === 1 ? 'is' : 'are'} currently typing. Consider whether to wait or contribute now.`
+      : '';
+
+    //NOTE(self): Format typing agents for user message
+    const typingAgentsStr = typingAgents.length > 0 ? typingAgents.join(', ') : 'none';
+
+    //NOTE(self): Build config summary for LLM context
+    const currentConfig = formatSpaceConfigForPrompt(spaceConfig);
+
+    try {
+      const soul = readSoul(this.appConfig.paths.soul);
+      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-SPACE-PARTICIPATION', {});
+
+      const userMessage = renderSkillSection('AGENT-SPACE-PARTICIPATION', 'User Message Template', {
+        recentMessages,
+        selfExcerpt,
+        typingAgents: typingAgentsStr,
+        typingNote,
+        currentConfig,
+      });
+
+      const response = await chatWithTools({
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+        tools: [],
+      });
+
+      const text = response.text?.trim() || '';
+
+      //NOTE(self): Parse the JSON decision
+      try {
+        //NOTE(self): Extract JSON from potential markdown code block
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return;
+
+        const decision = JSON.parse(jsonMatch[0]) as {
+          shouldSpeak: boolean;
+          reason: string;
+          message?: string;
+          adjustBehavior?: Partial<import('@local-tools/self-space-config.js').SpaceConfig>;
+        };
+
+        //NOTE(self): Handle behavioral self-adjustment if present
+        if (decision.adjustBehavior && Object.keys(decision.adjustBehavior).length > 0) {
+          const updated = updateSpaceConfig(decision.adjustBehavior, decision.reason);
+          ui.action('[space] Adjusted behavior', decision.reason);
+          logger.info('Space behavior adjusted', { reason: decision.reason, config: updated });
+        }
+
+        if (decision.shouldSpeak && decision.message) {
+          //NOTE(self): Human-like pause before sending (using runtime config)
+          const delay = spaceConfig.replyDelayMinMs + Math.random() * (spaceConfig.replyDelayMaxMs - spaceConfig.replyDelayMinMs);
+          await new Promise(resolve => setTimeout(resolve, delay));
+
+          this.spaceClient.sendChat(decision.message);
+          ui.action('[space] Spoke', decision.message);
+          logger.info('Space participation', { reason: decision.reason, message: decision.message });
+
+          //NOTE(self): Set personal cooldown (using runtime config)
+          this.spacePersonalCooldown = Date.now() + spaceConfig.cooldownMinMs + Math.random() * (spaceConfig.cooldownMaxMs - spaceConfig.cooldownMinMs);
+
+          //NOTE(self): Track participation for periodic reflection
+          this.spaceParticipationCount++;
+          if (this.spaceParticipationCount % spaceConfig.reflectionEveryN === 0) {
+            const recentSummary = messages.slice(-5).map(m => `${m.name}: ${m.content}`).join(' | ');
+            recordExperience('connection_formed', `Participated in agent space conversation. Recent: ${recentSummary}`);
+            recordSignificantEvent('space_participation');
+          }
+        } else {
+          logger.info('Space participation declined', { reason: decision.reason });
+        }
+      } catch {
+        logger.info('Space participation: failed to parse LLM response');
+      }
+    } catch (error) {
+      logger.info('Space participation check failed', { error: String(error) });
+    }
   }
 
   //NOTE(self): Start the UI timer update loop

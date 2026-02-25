@@ -18,10 +18,11 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = __dirname;
 
 //NOTE(self): Parse command line arguments
-function parseArgs(): { flushAll: boolean } {
+function parseArgs(): { flushAll: boolean; socialOnly: boolean } {
   const args = process.argv.slice(2);
   return {
     flushAll: args.includes('--flush-all'),
+    socialOnly: args.includes('--social-only'),
   };
 }
 
@@ -97,7 +98,7 @@ async function main(): Promise<void> {
   logger.info('GitHub configured');
 
   //NOTE(self): Run the scheduler-based loop
-  await runSchedulerLoop();
+  await runSchedulerLoop(undefined, { socialOnly: args.socialOnly });
 }
 
 main().catch((error) => {

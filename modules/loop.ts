@@ -42,7 +42,7 @@ export interface LoopCallbacks {
 //NOTE(self): Uses the multi-loop scheduler architecture (see AGENTS.md for all loops)
 //NOTE(self): More efficient, more expressive, better self-discovery
 
-export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void> {
+export async function runSchedulerLoop(callbacks?: LoopCallbacks, options?: { socialOnly?: boolean }): Promise<void> {
   const config = getConfig();
 
   logger.info('Agent awakening (scheduler mode)');
@@ -68,7 +68,7 @@ export async function runSchedulerLoop(callbacks?: LoopCallbacks): Promise<void>
   ui.initInputBox(VERSION);
 
   //NOTE(self): Get the scheduler
-  const scheduler = getScheduler();
+  const scheduler = getScheduler(options?.socialOnly ? { socialOnly: true } : undefined);
 
   //NOTE(self): Input setup - raw mode for character-by-character handling
   if (process.stdin.isTTY) {

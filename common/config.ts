@@ -104,3 +104,10 @@ export const OUTBOUND_DEDUP_BUFFER_SIZE = 50; // Recent posts ring buffer
 
 export const IMAGE_MAX_FILE_SIZE = 976560; // ~953KB to leave buffer under 1MB
 export const IMAGE_MAX_DIMENSION = 2048; // Max width/height for Bluesky
+
+// ─── Agent Space ─────────────────────────────────────────────────────────────
+
+export const SPACE_CHECK_INTERVAL_MS = 5_000; // 5s — real-time conversation
+export const SPACE_RECONNECT_INTERVAL_MS = 5 * 60_000; // 5m — retry discovery if not connected
+//NOTE(self): Behavioral constants (cooldowns, delays, reflection) moved to runtime config
+//NOTE(self): See local-tools/self-space-config.ts — agents can adjust these at runtime
