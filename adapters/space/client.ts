@@ -189,6 +189,8 @@ export class SpaceClient {
         break;
 
       case 'leave':
+        //NOTE(self): Clear typing state — agent is gone
+        this.clearTypingAgent(msg.name);
         this.callbacks.onLeave?.(msg.name);
         break;
 

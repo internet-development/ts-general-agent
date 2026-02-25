@@ -5634,6 +5634,12 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
       ui.info('Space discovered', url);
 
+      //NOTE(self): Disconnect the old client if it exists — prevents leaked connections and duplicate joins
+      if (this.spaceClient) {
+        this.spaceClient.disconnect();
+        this.spaceClient = null;
+      }
+
       const agentName = this.appConfig.agent.name;
       const agentId = `${agentName}-${Date.now().toString(36)}`;
       const agentVersion = LOCAL_VERSION;
@@ -5677,9 +5683,6 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
     //NOTE(self): Check who's currently typing
     const typingAgents = this.spaceClient.getTypingAgents();
-
-    //NOTE(self): Announce we're composing
-    this.spaceClient.sendTyping();
 
     //NOTE(self): Format recent messages for the LLM
     const recentMessages = messages
@@ -5742,9 +5745,15 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
         }
 
         if (decision.shouldSpeak && decision.message) {
+          //NOTE(self): Only announce typing after we've decided to speak — avoids misleading indicators
+          this.spaceClient?.sendTyping();
+
           //NOTE(self): Human-like pause before sending (using runtime config)
           const delay = spaceConfig.replyDelayMinMs + Math.random() * (spaceConfig.replyDelayMaxMs - spaceConfig.replyDelayMinMs);
           await new Promise(resolve => setTimeout(resolve, delay));
+
+          //NOTE(self): Re-check after async delay — client may have been nulled during shutdown
+          if (!this.spaceClient?.isActive()) return;
 
           this.spaceClient.sendChat(decision.message);
           ui.action('[space] Spoke', decision.message);
