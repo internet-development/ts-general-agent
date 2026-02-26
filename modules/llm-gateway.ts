@@ -67,6 +67,7 @@ export interface ChatParams {
   maxTokens?: number;
   temperature?: number;
   tools?: ToolDefinition[];
+  toolChoice?: 'auto' | 'required' | { type: 'tool'; toolName: string };
 }
 
 export interface ChatResult {
@@ -223,6 +224,7 @@ export async function chatWithTools(params: ChatParams): Promise<ChatResult> {
         tools: aiTools,
         maxOutputTokens: params.maxTokens,
         temperature: params.temperature,
+        ...(params.toolChoice ? { toolChoice: params.toolChoice } : {}),
       });
 
       //NOTE(self): Collect the streamed response

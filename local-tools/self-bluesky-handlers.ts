@@ -7,7 +7,8 @@ import * as atproto from '@adapters/atproto/index.js';
 import * as fs from 'fs';
 import type { ToolCall, ToolResult } from '@modules/tools.js';
 import { markInteractionResponded, recordOriginalPost, isLowValueClosing } from '@modules/engagement.js';
-import { hasAgentRepliedInThread } from '@adapters/atproto/get-post-thread.js';
+import { hasAgentRepliedInThread, getPostThread } from '@adapters/atproto/get-post-thread.js';
+import { getPeerBlueskyHandles } from '@modules/peer-awareness.js';
 import { ui } from '@modules/ui.js';
 import { outboundQueue } from '@modules/outbound-queue.js';
 import { getConversation, trackConversation, recordOurReply, markConversationConcluded } from '@modules/bluesky-engagement.js';
@@ -261,6 +262,43 @@ export async function handleBlueskyReply(call: ToolCall, config: any): Promise<T
   const queueCheck = await outboundQueue.enqueue('reply', text);
   if (!queueCheck.allowed) {
     return { tool_use_id: call.id, content: `Blocked: ${queueCheck.reason}`, is_error: true };
+  }
+
+  //NOTE(self): Pre-reply thread refresh — catch peer SOUL replies in the narrow timing window
+  //NOTE(self): Re-fetch the thread to check for fresh peer replies. If a peer replied in the last 30s,
+  //NOTE(self): convert to a like instead. Cost: one extra API call per reply. Fail-open on error.
+  try {
+    const freshThread = await getPostThread(post_uri, 1, 0);
+    if (freshThread.success && freshThread.data) {
+      const peerHandles = getPeerBlueskyHandles();
+      const thirtySecondsAgo = Date.now() - 30_000;
+      const replies = freshThread.data.thread.replies || [];
+      for (const reply of replies) {
+        const replyHandle = (reply as any)?.post?.author?.handle;
+        const replyTime = (reply as any)?.post?.indexedAt;
+        if (replyHandle && peerHandles.includes(replyHandle) && replyTime) {
+          const replyTimestamp = new Date(replyTime).getTime();
+          if (replyTimestamp > thirtySecondsAgo) {
+            logger.info('Pre-reply refresh: peer replied recently, converting to like', {
+              peer: replyHandle,
+              post_uri,
+              replyAge: Date.now() - replyTimestamp,
+            });
+            await atproto.likePost({ uri: post_uri, cid: post_cid }).catch(err =>
+              logger.warn('Failed to like post during pre-reply refresh', { error: String(err), post_uri })
+            );
+            return {
+              tool_use_id: call.id,
+              content: `CONVERTED TO LIKE: Peer SOUL @${replyHandle} replied to this thread ${Math.round((Date.now() - replyTimestamp) / 1000)}s ago. Your reply was converted to a like to avoid duplicate perspectives. Move on to the next notification.`,
+              is_error: true,
+            };
+          }
+        }
+      }
+    }
+  } catch (refreshError) {
+    //NOTE(self): Fail-open — if refresh fails, proceed with reply
+    logger.warn('Pre-reply thread refresh failed (non-fatal, proceeding with reply)', { error: String(refreshError), post_uri });
   }
 
   const result = await atproto.createPost({

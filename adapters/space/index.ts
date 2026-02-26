@@ -12,6 +12,9 @@ export type {
   PresenceMessage,
   HistoryResponseMessage,
   ErrorMessage,
+  IdentityMessage,
+  ClaimMessage,
+  IdentitySummary,
   AgentPresence,
   ChatLogEntry,
 } from './types.js';

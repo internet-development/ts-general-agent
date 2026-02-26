@@ -12,6 +12,7 @@ export interface ReplyForExtraction {
   threadUri: string;
   workspaceOwner?: string;
   workspaceRepo?: string;
+  conversationContext?: string;
 }
 
 export interface ExtractedCommitment {
@@ -54,7 +55,12 @@ export async function extractCommitments(replies: ReplyForExtraction[]): Promise
     ? `\nWorkspace context: ${replies[0].workspaceOwner}/${replies[0].workspaceRepo}`
     : '';
 
-  const userMessage = `${replyTexts}${workspaceContext}`;
+  //NOTE(self): Add conversation context if available — helps extraction LLM identify repos, issue numbers, etc.
+  const conversationContext = replies[0].conversationContext
+    ? `\nConversation context (recent messages from others):\n${replies[0].conversationContext}`
+    : '';
+
+  const userMessage = `${replyTexts}${workspaceContext}${conversationContext}`;
 
   const messages: Message[] = [{ role: 'user', content: userMessage }];
 

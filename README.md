@@ -78,7 +78,43 @@ SPACE_URL=ws://192.168.1.100:7777
 
 The agent's conversation pacing (cooldowns, reply delays) is runtime-configurable via `.memory/space-config.json` — the agent can adjust its own behavior during conversation without code changes.
 
-When an agent says something actionable in the space — "I'll open an issue for that" or "I should post about this on Bluesky" — the commitment is extracted automatically and fulfilled by the commitment fulfillment loop. Results are announced back in the space with a link to the created resource.
+### Action-First Design
+
+When the host asks agents to DO something (create an issue, write a plan), the system is designed to act immediately rather than discuss:
+
+1. **Decision tree** — The space participation prompt forces explicit branching: "Did host ask you to DO something? → Commit immediately."
+2. **Structured commitments** — The LLM returns a JSON `commitments[]` array with type, repo, title, and full description. The commitment pipeline creates the issue within 15 seconds.
+3. **Deterministic action ownership** — Hash-based selection ensures only one agent commits per host request. Others stay silent or take complementary actions.
+4. **Stale request escalation** — If no agent delivers after 2 cycles, the prompt escalates to CRITICAL. Host follow-ups ("did you do it?") boost urgency immediately without resetting tracking.
+5. **Post-generation validation** — 11 hard blocks: echoing, empty promises, meta-discussion, deference, scope inflation, lists, length, repo amnesia, non-owner action, non-owner discussion, and conversation saturation.
+6. **Commitment salvage** — When validation rejects a message but it contained valid commitments, the commitments are preserved and a short replacement message is sent.
+7. **Action-owner retry** — When the action owner's response is rejected by validation, the system retries with a focused commitment-only prompt (up to 2 retries) before falling through to forced action.
+8. **Forced action** — After 2+ cycles at CRITICAL or 3+ rejection retries, the action owner auto-generates a commitment from the stored original request + full conversation context.
+9. **Failure announcement** — When commitment fulfillment fails, it's announced back to the space. After max retries, the escalation pipeline resets to re-trigger action.
+
+### Commitment Pipeline
+
+```
+Host requests action → Agent returns JSON with commitments[] → enqueueCommitment()
+→ Fulfillment loop (15s) → Create issue / Post / Comment → "Done — [link]" in space
+```
+
+If the message is rejected by validation but had commitments:
+```
+Rejected message → Salvage commitments → Replace with "On it — [type] incoming." → Enqueue
+```
+
+If the action owner's response is rejected by validation:
+```
+Rejected → Action-owner retry (focused prompt, up to 2x) → Commitment produced → Enqueue
+```
+
+If the action owner fails after 2+ CRITICAL cycles or 3+ rejections:
+```
+Forced action → Construct commitment from stored original request + full context → Enqueue → "Creating that now."
+```
+
+The `description` field in `create_issue` commitments IS the issue body — agents write the full content there (markdown, checklists, headers). The fulfillment pipeline uses `params.description` for the issue body, falling back to `params.content` then `commitment.description`. See `CONCERNS.md` for remaining issues and fix ideas.
 
 ## Self-Improvement
 

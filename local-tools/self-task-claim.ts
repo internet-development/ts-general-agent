@@ -4,6 +4,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { claimTask } from '@adapters/github/add-issue-assignee.js';
+import { removeIssueAssignee } from '@adapters/github/remove-issue-assignee.js';
 import { createIssueComment } from '@adapters/github/create-comment-issue.js';
 import { logger } from '@modules/logger.js';
 import { getConfig } from '@modules/config.js';
@@ -14,6 +15,7 @@ import {
 } from '@local-tools/self-plan-parse.js';
 import { getGitHubPhrase } from '@modules/voice-phrases.js';
 import { getIssueThread } from '@adapters/github/get-issue-thread.js';
+import { CONSENSUS_DELAY_MS, CONSENSUS_CONTEST_EXTENSION_MS, CONSENSUS_PROPAGATION_EXTENSION_MS } from '@common/config.js';
 
 //NOTE(self): Claim tracker — prevents duplicate claim comments
 //NOTE(self): Key: "owner/repo#issueNumber/task-N", Value: timestamp of claim
@@ -163,6 +165,93 @@ export async function claimTaskFromPlan(params: ClaimTaskParams): Promise<ClaimT
 
   if (!updateResult.success) {
     logger.warn('Claimed task but failed to update plan body', { error: updateResult.error });
+  }
+
+  //NOTE(self): Two-phase consensus with stability-based verification
+  //NOTE(self): Phase 1 was the claim write above. Now we verify with adaptive delays:
+  //NOTE(self):   1. Primary delay (5s) — exceeds GitHub's typical propagation
+  //NOTE(self):   2. First verification read — check assignee state
+  //NOTE(self):   3. If contested (multiple assignees): extend +3s, re-read for stability
+  //NOTE(self):   4. If not propagated (zero assignees): extend +5s, re-read for extreme latency
+  //NOTE(self): Uncontested claims (common case) resolve at step 2 with no extra cost.
+  //NOTE(self): Contested claims get 8s total instead of 5s — more robust winner determination.
+  const verifyStartMs = Date.now();
+  await new Promise(resolve => setTimeout(resolve, CONSENSUS_DELAY_MS));
+
+  //NOTE(self): Phase 2 — first verification read after primary consensus delay
+  let assigneeLogins: string[] = [];
+  try {
+    const assigneeCheckResult = await getIssueThread({ owner, repo, issue_number: issueNumber });
+    if (assigneeCheckResult.success && assigneeCheckResult.data) {
+      const assignees = assigneeCheckResult.data.issue.assignees || [];
+      assigneeLogins = assignees.map((a: { login: string }) => a.login.toLowerCase());
+    }
+  } catch (err) {
+    logger.warn('First verification read failed (non-fatal)', { error: String(err) });
+  }
+
+  //NOTE(self): Stability extension — if state is ambiguous, wait longer and re-read
+  //NOTE(self): This closes the gap where 5s wasn't enough during GitHub degradation
+  if (assigneeLogins.length > 1) {
+    //NOTE(self): Contested claim — multiple agents assigned. Extend to confirm stability.
+    logger.info('Contested claim detected — extending verification', {
+      assignees: assigneeLogins,
+      extensionMs: CONSENSUS_CONTEST_EXTENSION_MS,
+    });
+    await new Promise(resolve => setTimeout(resolve, CONSENSUS_CONTEST_EXTENSION_MS));
+    try {
+      const stableCheckResult = await getIssueThread({ owner, repo, issue_number: issueNumber });
+      if (stableCheckResult.success && stableCheckResult.data) {
+        const stableAssignees = stableCheckResult.data.issue.assignees || [];
+        assigneeLogins = stableAssignees.map((a: { login: string }) => a.login.toLowerCase());
+      }
+    } catch (err) {
+      logger.warn('Stability re-read failed (using previous result)', { error: String(err) });
+    }
+  } else if (assigneeLogins.length === 0) {
+    //NOTE(self): Write hasn't propagated — extreme latency scenario
+    //NOTE(self): Without this extension, both agents see 0 assignees and both think they won
+    logger.warn('Claim not visible after primary delay — extending for propagation', {
+      extensionMs: CONSENSUS_PROPAGATION_EXTENSION_MS,
+    });
+    await new Promise(resolve => setTimeout(resolve, CONSENSUS_PROPAGATION_EXTENSION_MS));
+    try {
+      const propagationCheckResult = await getIssueThread({ owner, repo, issue_number: issueNumber });
+      if (propagationCheckResult.success && propagationCheckResult.data) {
+        const propagatedAssignees = propagationCheckResult.data.issue.assignees || [];
+        assigneeLogins = propagatedAssignees.map((a: { login: string }) => a.login.toLowerCase());
+      }
+    } catch (err) {
+      logger.warn('Propagation re-read failed (using previous result)', { error: String(err) });
+    }
+  }
+
+  const verifyDurationMs = Date.now() - verifyStartMs;
+  logger.info('Consensus verification complete', {
+    assignees: assigneeLogins,
+    durationMs: verifyDurationMs,
+    taskNumber,
+  });
+
+  //NOTE(self): Winner determination — lexicographically lower username wins contested claims
+  if (assigneeLogins.length > 1 && assigneeLogins.includes(myUsername.toLowerCase())) {
+    const sorted = [...assigneeLogins].sort();
+    if (sorted[0] !== myUsername.toLowerCase()) {
+      logger.info('Cross-process dedup: losing claim to lexicographically lower agent', {
+        winner: sorted[0],
+        myUsername,
+        taskNumber,
+        verifyDurationMs,
+      });
+      await removeIssueAssignee({ owner, repo, issue_number: issueNumber, assignees: [myUsername] });
+      await freshUpdateTaskInPlan(owner, repo, issueNumber, taskNumber, {
+        status: 'pending',
+        assignee: null,
+      });
+      claimedTasks.delete(claimKey);
+      saveClaimedTasks();
+      return { success: false, claimed: false, claimedBy: sorted[0], error: `Cross-process dedup: ${sorted[0]} wins (lexicographic)` };
+    }
   }
 
   //NOTE(self): Check existing comments before posting — belt-and-suspenders dedup

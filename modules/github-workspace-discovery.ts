@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
+import * as crypto from 'crypto';
 import { logger } from '@modules/logger.js';
 import { stampVersion, checkVersion } from '@common/memory-version.js';
 import { listIssues } from '@adapters/github/list-issues.js';
@@ -546,6 +547,26 @@ export async function pollWorkspacesForReviewablePRs(): Promise<ReviewablePR[]> 
         //NOTE(self): Never review own PRs
         if (pr.user.login.toLowerCase() === agentUsername) continue;
 
+        //NOTE(self): Deterministic PR reviewer selection — same algorithm as space action ownership
+        //NOTE(self): SHA-256(agentName + "owner/repo#prNumber"), lowest hash reviews
+        //NOTE(self): Prevents duplicate reviews when multiple SOULs poll simultaneously
+        const prKey = `${workspace.owner}/${workspace.repo}#${pr.number}`;
+        const selfHash = crypto.createHash('sha256').update(agentUsername + prKey).digest('hex');
+        const peerUsernames = getPeerUsernames();
+        let isDesignatedReviewer = true;
+        for (const peer of peerUsernames) {
+          if (peer.toLowerCase() === agentUsername) continue;
+          const peerHash = crypto.createHash('sha256').update(peer.toLowerCase() + prKey).digest('hex');
+          if (peerHash < selfHash) {
+            isDesignatedReviewer = false;
+            break;
+          }
+        }
+        if (!isDesignatedReviewer) {
+          logger.info('Skipping PR review — not designated reviewer', { pr: prKey, agentUsername });
+          continue;
+        }
+
         //NOTE(self): Fast path — if conversation is concluded AND PR hasn't been updated since, skip
         const existing = getConversation(workspace.owner, workspace.repo, pr.number);
         if (existing && existing.state === 'concluded' && existing.concludedAt) {
@@ -1043,10 +1064,12 @@ async function completeTaskAfterMerge(
 }
 
 //NOTE(self): Handle merge conflict recovery — close conflicting PR, delete branch, reset task to pending
+//NOTE(self): spaceClient parameter is structurally typed to avoid import coupling with SpaceClient class
 export async function handleMergeConflictPR(
   owner: string,
   repo: string,
-  pr: GitHubPullRequest
+  pr: GitHubPullRequest,
+  spaceClient?: { isActive(): boolean; sendChat(content: string): void; sendState(state: 'idle' | 'thinking' | 'acting' | 'blocked', detail?: string): void } | null
 ): Promise<{ success: boolean; taskNumber?: number; error?: string }> {
   const headRef = pr.head?.ref || '';
   const taskMatch = headRef.match(/^task-(\d+)-/);
@@ -1117,6 +1140,12 @@ export async function handleMergeConflictPR(
     return { success: false, taskNumber, error: `Failed to reset task: ${resetResult.error}` };
   }
   logger.info('Reset task to pending after merge conflict', { owner, repo, planIssue: planIssue.number, taskNumber });
+
+  //NOTE(self): Broadcast merge conflict recovery to space — peers know task is available again
+  if (spaceClient?.isActive()) {
+    spaceClient.sendChat(`Reset task ${taskNumber} in ${owner}/${repo} due to merge conflict — available for re-execution.`);
+    spaceClient.sendState('idle', `merge conflict resolved: task ${taskNumber}`);
+  }
 
   // Comment on the plan issue
   const planCommentResult = await createIssueComment({

@@ -15,6 +15,7 @@
 //NOTE(self): 10. Space Participation (60s) - converse with other agents in the local chatroom
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
+import crypto from 'node:crypto';
 import { logger } from '@modules/logger.js';
 import { ui, type ScheduledTimers, type RateLimitBudget } from '@modules/ui.js';
 import { getGitHubRateLimitStatus } from '@adapters/github/rate-limit.js';
@@ -147,7 +148,7 @@ import {
   type ReviewablePR,
   DISCUSSION_LABEL,
 } from '@modules/github-workspace-discovery.js';
-import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, isPeerHandleOnly, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified, ensurePeerRegistryClean } from '@modules/peer-awareness.js';
+import { getPeerUsernames, getPeerBlueskyHandles, registerPeerByBlueskyHandle, isPeer, isPeerHandleOnly, getUnfollowedPeers, getUnannouncedPeers, getLinkedPeers, markPeerFollowed, markPeerAnnounced, extractGitHubUsernameFromText, linkBlueskyHandleToGitHub, getPeerAnnouncementSummary, IDENTITY_POST_MARKER, buildIdentityPostText, scanFeedForIdentityPost, needsVerification, markPeerVerified, ensurePeerRegistryClean, recordSpaceInteraction, getAllPeerRelationshipContexts } from '@modules/peer-awareness.js';
 import { processRecordForWorkspaces } from '@local-tools/self-workspace-watch.js';
 import { claimTaskFromPlan, markTaskInProgress } from '@local-tools/self-task-claim.js';
 import { executeTask, ensureWorkspace, pushChanges, createBranch, createPullRequest, requestReviewersForPR, getTaskBranchName, getTaskBranchCandidates, checkRemoteBranchExists, findRemoteBranchByTaskNumber, recoverOrphanedBranch } from '@local-tools/self-task-execute.js';
@@ -167,16 +168,23 @@ import {
 import {
   enqueueCommitment,
   getPendingCommitments,
+  getRecentlyCompletedCommitments,
   markCommitmentInProgress,
   markCommitmentCompleted,
   markCommitmentFailed,
   abandonStaleCommitments,
+  checkAndApplyRepoCooldown,
+  timeoutInProgressCommitments,
 } from '@modules/commitment-queue.js';
 import { extractCommitments, type ReplyForExtraction } from '@local-tools/self-commitment-extract.js';
 import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
 import { announceIfWorthy } from '@local-tools/self-announcement.js';
 import { MEMORY_VERSION } from '@common/memory-version.js';
-import { ensureHttps } from '@common/strings.js';
+import { ensureHttps, findSemanticEchoEnsemble } from '@common/strings.js';
+import { classifyHostMessages, clearIntentCache } from '@common/intent-cache.js';
+import { isEchoByLLMJudge, clearEchoJudgeCache } from '@modules/echo-judge.js';
+import { validateCommitments, parseSpaceDecision, SPACE_DECISION_TOOL } from '@common/schemas.js';
+import { ENSEMBLE_ECHO_THRESHOLD, CONCEPT_NOVELTY_THRESHOLD, ECHO_JUDGE_BORDERLINE_LOW, ECHO_JUDGE_NOVELTY_HIGH, ROLE_MESSAGE_BUDGET_ACTOR, ROLE_MESSAGE_BUDGET_REVIEWER, ROLE_MESSAGE_BUDGET_OBSERVER, DISCUSSION_SATURATION_BONUS, DISCUSSION_OBSERVER_THRESHOLD, DISCUSSION_ROLE_BUDGET_MULTIPLIER, SPACE_ACTION_MAX_CHARS, SPACE_ACTION_MAX_SENTENCES, SPACE_DISCUSSION_MAX_CHARS, SPACE_DISCUSSION_MAX_SENTENCES } from '@common/config.js';
 import { pruneDuplicatePosts, pruneThankYouChains, outboundQueue } from '@modules/outbound-queue.js';
 import { pruneGitHubDuplicateComments } from '@modules/github-comment-cleanup.js';
 import {
@@ -197,6 +205,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   ENGAGEMENT_CHECK_INTERVAL_MS,
   COMMITMENT_CHECK_INTERVAL_MS,
+  COMMITMENT_MAX_ATTEMPTS,
   STUCK_TASK_TIMEOUT_MS,
   MAX_TASK_RETRIES,
   IMPROVEMENT_BURN_IN_MS,
@@ -353,6 +362,27 @@ export class AgentScheduler {
   private spaceParticipationCount = 0;
   private spaceAgentId: string = '';
 
+  //NOTE(self): Conversation history buffer for space participation — fixes stateless context bug
+  private spaceConversationHistory: Array<{ name: string; content: string; timestamp: string }> = [];
+  private spaceDetectedRepo: string | null = null;
+  private spaceLastActivityAt: number = 0;
+  private spaceOwnMessageCount: number = 0;
+  //NOTE(self): Track unfulfilled host action requests — escalate if agents discuss without acting
+  private spaceHostRequestAt: number = 0;
+  private spaceHostRequestContent: string = '';
+  private spaceHostRequestFulfilled: boolean = true;
+  private spaceHostRequestCycles: number = 0;
+  //NOTE(self): Track action-owner validation rejections — trigger retry or faster forced action
+  private spaceActionOwnerRejectionCount: number = 0;
+
+  //NOTE(self): Running summary of points made — prevents semantic echoing without embeddings
+  //NOTE(self): Each entry is a ~10 word summary of a point made by any agent in the conversation
+  private spacePointsMade: string[] = [];
+
+  //NOTE(self): Pinned context — critical facts extracted from conversation that persist across history clears
+  //NOTE(self): Survives the 5-min idle history reset so repo mentions and action requests don't get lost
+  private spacePinnedContext: string[] = [];
+
   constructor(config: Partial<SchedulerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.appConfig = getConfig();
@@ -483,11 +513,13 @@ export class AgentScheduler {
     this.startRitualCheckLoop();
     this.startSpaceParticipationLoop();
 
+    //NOTE(self): Always start commitment fulfillment — space participation creates commitments even in social-only mode
+    this.startCommitmentFulfillmentLoop();
+
     //NOTE(self): Conditionally start GitHub/code loops (skipped in social-only mode)
     if (!this.config.socialOnly) {
       this.startGitHubAwarenessLoop();
       this.startPlanAwarenessLoop();
-      this.startCommitmentFulfillmentLoop();
     }
 
     //NOTE(self): Start UI timer updates
@@ -1689,6 +1721,23 @@ export class AgentScheduler {
                 if (peersInThread.length >= 2) {
                   threadContext += `\n  ⚠️ **${peersInThread.length} peers already in this thread** — only add what's genuinely missing.`;
                 }
+
+                //NOTE(self): Peer-aware response check — if a peer SOUL replied AFTER the notification
+                //NOTE(self): that triggered us, check if they already addressed the same point.
+                //NOTE(self): Fresh thread fetch catches replies that arrived while we were processing.
+                if (peersInThread.length >= 1 && ta.conversationHistory) {
+                  const notifTimestamp = new Date(n.indexedAt || n.uri.split('/').pop() || '').getTime();
+                  const peerRepliesAfter = ta.conversationHistory.split('\n')
+                    .filter(line => {
+                      const handleMatch = line.match(/^@([a-zA-Z0-9._-]+):/);
+                      return handleMatch && peersInThread.some(p => p.toLowerCase() === handleMatch[1].toLowerCase());
+                    });
+
+                  //NOTE(self): If 2+ peer SOULs already replied in this thread, recommend auto-like
+                  if (peerRepliesAfter.length >= 2) {
+                    threadContext += `\n  ⚠️ **PEER SATURATION: ${peerRepliesAfter.length} peer SOULs already contributed.** Consider using like_post instead of replying — the thread has enough SOUL input.`;
+                  }
+                }
               }
             }
           }
@@ -1744,6 +1793,18 @@ export class AgentScheduler {
                 ? history.map(h => `- ${h.date}: ${h.notes || 'No notes recorded'}${h.artifactUri ? ` [artifact](${h.artifactUri})` : ''}`).join('\n')
                 : 'No previous history.';
 
+              //NOTE(self): Ritual role differentiation — same SHA-256 algorithm as space action ownership
+              //NOTE(self): Prevents all SOULs from responding with equal weight, reducing echo
+              const ritualRoleHash = crypto.createHash('sha256').update(this.appConfig.agent.name + rootUri).digest('hex');
+              const ritualRoleIndex = parseInt(ritualRoleHash.slice(0, 8), 16) % 3;
+              const ritualRoleNames = ['analyst', 'critic', 'observer'] as const;
+              const ritualRole = ritualRoleNames[ritualRoleIndex];
+              const ritualRoleGuidance = ritualRole === 'analyst'
+                ? 'You are the ANALYST for this ritual — lead with your independent analysis and concrete recommendations.'
+                : ritualRole === 'critic'
+                ? 'You are the CRITIC for this ritual — explicitly challenge previous decisions and offer contrarian perspectives.'
+                : 'You are the OBSERVER for this ritual — only respond if you have a genuinely unique insight. Otherwise, like the thread instead of replying.';
+
               ritualSection = '\n' + renderSkillSection('AGENT-RITUAL-CONTEXT', 'Ritual Thread Context', {
                 ritualName: matchedRitual.name,
                 ritualDescription: matchedRitual.description,
@@ -1752,7 +1813,7 @@ export class AgentScheduler {
                 today,
                 dayOfWeek,
                 recentHistory,
-              }) + '\n';
+              }) + `\n\n**Your ritual role today:** ${ritualRole.toUpperCase()}\n${ritualRoleGuidance}\n`;
               break; //NOTE(self): One ritual context is enough
             }
           } else if (!ritualMatch.isRitual) {
@@ -1772,6 +1833,17 @@ export class AgentScheduler {
                   ? history.map(h => `- ${h.date}: ${h.notes || 'No notes recorded'}${h.artifactUri ? ` [artifact](${h.artifactUri})` : ''}`).join('\n')
                   : 'No previous history.';
 
+                //NOTE(self): Ritual role differentiation for participant path
+                const pRitualRoleHash = crypto.createHash('sha256').update(this.appConfig.agent.name + rootUri).digest('hex');
+                const pRitualRoleIndex = parseInt(pRitualRoleHash.slice(0, 8), 16) % 3;
+                const pRitualRoleNames = ['analyst', 'critic', 'observer'] as const;
+                const pRitualRole = pRitualRoleNames[pRitualRoleIndex];
+                const pRitualRoleGuidance = pRitualRole === 'analyst'
+                  ? 'You are the ANALYST for this ritual — lead with your independent analysis and concrete recommendations.'
+                  : pRitualRole === 'critic'
+                  ? 'You are the CRITIC for this ritual — explicitly challenge previous decisions and offer contrarian perspectives.'
+                  : 'You are the OBSERVER for this ritual — only respond if you have a genuinely unique insight. Otherwise, like the thread instead of replying.';
+
                 ritualSection = '\n' + renderSkillSection('AGENT-RITUAL-CONTEXT', 'Ritual Thread Context', {
                   ritualName: ritual.name,
                   ritualDescription: ritual.description,
@@ -1780,7 +1852,7 @@ export class AgentScheduler {
                   today,
                   dayOfWeek,
                   recentHistory,
-                }) + '\n';
+                }) + `\n\n**Your ritual role today:** ${pRitualRole.toUpperCase()}\n${pRitualRoleGuidance}\n`;
                 break;
               }
             }
@@ -2325,7 +2397,7 @@ Revise and post again.`;
           responseText: response.text?.slice(0, 200),
           toolCallCount: response.toolCalls.length,
         });
-        ui.warn('No post', response.text ? response.text.slice(0, 80) + '...' : 'Model returned empty response');
+        ui.warn('No post', response.text || 'Model returned empty response');
         recordFriction('expression', 'Model did not generate a post', prompt);
       }
 
@@ -2548,6 +2620,27 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         } catch (voiceError) {
           ui.stopSpinner('Voice phrase generation skipped', false);
           logger.info('Voice phrase regeneration failed (non-fatal)', { error: String(voiceError) });
+        }
+
+        //NOTE(self): Re-broadcast identity to space after SELF.md evolves — peers see updated interests/expertise
+        if (this.spaceClient?.isActive()) {
+          this.broadcastSpaceIdentity();
+          logger.info('[space] Identity re-broadcast after reflection');
+
+          //NOTE(self): Share what we learned — peers see growth happening in real time
+          //NOTE(self): Extract a 1-2 sentence summary from the reflection response
+          if (response.text) {
+            const reflectionSentences = response.text
+              .split(/[.!?]\s+/)
+              .filter(s => s.trim().length > 15 && !s.includes('self_update') && !s.includes('tool'))
+              .slice(0, 2);
+            if (reflectionSentences.length > 0) {
+              const reflectionSummary = reflectionSentences.join('. ').trim();
+              if (reflectionSummary.length > 0) {
+                this.spaceClient.sendReflection(reflectionSummary);
+              }
+            }
+          }
         }
       }
     } catch (error) {
@@ -3246,6 +3339,28 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
               continue;
             }
 
+            //NOTE(self): Post-execution claim verification for orphan recovery
+            //NOTE(self): Before creating a PR, verify no other agent has claimed this task
+            //NOTE(self): This prevents duplicate PRs when multiple agents discover the same orphan
+            const orphanFreshPlan = await fetchFreshPlan(workspace.owner, workspace.repo, issue.number);
+            if (orphanFreshPlan.success && orphanFreshPlan.plan) {
+              const orphanTask = orphanFreshPlan.plan.tasks.find(t => t.number === task.number);
+              if (orphanTask?.assignee && orphanTask.assignee.toLowerCase() !== config.github.username.toLowerCase()) {
+                logger.info('Orphan recovery skipped — task now claimed by another agent', {
+                  taskNumber: task.number, assignee: orphanTask.assignee, branchName,
+                });
+                ui.stopSpinner('Orphan recovery skipped — claimed by another agent', false);
+                continue;
+              }
+              if (orphanTask?.status === 'completed') {
+                logger.info('Orphan recovery skipped — task already completed', {
+                  taskNumber: task.number, branchName,
+                });
+                ui.stopSpinner('Orphan recovery skipped — task completed', false);
+                continue;
+              }
+            }
+
             //NOTE(self): Create the PR
             const prTitle = `task(${task.number}): ${task.title}`;
             const prBody = [
@@ -3482,6 +3597,24 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
           planCount: discoveredPlans.length,
           totalClaimable: discoveredPlans.reduce((sum, p) => sum + p.claimableTasks.length, 0),
         });
+      }
+
+      //NOTE(self): Broadcast workspace state to space — peers see collaborative progress without polling GitHub
+      if (this.spaceClient?.isActive() && discoveredPlans.length > 0) {
+        for (const plan of discoveredPlans) {
+          const total = plan.plan.tasks.length;
+          const completed = plan.plan.tasks.filter(t => t.status === 'completed').length;
+          const blocked = plan.plan.tasks.filter(t => t.status === 'blocked').length;
+          const inProgress = plan.plan.tasks.filter(t => t.status === 'in_progress' || t.status === 'claimed').length;
+          this.spaceClient.sendWorkspaceState(
+            `${plan.workspace.owner}/${plan.workspace.repo}`,
+            plan.issueNumber,
+            total,
+            completed,
+            blocked,
+            inProgress
+          );
+        }
       }
 
       //NOTE(self): If no open plans exist, check if we should synthesize a plan from open issues
@@ -3741,7 +3874,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         //NOTE(self): Recover PRs stuck with only rejections — close, delete branch, reset task
         for (const { workspace: ws, pr } of stuckRejected) {
           logger.info('Recovering stuck rejected PR', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, title: pr.title });
-          const recovery = await handleMergeConflictPR(ws.owner, ws.repo, pr);
+          const recovery = await handleMergeConflictPR(ws.owner, ws.repo, pr, this.spaceClient);
           if (recovery.success) {
             logger.info('Stuck rejected PR recovered, task reset to pending', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, taskNumber: recovery.taskNumber });
             this.requestEarlyPlanCheck();
@@ -3753,7 +3886,7 @@ Use self_update to add something to SELF.md - a new insight, a question you're s
         //NOTE(self): Recover PRs never reviewed after 2 hours — close, delete branch, reset task
         for (const { workspace: ws, pr } of stuckUnreviewed) {
           logger.info('Recovering unreviewed PR', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, title: pr.title });
-          const recovery = await handleMergeConflictPR(ws.owner, ws.repo, pr);
+          const recovery = await handleMergeConflictPR(ws.owner, ws.repo, pr, this.spaceClient);
           if (recovery.success) {
             logger.info('Unreviewed PR recovered, task reset to pending', { repo: `${ws.owner}/${ws.repo}`, number: pr.number, taskNumber: recovery.taskNumber });
             this.requestEarlyPlanCheck();
@@ -4725,6 +4858,41 @@ Do NOT create an issue for minor polish, documentation-only gaps, or subjective 
       }
       logger.info('GATE 4 passed: Remote branch verified', { branchName });
 
+      //NOTE(self): GATE 5 — Post-execution claim verification
+      //NOTE(self): Re-read the plan from GitHub to ensure we're still the assignee
+      //NOTE(self): Task execution can take minutes — another agent may have claimed during that window
+      //NOTE(self): This is the final defense against duplicate PRs for the same task
+      ui.updateSpinner('GATE 5: Verifying claim ownership...');
+      const postExecPlan = await fetchFreshPlan(workspace.owner, workspace.repo, issueNumber);
+      if (postExecPlan.success && postExecPlan.plan) {
+        const postExecTask = postExecPlan.plan.tasks.find(t => t.number === task.number);
+        if (postExecTask?.assignee && postExecTask.assignee.toLowerCase() !== config.github.username.toLowerCase()) {
+          ui.stopSpinner('GATE 5 FAILED: Claim stolen during execution', false);
+          logger.warn('Post-execution claim verification failed — another agent owns this task', {
+            taskNumber: task.number,
+            expectedAssignee: config.github.username,
+            actualAssignee: postExecTask.assignee,
+            branchName,
+          });
+          //NOTE(self): Don't delete the branch — it has valid work. Report as failed so the
+          //NOTE(self): orphan recovery can pick it up later if the other agent's execution fails.
+          await reportTaskFailed(
+            { owner: workspace.owner, repo: workspace.repo, issueNumber, taskNumber: task.number, plan: plan as any },
+            `Claim stolen during execution. Expected assignee: ${config.github.username}, actual: ${postExecTask.assignee}. Branch "${branchName}" preserved.`
+          );
+          return;
+        }
+        //NOTE(self): Also check if task was completed by another agent while we were executing
+        if (postExecTask?.status === 'completed') {
+          ui.stopSpinner('GATE 5 FAILED: Task already completed by another agent', false);
+          logger.warn('Post-execution claim verification failed — task already completed', {
+            taskNumber: task.number, branchName,
+          });
+          return;
+        }
+      }
+      logger.info('GATE 5 passed: Claim ownership verified', { branchName, taskNumber: task.number });
+
       //NOTE(self): Create PR — must succeed for task to be marked complete
       const prTitle = `task(${task.number}): ${task.title}`;
       const prBody = [
@@ -5211,6 +5379,13 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     //NOTE(self): Clean up stale commitments first (24h threshold)
     abandonStaleCommitments();
 
+    //NOTE(self): Timeout in-progress commitments stuck for >10 minutes
+    //NOTE(self): Prevents stale commitments from previous conversations causing false declines
+    timeoutInProgressCommitments();
+
+    //NOTE(self): Check and apply repo cooldowns based on failure patterns
+    checkAndApplyRepoCooldown();
+
     const pending = getPendingCommitments();
     if (pending.length === 0) return;
 
@@ -5221,6 +5396,20 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
     for (const commitment of pending) {
       ui.startSpinner(`Fulfilling commitment: ${commitment.description.slice(0, 50)}`);
+
+      //NOTE(self): Claim renewal interval — re-sends claim every 30s to keep TTL alive
+      //NOTE(self): Prevents 60s claim expiry during long fulfillment operations (e.g., complex issue creation)
+      let claimRenewalTimer: ReturnType<typeof setInterval> | null = null;
+      const commitmentTarget = (commitment.params?.target as string) || commitment.description;
+      if (this.spaceClient?.isActive()) {
+        this.spaceClient.sendState('acting', `fulfilling ${commitment.type}: ${commitmentTarget.slice(0, 60)}`);
+        this.spaceClient.sendClaim(commitment.type, commitmentTarget);
+        claimRenewalTimer = setInterval(() => {
+          if (this.spaceClient?.isActive()) {
+            this.spaceClient.renewClaim(commitment.type, commitmentTarget);
+          }
+        }, 30_000);
+      }
 
       try {
         markCommitmentInProgress(commitment.id);
@@ -5239,17 +5428,51 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           //NOTE(self): This closes the loop: human asks → SOUL promises → SOUL delivers → SOUL shares link
           await this.replyWithFulfillmentLink(commitment, result.result || {});
 
+          //NOTE(self): Broadcast structured action result to space — peers programmatically track what's been done
+          if (this.spaceClient?.isActive()) {
+            const link = (result.result?.issueUrl as string) || (result.result?.uri as string) || undefined;
+            this.spaceClient.sendActionResult(commitment.type, commitment.params?.target as string || commitment.description, true, link);
+          }
+
           ui.stopSpinner(`Commitment fulfilled: ${commitment.type}`);
           logger.info('Commitment fulfilled', { id: commitment.id, type: commitment.type });
         } else {
           markCommitmentFailed(commitment.id, result.error || 'Unknown error');
           ui.stopSpinner('Commitment failed', false);
           logger.warn('Commitment fulfillment failed', { id: commitment.id, error: result.error });
+
+          //NOTE(self): Broadcast structured failure result to space
+          if (this.spaceClient?.isActive()) {
+            this.spaceClient.sendActionResult(commitment.type, commitment.params?.target as string || commitment.description, false, undefined, result.error);
+          }
+
+          //NOTE(self): Silent failure by design (SCENARIOS.md #5) — failed commitments are NOT announced
+          //NOTE(self): back to the space. The host sees structured results via sendActionResult above,
+          //NOTE(self): but no chat messages about failures. This prevents noisy error spam in the space.
+          if (commitment.source === 'space') {
+            const isLastAttempt = commitment.attemptCount + 1 >= COMMITMENT_MAX_ATTEMPTS;
+            if (isLastAttempt) {
+              //NOTE(self): Re-enable escalation when commitment pipeline permanently fails
+              //NOTE(self): Without this, spaceHostRequestFulfilled stays true forever and the system never re-escalates
+              this.spaceHostRequestFulfilled = false;
+              logger.info('[space] Commitment failed permanently — re-enabling host request escalation');
+              ui.action('[space] Commitment abandoned silently', `${commitment.type} failed after ${COMMITMENT_MAX_ATTEMPTS} attempts`);
+            }
+          }
         }
       } catch (error) {
         markCommitmentFailed(commitment.id, String(error));
         ui.stopSpinner('Commitment error', false);
         logger.error('Commitment fulfillment error', { id: commitment.id, error: String(error) });
+      } finally {
+        //NOTE(self): Always clean up claim renewal timer — prevents leaked intervals
+        if (claimRenewalTimer) {
+          clearInterval(claimRenewalTimer);
+        }
+        //NOTE(self): Return to idle state after each commitment
+        if (this.spaceClient?.isActive()) {
+          this.spaceClient.sendState('idle');
+        }
       }
     }
 
@@ -5632,6 +5855,9 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     }, SPACE_RECONNECT_INTERVAL_MS);
 
     //NOTE(self): Check for messages and decide to speak every SPACE_CHECK_INTERVAL_MS
+    //NOTE(self): 40% jitter (±2s on 5s base) — aggressive stagger so agents naturally sequence
+    //NOTE(self): their LLM calls instead of all calling simultaneously
+    const spaceInterval = getTimerJitter(agentName, 'space-participation', SPACE_CHECK_INTERVAL_MS, 0.40);
     this.spaceTimer = setInterval(async () => {
       if (this.shutdownRequested) return;
       if (!this.spaceClient?.isActive()) return;
@@ -5642,7 +5868,17 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       } finally {
         this.runningLoops.delete('space-participation');
       }
-    }, SPACE_CHECK_INTERVAL_MS);
+    }, spaceInterval);
+  }
+
+  //NOTE(self): Append a message to the rolling space conversation history (max 30 messages)
+  private appendToSpaceHistory(name: string, content: string, timestamp: string): void {
+    this.spaceConversationHistory.push({ name, content, timestamp });
+    this.spaceLastActivityAt = Date.now();
+    // Keep rolling window of last 30 messages
+    if (this.spaceConversationHistory.length > 30) {
+      this.spaceConversationHistory = this.spaceConversationHistory.slice(-30);
+    }
   }
 
   private async attemptSpaceDiscovery(): Promise<void> {
@@ -5665,9 +5901,18 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       const agentId = this.spaceAgentId;
       const agentVersion = LOCAL_VERSION;
 
+      //NOTE(self): Reset conversation history on new connection
+      this.spaceConversationHistory = [];
+      this.spaceDetectedRepo = null;
+      this.spaceOwnMessageCount = 0;
+      this.spacePointsMade = [];
+      this.spacePinnedContext = [];
+
       this.spaceClient = new SpaceClient(agentName, agentId, agentVersion, {
         onConnect: () => {
           ui.success('Joined agent space');
+          //NOTE(self): Broadcast identity on connect so peers learn about us
+          this.broadcastSpaceIdentity();
         },
         onDisconnect: () => {
           ui.warn('Disconnected from agent space');
@@ -5677,17 +5922,110 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
         onChat: (name, content) => {
           ui.info(`[space] ${name}`, content);
         },
+        onHistory: (entries) => {
+          //NOTE(self): Seed conversation history from server's persisted chat log
+          for (const entry of entries) {
+            if (entry.type === 'chat') {
+              this.appendToSpaceHistory(entry.agentName, entry.content, entry.timestamp);
+            }
+          }
+          //NOTE(self): Detect repo from history
+          const allTexts = this.spaceConversationHistory.map(m => m.content).join(' ');
+          const ghMatch = allTexts.match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/);
+          if (ghMatch) {
+            this.spaceDetectedRepo = ghMatch[1].replace(/\.git$/, '');
+          }
+        },
         onJoin: (name) => {
           ui.info(`[space] ${name} joined`);
         },
         onLeave: (name) => {
           ui.info(`[space] ${name} left`);
         },
+        onIdentity: (name, summary) => {
+          ui.info(`[space] ${name} identity`, summary.voice || 'identity received');
+        },
+        onClaim: (name, action, target) => {
+          ui.info(`[space] ${name} claimed`, `${action}: ${target}`);
+        },
+        onReflection: (name, summary) => {
+          ui.info(`[space] ${name} reflected`, summary);
+        },
+        onWorkspaceState: (name, workspace, _planNumber, totalTasks, completedTasks) => {
+          ui.info(`[space] ${name} workspace`, `${workspace}: ${completedTasks}/${totalTasks} tasks done`);
+        },
       });
+
+      //NOTE(self): Advertise capabilities so peers can filter action ownership
+      //NOTE(self): social-only agents cannot fulfill github/code actions
+      if (this.config.socialOnly) {
+        this.spaceClient.setCapabilities(['social']);
+      } else {
+        this.spaceClient.setCapabilities(['social', 'github', 'code']);
+      }
 
       this.spaceClient.connect(url);
     } catch (error) {
       logger.info('Space discovery failed', { error: String(error) });
+      if (!process.env.SPACE_URL) {
+        logger.info('[space] mDNS discovery failed and SPACE_URL not set — operating without space. Set SPACE_URL=ws://<host>:7777 in .env to connect manually.');
+      }
+    }
+  }
+
+  //NOTE(self): Broadcast condensed identity from SELF.md + SOUL.md to peer agents
+  private broadcastSpaceIdentity(): void {
+    if (!this.spaceClient?.isActive()) return;
+
+    try {
+      const selfContent = readSelf(this.appConfig.paths.selfmd);
+      const soulContent = readSoul(this.appConfig.paths.soul);
+
+      //NOTE(self): Extract identity components from SELF.md sections
+      const interestsMatch = selfContent.match(/##\s*Current Interests?\s*\n([\s\S]*?)(?=\n##|\n$|$)/i);
+      const learningMatch = selfContent.match(/##\s*What I'm Learning\s*\n([\s\S]*?)(?=\n##|\n$|$)/i);
+      const voiceMatch = selfContent.match(/##\s*Voice\s*\n([\s\S]*?)(?=\n##|\n$|$)/i);
+
+      const extractList = (text: string | undefined): string[] => {
+        if (!text) return [];
+        return text.split('\n')
+          .map(l => l.replace(/^[-*]\s*/, '').trim())
+          .filter(l => l.length > 0)
+          .slice(0, 5);
+      };
+
+      //NOTE(self): Extract core values from SOUL.md — first 5 meaningful phrases
+      const soulValues = soulContent
+        .split(/[.,;]\s*/)
+        .map(s => s.trim())
+        .filter(s => s.length > 3 && s.length < 40)
+        .slice(0, 5);
+
+      //NOTE(self): Get recent work from commitment history
+      const recentCompleted = getRecentlyCompletedCommitments(60 * 60 * 1000);
+      const recentWork = recentCompleted.length > 0
+        ? `${recentCompleted[0].type}: ${recentCompleted[0].description}`.slice(0, 100)
+        : 'No recent completed work';
+
+      //NOTE(self): Extract SOUL essence — 2-3 sentence distillation of SOUL.md
+      //NOTE(self): Lets peers understand what drives this agent at the philosophical level
+      const soulEssence = soulContent
+        .split(/[.!?]\s+/)
+        .filter(s => s.trim().length > 10)
+        .slice(0, 3)
+        .join('. ')
+        .trim();
+
+      this.spaceClient.sendIdentity({
+        coreValues: soulValues,
+        currentInterests: extractList(interestsMatch?.[1]),
+        voice: (voiceMatch?.[1] || '').split('\n')[0]?.trim().slice(0, 120) || 'unique voice',
+        expertise: extractList(learningMatch?.[1]),
+        recentWork,
+        soulEssence: soulEssence ? soulEssence + '.' : undefined,
+      });
+    } catch (err) {
+      logger.info('Failed to broadcast space identity', { error: String(err) });
     }
   }
 
@@ -5702,35 +6040,205 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
 
     //NOTE(self): Get accumulated messages since last check
     const messages = this.spaceClient.getAndFlushMessages();
-    if (messages.length === 0) return;
+
+    //NOTE(self): Append new messages to conversation history buffer
+    const selfName = this.appConfig.agent.name;
+    for (const m of messages) {
+      this.appendToSpaceHistory(m.name, m.content, m.timestamp);
+      //NOTE(self): Track peer points in running summary — prevents our agent from echoing
+      if (m.name !== selfName) {
+        const peerPoint = m.content.replace(/[^\w\s]/g, '').split(/\s+/).slice(0, 10).join(' ');
+        this.spacePointsMade.push(`${m.name}: ${peerPoint}`);
+        if (this.spacePointsMade.length > 15) {
+          this.spacePointsMade = this.spacePointsMade.slice(-15);
+        }
+      }
+    }
+
+    //NOTE(self): Even with no new messages, still run escalation for pending host requests
+    //NOTE(self): Without this, spaceHostRequestCycles never increments when the conversation goes quiet
+    const hasNewMessages = messages.length > 0;
+    if (!hasNewMessages && this.spaceHostRequestFulfilled) return;
+
+    //NOTE(self): Clear stale conversation (5+ min no activity means new conversation)
+    if (this.spaceLastActivityAt > 0 && Date.now() - this.spaceLastActivityAt > 5 * 60_000) {
+      //NOTE(self): Pin critical facts before clearing history — repo + last action request survive
+      if (this.spaceDetectedRepo) {
+        this.spacePinnedContext = [`Repo: ${this.spaceDetectedRepo}`];
+      } else {
+        this.spacePinnedContext = [];
+      }
+      this.spaceConversationHistory = [];
+      this.spaceDetectedRepo = null;
+      this.spaceOwnMessageCount = 0;
+      this.spacePointsMade = [];
+      //NOTE(self): Reset stale request tracking for fresh conversation
+      this.spaceHostRequestAt = 0;
+      this.spaceHostRequestContent = '';
+      this.spaceHostRequestFulfilled = true;
+      this.spaceHostRequestCycles = 0;
+      this.spaceActionOwnerRejectionCount = 0;
+      clearIntentCache(); //NOTE(self): Clear cached classifications for fresh conversation
+      clearEchoJudgeCache(); //NOTE(self): Clear echo judge cache for fresh conversation
+    }
+
+    //NOTE(self): Sticky repo detection — search full conversation history, persist across checks
+    if (!this.spaceDetectedRepo) {
+      //NOTE(self): Also check pinned context from previous conversation window
+      const pinnedRepo = this.spacePinnedContext.find(p => p.startsWith('Repo: '));
+      if (pinnedRepo) {
+        this.spaceDetectedRepo = pinnedRepo.replace('Repo: ', '');
+      } else {
+        const allTexts = this.spaceConversationHistory.map(m => m.content).join(' ');
+        const ghMatch = allTexts.match(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/);
+        if (ghMatch) {
+          this.spaceDetectedRepo = ghMatch[1].replace(/\.git$/, '');
+          //NOTE(self): Pin the repo so it survives history clears
+          if (!this.spacePinnedContext.some(p => p.startsWith('Repo: '))) {
+            this.spacePinnedContext.push(`Repo: ${this.spaceDetectedRepo}`);
+          }
+        }
+      }
+    }
 
     //NOTE(self): Check who's currently typing
     const typingAgents = this.spaceClient.getTypingAgents();
 
-    //NOTE(self): Partition messages into host/external vs peer agent
+    //NOTE(self): Partition CURRENT BATCH messages for host-message keying (commitment dedup)
     const peerAgentNames = this.spaceClient.getConnectedAgentNames();
     const hostMessages = messages.filter(m => !peerAgentNames.has(m.name));
-    const peerMessages = messages.filter(m => peerAgentNames.has(m.name));
 
-    const formatMsgs = (msgs: typeof messages) =>
-      msgs.map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.name}: ${m.content}`).join('\n');
+    //NOTE(self): Build full conversation history for LLM context (not just current batch)
+    const agentName = this.appConfig.agent.name;
+    let conversationHistory = this.spaceConversationHistory
+      .map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.name}: ${m.content}`)
+      .join('\n');
 
-    //NOTE(self): Format as two labeled sections so the LLM distinguishes host prompts from peer context
-    let recentMessages = '';
-    if (hostMessages.length > 0) {
-      recentMessages += `**Messages to respond to (from host/external):**\n${formatMsgs(hostMessages)}`;
-    }
-    if (peerMessages.length > 0) {
-      if (recentMessages) recentMessages += '\n\n';
-      recentMessages += `**What other agents said (context only — share your own view):**\n${formatMsgs(peerMessages)}`;
-    }
-    if (!recentMessages) {
-      recentMessages = formatMsgs(messages);
-    }
+    //NOTE(self): Build "your previous messages" section so the agent sees what it already said
+    const ownMessages = this.spaceConversationHistory
+      .filter(m => m.name === agentName)
+      .map(m => m.content);
+    const ownPreviousMessages = ownMessages.length > 0
+      ? ownMessages.map((m, i) => `${i + 1}. "${m}"`).join('\n')
+      : 'None yet — this is your first message.';
 
-    //NOTE(self): Get deeper identity context from SELF.md
+    //NOTE(self): Build peer commitment summary — scan recent peer messages for commitment language
+    const peerCommitmentSummary = this.spaceConversationHistory
+      .filter(m => m.name !== agentName && !hostMessages.some(h => h.name === m.name && h.content === m.content))
+      .filter(m => /\b(I'll|I can|Let me|opening|creating|I will|I'm going to|I am going to|I'm opening|posting|commenting|writing up|documenting|filing|submitting)\b/i.test(m.content))
+      .map(m => `${m.name}: "${m.content.slice(0, 120)}"`)
+      .join('\n');
+
+    //NOTE(self): Scan for echo/agreement patterns — detect when peers are just restating each other
+    const peerEchoMessages = this.spaceConversationHistory
+      .filter(m => m.name !== agentName && !hostMessages.some(h => h.name === m.name && h.content === m.content))
+      .filter(m => /^(I agree|I'm aligned|I like \w+'s|Building on|Great point|Exactly|Absolutely|That's a great|Well said|To echo|To add|I'd add|I like the|I like that|The one thing I'd|One thing I'd|I'm with \w+|Same here|This resonates|Strongly agree|I share \w+'s|I second|On "(.*?)"(:|\s*—))/i.test(m.content.trim()))
+      .map(m => `${m.name}: "${m.content.slice(0, 80)}"`)
+      .join('\n');
+
+    //NOTE(self): Get full identity context from SELF.md — no premature truncation
+    //NOTE(self): Token budget is managed by the LLM gateway, not by slicing identity context
     const selfContent = readSelf(this.appConfig.paths.selfmd);
-    const selfExcerpt = selfContent.slice(0, 3000);
+    const selfExcerpt = selfContent;
+
+    //NOTE(self): @mention routing — check if host addressed a specific agent
+    //NOTE(self): If the host mentions agent names, only the addressed agents should speak
+    let addressedToMe = true; // Default: not addressed to anyone specific = everyone can speak
+    let addressedNote = '';
+    const latestHostMsg = [...this.spaceConversationHistory]
+      .reverse()
+      .find(m => !peerAgentNames.has(m.name) && m.name !== agentName);
+    if (latestHostMsg) {
+      //NOTE(self): Check for server-parsed addressed field from message buffer
+      const latestBuffered = messages.find(m => m.content === latestHostMsg.content && m.name === latestHostMsg.name);
+      const serverAddressed = latestBuffered?.addressed;
+
+      if (serverAddressed && serverAddressed.length > 0) {
+        //NOTE(self): Server-side @mention detected
+        if (serverAddressed.includes(agentName)) {
+          addressedToMe = true;
+          addressedNote = `\n**You were specifically addressed by the host.** Prioritize responding.`;
+        } else {
+          addressedToMe = false;
+          addressedNote = `\n**The host addressed ${serverAddressed.join(', ')} specifically.** Stay silent unless you have a genuinely different perspective.`;
+        }
+      } else {
+        //NOTE(self): Client-side fallback — check if host message mentions any agent name
+        const allAgentNames = [agentName, ...peerAgentNames];
+        const mentionedAgents = allAgentNames.filter(name =>
+          latestHostMsg.content.toLowerCase().includes(name.toLowerCase())
+        );
+        if (mentionedAgents.length > 0 && !mentionedAgents.includes(agentName)) {
+          addressedToMe = false;
+          addressedNote = `\n**The host appears to be addressing ${mentionedAgents.join(', ')}.** Stay silent unless you have a genuinely different perspective.`;
+        } else if (mentionedAgents.includes(agentName)) {
+          addressedNote = `\n**You were specifically addressed by the host.** Prioritize responding.`;
+        }
+      }
+    }
+
+    //NOTE(self): Build peer identity context for LLM — helps agents reference each other's interests
+    const peerIdentityMap = this.spaceClient.getPeerIdentities();
+    let peerIdentitiesStr = '';
+    if (peerIdentityMap.size > 0) {
+      const peerReflections = this.spaceClient.getPeerReflections();
+      const relationshipContexts = getAllPeerRelationshipContexts();
+
+      //NOTE(self): Record space interactions with active peers for relationship memory
+      const activePeerNames = new Set(messages.map(m => m.name));
+      for (const peerName of activePeerNames) {
+        if (peerName !== selfName && peerName !== 'host') {
+          recordSpaceInteraction(peerName);
+        }
+      }
+
+      const entries = Array.from(peerIdentityMap.entries())
+        .map(([name, id]) => {
+          let entry = `- **${name}**: ${id.voice}. Interests: ${id.currentInterests.join(', ') || 'unknown'}. Learning: ${id.expertise.join(', ') || 'unknown'}.`;
+          //NOTE(self): Include soul essence — what drives this peer at the philosophical level
+          if (id.soulEssence) {
+            entry += ` Essence: ${id.soulEssence}`;
+          }
+          //NOTE(self): Include recent reflection — what this peer recently learned
+          const reflection = peerReflections.get(name);
+          if (reflection) {
+            entry += ` Recent insight: "${reflection.summary}"`;
+          }
+          //NOTE(self): Include relationship history — enables "as we discussed last time..." continuity
+          const relCtx = relationshipContexts.get(name);
+          if (relCtx) {
+            entry += ` History: ${relCtx}`;
+          }
+          return entry;
+        })
+        .join('\n');
+      peerIdentitiesStr = `\n**Peer identities (who you're talking to):**\n${entries}`;
+    }
+
+    //NOTE(self): Build workspace state context — collaborative progress from peers
+    const wsStates = this.spaceClient.getWorkspaceStates();
+    let workspaceStateStr = '';
+    if (wsStates.size > 0) {
+      const wsEntries = Array.from(wsStates.values())
+        .map(ws => `- ${ws.workspace} (plan #${ws.planNumber}): ${ws.completedTasks}/${ws.totalTasks} done, ${ws.inProgressTasks} active, ${ws.blockedTasks} blocked`)
+        .join('\n');
+      workspaceStateStr = `\n**Active workspace progress:**\n${wsEntries}`;
+    }
+
+    //NOTE(self): Build running summary of points made — prevents semantic echoing
+    let pointsSummary = '';
+    if (this.spacePointsMade.length > 0) {
+      pointsSummary = `\n**Points already made in this conversation (do NOT repeat these):**\n${this.spacePointsMade.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
+    }
+
+    //NOTE(self): Build pinned context — survives history clears
+    let pinnedStr = '';
+    if (this.spacePinnedContext.length > 0) {
+      pinnedStr = `\n**Pinned context:** ${this.spacePinnedContext.join(' | ')}`;
+    }
+
+    //NOTE(self): Role differentiation computed later (after lastHostActionMsg is available)
+    let roleNote = '';
 
     //NOTE(self): Build typing note for system prompt
     const typingNote = typingAgents.length > 0
@@ -5743,44 +6251,754 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     //NOTE(self): Build config summary for LLM context
     const currentConfig = formatSpaceConfigForPrompt(spaceConfig);
 
+    //NOTE(self): Use sticky detected repo (persists across checks)
+    const conversationRepo = this.spaceDetectedRepo || undefined;
+
+    //NOTE(self): Build commitment context so the agent knows what's already queued/done
+    const pendingCommitments = getPendingCommitments();
+    const pendingStr = pendingCommitments.length > 0
+      ? pendingCommitments.map(c => `- [${c.type}] ${c.description} (${c.status})`).join('\n')
+      : 'None';
+
+    const recentlyCompleted = getRecentlyCompletedCommitments(30 * 60 * 1000);
+    const completedStr = recentlyCompleted.length > 0
+      ? recentlyCompleted.map(c => `- [${c.type}] ${c.description}`).join('\n')
+      : 'None';
+
+    //NOTE(self): Make detected repo prominent — agents must not ask for it
+    const detectedRepo = conversationRepo
+      ? `**USE THIS REPO: ${conversationRepo}** — Do NOT ask which repo. It was already mentioned.`
+      : 'none detected';
+
+    //NOTE(self): Two-layer intent classification replaces regex verb-matching
+    //NOTE(self): Layer 1 (structural) catches obvious cases instantly (~80%)
+    //NOTE(self): Layer 2 (LLM) handles ambiguous cases (~20%), cached per message
+    //NOTE(self): "Do we think..." = discussion, "Create an issue" = action_request
+    let isActionOwner = true;
+    let actionOwnerName = agentName;
+    const hostConversationMessages = this.spaceConversationHistory
+      .filter(m => !peerAgentNames.has(m.name) && m.name !== agentName);
+
+    //NOTE(self): Classify all host messages using two-layer system (structural + LLM fallback)
+    const classifiedHostMessages = await classifyHostMessages(hostConversationMessages);
+
+    //NOTE(self): Find most recent genuine action request (not discussion questions)
+    const lastHostActionMsg = [...classifiedHostMessages].reverse()
+      .find(m => m.intent === 'action_request') || null;
+
+    //NOTE(self): Find most recent follow-up ("did you do it?", "where's the link?")
+    const hostFollowUpMsg = [...classifiedHostMessages].reverse()
+      .find(m => m.intent === 'follow_up') || null;
+
+    //NOTE(self): Current conversation mode — based on LATEST host message intent
+    //NOTE(self): If host moved on from action to discussion, discussion mode activates
+    //NOTE(self): Escalation tracking still runs independently for unfulfilled actions
+    const latestClassifiedHostMsg = classifiedHostMessages.length > 0
+      ? classifiedHostMessages[classifiedHostMessages.length - 1]
+      : null;
+    const conversationMode: 'action' | 'discussion' =
+      (latestClassifiedHostMsg?.intent === 'action_request' || latestClassifiedHostMsg?.intent === 'follow_up')
+        ? 'action'
+        : 'discussion';
+
+    if (lastHostActionMsg && peerAgentNames.size > 0) {
+      //NOTE(self): Capability-aware action ownership — exclude agents that cannot fulfill the action type
+      //NOTE(self): Host action requests (create/open/file/build/etc.) require 'github' capability
+      //NOTE(self): Social-only agents advertise ['social'] and are excluded from action ownership
+      const peerCaps = this.spaceClient?.getPeerCapabilities() ?? new Map<string, string[]>();
+      const requiredCap = 'github'; //NOTE(self): All host action verbs require github capability
+      const eligibleAgents = [agentName, ...peerAgentNames].filter(name => {
+        if (name === agentName) {
+          //NOTE(self): Check own capabilities
+          return !this.config.socialOnly;
+        }
+        const caps = peerCaps.get(name);
+        //NOTE(self): No capabilities advertised = backward-compatible full-capability agent
+        return !caps || caps.includes(requiredCap);
+      }).sort();
+
+      //NOTE(self): When no agents are eligible (all social-only), don't elect any owner (SCENARIOS.md #5)
+      //NOTE(self): Social-only agents cannot fulfill GitHub actions — electing one leads to broken forced-action paths
+      if (eligibleAgents.length === 0) {
+        actionOwnerName = 'none';
+        isActionOwner = false;
+      } else {
+        const msgHash = lastHostActionMsg.content.slice(0, 100);
+        const sorted = eligibleAgents
+          .map(a => ({ name: a, hash: crypto.createHash('sha256').update(a + msgHash).digest('hex') }))
+          .sort((a, b) => a.hash.localeCompare(b.hash));
+        actionOwnerName = sorted[0].name;
+        isActionOwner = sorted[0].name === agentName;
+      }
+    }
+
+    //NOTE(self): Role differentiation — hash-based role per conversation key
+    //NOTE(self): Reduces noise: actor commits, reviewer critiques after, observer stays silent unless novel
+    //NOTE(self): Only in action mode — discussion lets everyone participate equally
+    let myRole: 'actor' | 'reviewer' | 'observer' = 'actor';
+    if (conversationMode === 'action' && lastHostActionMsg && peerAgentNames.size > 0) {
+      const roleKey = crypto.createHash('sha256')
+        .update(agentName + (lastHostActionMsg.content || '').slice(0, 50))
+        .digest('hex');
+      const roleIndex = parseInt(roleKey.slice(0, 8), 16) % 3;
+      const roles = ['actor', 'reviewer', 'observer'] as const;
+      myRole = roles[roleIndex];
+      if (myRole === 'reviewer') {
+        roleNote = '\n**Your role in this conversation: REVIEWER.** Let the action owner act first. After they commit, you can offer brief critique or a complementary action.';
+      } else if (myRole === 'observer') {
+        roleNote = '\n**Your role in this conversation: OBSERVER.** Only speak if you have a genuinely novel perspective nobody else has raised. Silence is valuable.';
+      }
+      // Actor gets no extra note — the action ownership system already handles it
+    }
+
+    //NOTE(self): Stale host request tracking — detect when host asks for action and nobody delivers
+    //NOTE(self): If the host asked for something and no commitment has been enqueued after multiple cycles, escalate
+    //NOTE(self): Follow-up detection: when the latest "action" message is actually a follow-up about
+    //NOTE(self): the existing request (e.g., "provide a link"), boost urgency instead of resetting tracking
+    if (lastHostActionMsg) {
+      const isFollowUp = hostFollowUpMsg && lastHostActionMsg.content === hostFollowUpMsg.content;
+
+      if (isFollowUp && this.spaceHostRequestContent) {
+        //NOTE(self): Follow-up about existing request — boost urgency, don't reset
+        if (!this.spaceHostRequestFulfilled && this.spaceHostRequestCycles < 2) {
+          logger.info('[space] Host follow-up detected — boosting urgency to CRITICAL', {
+            followUp: hostFollowUpMsg.content.slice(0, 100),
+            previousCycles: this.spaceHostRequestCycles,
+          });
+          this.spaceHostRequestCycles = 2;
+        }
+      } else {
+        const isNewRequest = lastHostActionMsg.content !== this.spaceHostRequestContent;
+        if (isNewRequest) {
+          this.spaceHostRequestAt = Date.now();
+          this.spaceHostRequestContent = lastHostActionMsg.content;
+          this.spaceHostRequestFulfilled = false;
+          this.spaceHostRequestCycles = 0;
+          this.spaceActionOwnerRejectionCount = 0;
+        }
+      }
+
+      if (!this.spaceHostRequestFulfilled) {
+        this.spaceHostRequestCycles++;
+        //NOTE(self): Check if any agent has committed to the request (check pending + recent completed)
+        const hasPendingForRequest = pendingCommitments.length > 0;
+        const hasRecentCompleted = recentlyCompleted.length > 0 &&
+          recentlyCompleted.some(c => new Date(c.lastAttemptAt!).getTime() > this.spaceHostRequestAt);
+        if (hasPendingForRequest || hasRecentCompleted) {
+          this.spaceHostRequestFulfilled = true;
+        }
+      }
+    }
+
+    const actionOwnership = isActionOwner
+      ? '**Action ownership:** You are the ACTION OWNER for the host\'s request. You MUST commit to the action. Your response MUST contain a non-empty commitments array or it will be dropped.'
+      : `**Action ownership:** Another agent (${actionOwnerName}) is the action owner. Stay silent or take a complementary action only.`;
+
+    //NOTE(self): Build host request status — escalation signal when agents discuss without acting
+    //NOTE(self): Use stored original request content so follow-ups don't replace the real request in the prompt
+    let hostRequestStatus = '';
+    if (lastHostActionMsg && !this.spaceHostRequestFulfilled) {
+      const originalRequest = this.spaceHostRequestContent || lastHostActionMsg.content;
+      const waitingSeconds = Math.round((Date.now() - this.spaceHostRequestAt) / 1000);
+      if (this.spaceHostRequestCycles >= 2) {
+        hostRequestStatus = `**CRITICAL: HOST HAS BEEN WAITING ${waitingSeconds}s FOR ACTION.** The host asked: "${originalRequest.slice(0, 200)}". NO agent has committed yet after ${this.spaceHostRequestCycles} cycles. STOP DISCUSSING. If you are the action owner, your ONLY valid response is a commitment. If you are not the action owner, set shouldSpeak: false.`;
+      } else {
+        hostRequestStatus = `**Host request pending.** The host asked: "${originalRequest.slice(0, 150)}". Waiting for action owner to commit.`;
+      }
+    }
+
+    const peerCommitmentsSection = peerCommitmentSummary
+      ? `\n**Peer agents who already committed to actions:**\n${peerCommitmentSummary}`
+      : '';
+
+    const echoChainSection = peerEchoMessages
+      ? `\n**Echo chain detected (peers just agreeing — do NOT pile on):**\n${peerEchoMessages}`
+      : '';
+
+    //NOTE(self): Conversation saturation — count ALL agent messages (including our own) since last host message
+    //NOTE(self): When agents dominate the conversation, further messages add noise not signal
+    //NOTE(self): Dynamic threshold scales with agent count: base 4 + connectedAgentCount
+    //NOTE(self): With 2 agents → threshold 6 (unchanged), 4 agents → 8, 8 agents → 12
+    const connectedAgentCount = peerAgentNames.size + 1; //NOTE(self): +1 for self
+    const saturationThreshold = 4 + connectedAgentCount
+      + (conversationMode === 'discussion' ? DISCUSSION_SATURATION_BONUS : 0);
+    const saturationWarningThreshold = Math.ceil(saturationThreshold / 2);
+    let agentMessagesSinceHost = 0;
+    let saturationWarning = '';
+    for (let i = this.spaceConversationHistory.length - 1; i >= 0; i--) {
+      const m = this.spaceConversationHistory[i];
+      const isAgentMsg = peerAgentNames.has(m.name) || m.name === agentName;
+      if (!isAgentMsg) break; //NOTE(self): Hit a host message — stop counting
+      agentMessagesSinceHost++;
+    }
+    if (agentMessagesSinceHost >= saturationThreshold) {
+      saturationWarning = `\n**CONVERSATION SATURATED: ${agentMessagesSinceHost} agent messages since the host last spoke.** The host is waiting for ACTION, not more discussion. If you cannot commit to a concrete action, set shouldSpeak: false. Every additional discussion message makes the conversation WORSE.`;
+    } else if (agentMessagesSinceHost >= saturationWarningThreshold) {
+      saturationWarning = `\n**Conversation note: ${agentMessagesSinceHost} agent messages since the host last spoke.** Only speak if you have something genuinely new (a concrete action or a different perspective). Do not agree, rephrase, or pile on.`;
+    }
+
+    //NOTE(self): Token budget estimation — compress context only when extremely large (20k+ tokens)
+    //NOTE(self): Space is local — full context is critical for collaboration and deep discussion
+    //NOTE(self): Rough estimate: 1 token ≈ 4 chars. Threshold: 20000 tokens ≈ 80000 chars
+    const estimateTokens = (s: string) => Math.ceil(s.length / 4);
+    const totalEstimate = estimateTokens(conversationHistory) + estimateTokens(peerIdentitiesStr) + estimateTokens(pointsSummary) + estimateTokens(pinnedStr) + estimateTokens(pendingStr) + estimateTokens(completedStr) + estimateTokens(workspaceStateStr);
+    if (totalEstimate > 20000) {
+      //NOTE(self): Compress conversation history — keep last 30 verbatim, summarize earlier
+      const historyLines = conversationHistory.split('\n').filter(l => l.trim().length > 0);
+      if (historyLines.length > 30) {
+        const summarizedCount = historyLines.length - 30;
+        const kept = historyLines.slice(-30).join('\n');
+        conversationHistory = `[${summarizedCount} earlier messages summarized]\n${kept}`;
+      }
+      //NOTE(self): Cap peer identities to top 6 peers
+      const identityLines = peerIdentitiesStr.split('\n\n').filter(l => l.trim().length > 0);
+      if (identityLines.length > 6) {
+        peerIdentitiesStr = identityLines.slice(0, 6).join('\n\n') + `\n\n[${identityLines.length - 6} more peer identities omitted]`;
+      }
+      //NOTE(self): Cap points summary to 20 entries
+      const pointLines = pointsSummary.split('\n').filter(l => l.trim().length > 0);
+      if (pointLines.length > 20) {
+        pointsSummary = pointLines.slice(0, 20).join('\n') + `\n[${pointLines.length - 20} more points omitted]`;
+      }
+      logger.info('[space] Token budget compressed', { originalEstimate: totalEstimate, historyLines: historyLines?.length, identityLines: identityLines?.length });
+    }
+
+    //NOTE(self): Conversation mode signal — tells the LLM whether to act or discuss
+    //NOTE(self): In discussion mode: share perspectives, no commitments needed
+    //NOTE(self): In action mode: follow action-owner protocol, commitments required from owner
+    let conversationModeNote = '';
+    if (conversationMode === 'discussion') {
+      conversationModeNote = `**Conversation mode: DISCUSSION**
+The host is asking for opinions, perspectives, or sharing information — NOT requesting concrete action.
+Share your genuine perspective drawn from your identity, values, and interests.
+You do NOT need commitments to speak. Empty commitments array is perfectly valid.
+Be yourself — your unique perspective is what makes this conversation valuable.
+Engage with your peers by name. Build on what they said. Ask them questions. Go deep.
+**No length limits.** The space is local. Write as much as the thought requires.`;
+    } else {
+      conversationModeNote = `**Conversation mode: ACTION**
+The host requested concrete action. Follow the action-owner protocol:
+- If you are the action owner: commit immediately with a non-empty commitments array. Write the FULL issue body in the description field.
+- If you are NOT the action owner: set shouldSpeak: false unless you have a genuinely different complementary action (like commenting on the owner's issue).
+**No length limits** on the space. But be direct — act, don't discuss.`;
+    }
+
+    const commitmentContext = `${conversationModeNote}\n\n**Your pending commitments:**\n${pendingStr}\n**Recently fulfilled:**\n${completedStr}${peerCommitmentsSection}${echoChainSection}${saturationWarning}${peerIdentitiesStr}${workspaceStateStr}${pointsSummary}${pinnedStr}${addressedNote}${roleNote}`;
+
     try {
+      //NOTE(self): @mention short-circuit — if the host addressed a different agent, skip LLM entirely
+      //NOTE(self): This prevents wasted LLM calls when the host is directing a specific agent
+      if (!addressedToMe && hasNewMessages && !isActionOwner) {
+        logger.info('[space] Skipping LLM — host addressed another agent', { addressed: addressedNote.slice(0, 80) });
+        return;
+      }
+
+      //NOTE(self): Only call LLM when there are new messages to respond to
+      //NOTE(self): When no new messages but host request is pending, skip LLM and go straight to forced action
+      let rawDecisionInput: Record<string, unknown> | null = null;
+      if (hasNewMessages) {
       const soul = readSoul(this.appConfig.paths.soul);
-      const systemPrompt = buildSystemPrompt(soul, selfContent, 'AGENT-SPACE-PARTICIPATION', {});
+      const systemPrompt = buildSystemPrompt(soul, selfExcerpt, 'AGENT-SPACE-PARTICIPATION', {});
 
       const userMessage = renderSkillSection('AGENT-SPACE-PARTICIPATION', 'User Message Template', {
-        recentMessages,
+        conversationHistory,
+        ownPreviousMessages,
+        detectedRepo,
         selfExcerpt,
         typingAgents: typingAgentsStr,
         typingNote,
         currentConfig,
+        commitmentContext,
+        actionOwnership,
+        hostRequestStatus,
       });
 
+      //NOTE(self): Structured output via tool-use — LLM calls space_decision tool instead of outputting raw JSON
+      //NOTE(self): toolChoice: 'required' forces the model to ALWAYS call the tool (not just "auto")
+      //NOTE(self): Without this, the model can choose not to call the tool, leaving rawDecisionInput null
       const response = await chatWithTools({
-        system: systemPrompt,
+        system: systemPrompt + '\n\nYou MUST respond by calling the space_decision tool. Do NOT output raw JSON text.',
         messages: [{ role: 'user', content: userMessage }],
-        tools: [],
+        tools: [SPACE_DECISION_TOOL],
+        toolChoice: 'required',
       });
 
-      const text = response.text?.trim() || '';
+      //NOTE(self): Extract decision from tool call or fall back to text parsing
+      //NOTE(self): Tool-use mode should always produce a tool call, but degrade gracefully
+      if (response.toolCalls.length > 0 && response.toolCalls[0].name === 'space_decision') {
+        const toolInput = response.toolCalls[0].input;
+        rawDecisionInput = toolInput as Record<string, unknown>;
+      } else if (response.text?.trim()) {
+        //NOTE(self): Fallback — LLM returned text instead of tool call (rare with tool-use mode)
+        const jsonMatch = response.text.trim().match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          rawDecisionInput = JSON.parse(jsonMatch[0]);
+        }
+      }
+      } //NOTE(self): end if (hasNewMessages)
 
-      //NOTE(self): Parse the JSON decision
+      //NOTE(self): When no new messages, use a synthetic non-speaking decision so forced action can still trigger
+      if (!hasNewMessages) {
+        rawDecisionInput = { shouldSpeak: false, reason: 'No new messages — escalation-only cycle' };
+      }
+
+      if (!rawDecisionInput) {
+        ui.info('[space] Decision', 'LLM returned no parseable decision — skipping');
+        logger.warn('[space] rawDecisionInput is null after LLM call', { hasNewMessages });
+        return;
+      }
+
+      //NOTE(self): Zod-validated space decision parsing — validates both tool-use and text fallback inputs
+      //NOTE(self): Even tool-use inputs get validated because the AI SDK schema is looser than Zod
       try {
-        //NOTE(self): Extract JSON from potential markdown code block
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) return;
+        const decisionParse = parseSpaceDecision(rawDecisionInput);
+        if (!decisionParse.success || !decisionParse.data) {
+          logger.warn('[space] Decision failed Zod validation', {
+            error: decisionParse.error,
+            raw: JSON.stringify(rawDecisionInput).slice(0, 300),
+          });
+          ui.info('[space] Decision', `Zod validation failed: ${decisionParse.error}`);
+          return;
+        }
 
-        const decision = JSON.parse(jsonMatch[0]) as {
+        const decision: {
           shouldSpeak: boolean;
           reason: string;
           message?: string;
+          commitments?: Array<{
+            type: string;
+            repo?: string;
+            title?: string;
+            description?: string;
+            content?: string;
+          }>;
           adjustBehavior?: Partial<import('@local-tools/self-space-config.js').SpaceConfig>;
+        } = {
+          shouldSpeak: decisionParse.data.shouldSpeak,
+          reason: decisionParse.data.reason || '',
+          message: decisionParse.data.message,
+          adjustBehavior: decisionParse.data.adjustBehavior as Partial<import('@local-tools/self-space-config.js').SpaceConfig> | undefined,
         };
+
+        //NOTE(self): Zod-validated commitment normalization — replaces 30 lines of manual field mapping
+        //NOTE(self): Normalize field name aliases (action→type, body→description, etc.), validate schema,
+        //NOTE(self): and filter social-only agents from GitHub commitments (SCENARIOS.md #5 defense-in-depth)
+        if (decisionParse.data.commitments && decisionParse.data.commitments.length > 0) {
+          const { valid, dropped } = validateCommitments(
+            decisionParse.data.commitments as Record<string, unknown>[],
+            { socialOnly: this.config.socialOnly }
+          );
+          for (const d of dropped) {
+            logger.info('[space] Commitment dropped by Zod validation', {
+              reason: d.reason,
+              raw: JSON.stringify(d.raw).slice(0, 200),
+            });
+          }
+          decision.commitments = valid;
+        }
 
         //NOTE(self): Handle behavioral self-adjustment if present
         if (decision.adjustBehavior && Object.keys(decision.adjustBehavior).length > 0) {
           const updated = updateSpaceConfig(decision.adjustBehavior, decision.reason);
           ui.action('[space] Adjusted behavior', decision.reason);
           logger.info('Space behavior adjusted', { reason: decision.reason, config: updated });
+        }
+
+        //NOTE(self): Post-generation validation — enforce behavioral rules the LLM may ignore
+        //NOTE(self): Track whether commitments should be salvaged from a rejected message
+        let salvageCommitments = false;
+        if (decision.shouldSpeak && decision.message) {
+          const msg = decision.message;
+          const commitments = decision.commitments || [];
+
+          //NOTE(self): Length check — mode-dependent limits
+          //NOTE(self): Action mode: 280 chars, 2 sentences (terse confirmations)
+          //NOTE(self): Discussion mode: 500 chars, 4 sentences (thoughtful perspectives)
+          //NOTE(self): Strip URLs before counting sentences — periods in URLs like vercel.com inflate count
+          const msgForCounting = msg.replace(/https?:\/\/[^\s]+/g, 'URL');
+          const sentenceEnders = (msgForCounting.match(/[.!?]+(?:\s|$)/g) || []).length;
+          const semicolonClauses = (msgForCounting.match(/;\s+/g) || []).length;
+          const sentenceCount = sentenceEnders + semicolonClauses;
+          const maxChars = conversationMode === 'discussion' ? SPACE_DISCUSSION_MAX_CHARS : SPACE_ACTION_MAX_CHARS;
+          const maxSentences = conversationMode === 'discussion' ? SPACE_DISCUSSION_MAX_SENTENCES : SPACE_ACTION_MAX_SENTENCES;
+          if (msg.length > maxChars || sentenceCount > maxSentences) {
+            decision.shouldSpeak = false;
+            if (commitments.length > 0) salvageCommitments = true;
+            logger.info('[VALIDATION REJECTED] Too long', { length: msg.length, maxChars, sentenceCount, maxSentences, conversationMode, message: msg, salvageCommitments });
+            ui.action('[space] Validation rejected (too long)', `${msg.length}/${maxChars} chars, ${sentenceCount}/${maxSentences} sentences (${conversationMode})`);
+
+            //NOTE(self): Discussion-mode auto-trim recovery — try deterministic trimming before giving up
+            //NOTE(self): Only activates when: discussion mode, no commitments to salvage, message exceeds limits
+            //NOTE(self): Splits into sentences, keeps first N that fit within limits
+            //NOTE(self): Trimmed message still flows through all remaining validation checks
+            if (conversationMode === 'discussion' && !salvageCommitments) {
+              const sentences = msg.match(/[^.!?]+[.!?]+(?:\s|$)/g) || [];
+              if (sentences.length > 0) {
+                let trimmed = '';
+                let trimmedSentenceCount = 0;
+                for (const sentence of sentences) {
+                  const candidate = trimmed + sentence.trim() + (sentence.trim().endsWith('.') || sentence.trim().endsWith('!') || sentence.trim().endsWith('?') ? '' : '');
+                  const candidateFull = trimmed ? trimmed + ' ' + sentence.trim() : sentence.trim();
+                  if (candidateFull.length <= maxChars && trimmedSentenceCount + 1 <= maxSentences) {
+                    trimmed = candidateFull;
+                    trimmedSentenceCount++;
+                  } else {
+                    break;
+                  }
+                }
+                if (trimmed.length > 0 && trimmed.length <= maxChars) {
+                  decision.shouldSpeak = true;
+                  decision.message = trimmed;
+                  logger.info('[VALIDATION RECOVERED] Discussion auto-trim', { original: msg.length, trimmed: trimmed.length, sentences: trimmedSentenceCount });
+                  ui.action('[space] Auto-trimmed discussion message', `${trimmed.length}/${maxChars} chars, ${trimmedSentenceCount}/${maxSentences} sentences`);
+                }
+              }
+            }
+          }
+
+          //NOTE(self): List detection — reject messages with numbered items or bullet-like patterns
+          if (decision.shouldSpeak) {
+            const listPattern = /(\(\d+\)|\d+[\.\)]\s|^[-•*]\s|;\s*\(\d|:\s*\(\d)/m;
+            if (listPattern.test(msg)) {
+              decision.shouldSpeak = false;
+              if (commitments.length > 0) salvageCommitments = true;
+              logger.info('[VALIDATION REJECTED] Contains list', { message: msg, salvageCommitments });
+              ui.action('[space] Validation rejected (list)', msg);
+            }
+          }
+
+          //NOTE(self): Empty promise check — promise language without commitments
+          if (decision.shouldSpeak && commitments.length === 0) {
+            const promisePattern = /\b(I'll|I will|Let me|I can|I'm going to|I am going to|I'm opening|opening|creating|I'd like to|I want to|I should|I could|I'll happily|I can happily|I'd be happy to|I'm happy to|drafting|filing|submitting|writing up|documenting|posting|we'll|we will|we can|we're going to|about to (open|create|draft|file|submit|write|build))\b/i;
+            if (promisePattern.test(msg)) {
+              decision.shouldSpeak = false;
+              logger.info('[VALIDATION REJECTED] Empty promise', { message: msg });
+              ui.action('[space] Validation rejected (empty promise)', msg);
+            }
+          }
+
+          //NOTE(self): Echo check — reject messages that just agree with others
+          if (decision.shouldSpeak) {
+            const echoPattern = /^(I agree|I'm aligned|I like \w+'s|Building on|Great point|Exactly|Absolutely|That's a great|Well said|To echo|To add|I'd add|I like the|I like that|The one thing I'd|One thing I'd|I'm with \w+|Same here|This resonates|Strongly agree|I share \w+'s|I second|On "(.*?)"(:|\s*—))/i;
+            if (echoPattern.test(msg.trim())) {
+              decision.shouldSpeak = false;
+              if (commitments.length > 0) salvageCommitments = true;
+              logger.info('[VALIDATION REJECTED] Echo', { message: msg, salvageCommitments });
+              ui.action('[space] Validation rejected (echo)', msg);
+            }
+          }
+
+          //NOTE(self): Semantic echo check (#13) — multi-strategy ensemble detection + LLM-as-judge
+          //NOTE(self): Three complementary strategies replace single-algorithm LCS:
+          //NOTE(self):   1. Pairwise: LCS Dice (0.4) + TF-IDF cosine (0.6) on stemmed tokens
+          //NOTE(self):   2. Concept novelty: rejects <15% new stems vs conversation pool
+          //NOTE(self):   3. LLM-as-judge for borderline scores (0.35-0.52) — catches synonym-level echoes
+          //NOTE(self): Stemming catches morphological variants (creating/created → creat)
+          //NOTE(self): TF-IDF weights conversation-rare words higher (catches "same topic, different words")
+          //NOTE(self): Concept novelty catches rehashing even when no single peer message is similar
+          //NOTE(self): LLM judge catches "prioritize speed" vs "focus on velocity" (zero surface overlap)
+          if (decision.shouldSpeak && commitments.length === 0) {
+            const selfName = this.appConfig.agent.name;
+            const recentHistory = this.spaceConversationHistory.slice(-20);
+            const peerMessages = recentHistory
+              .filter(m => m.name !== selfName)
+              .slice(-10)
+              .map(m => m.content);
+            const allPeerMessages = recentHistory
+              .filter(m => m.name !== selfName)
+              .map(m => m.content);
+            if (peerMessages.length > 0) {
+              const echoResult = findSemanticEchoEnsemble(
+                msg,
+                peerMessages,
+                allPeerMessages,
+                ENSEMBLE_ECHO_THRESHOLD,
+                CONCEPT_NOVELTY_THRESHOLD
+              );
+              if (echoResult.isEcho) {
+                decision.shouldSpeak = false;
+                if (commitments.length > 0) salvageCommitments = true;
+                logger.info('[VALIDATION REJECTED] Semantic echo (ensemble)', {
+                  score: echoResult.score.toFixed(2),
+                  novelty: echoResult.novelty.toFixed(2),
+                  strategy: echoResult.strategy,
+                  message: msg,
+                  matchedMessage: echoResult.matchedMessage?.slice(0, 80),
+                  salvageCommitments,
+                });
+                ui.action('[space] Validation rejected (semantic echo)', `${echoResult.strategy} score=${echoResult.score.toFixed(2)}`);
+              } else if (
+                //NOTE(self): LLM-as-judge for borderline ensemble scores (CONCERNS.md #1)
+                //NOTE(self): Catches the ~3% synonym-level echoes the ensemble misses:
+                //NOTE(self): "prioritize speed" vs "focus on velocity" — zero surface tokens shared
+                //NOTE(self): Only called when score is in the danger zone AND novelty isn't extreme
+                //NOTE(self): Cost: ~100-150 tokens per check, ~100 checks/hour at peak
+                echoResult.score >= ECHO_JUDGE_BORDERLINE_LOW &&
+                echoResult.novelty < ECHO_JUDGE_NOVELTY_HIGH &&
+                peerMessages.length >= 2
+              ) {
+                try {
+                  const isLLMEcho = await isEchoByLLMJudge(msg, peerMessages);
+                  if (isLLMEcho) {
+                    decision.shouldSpeak = false;
+                    if (commitments.length > 0) salvageCommitments = true;
+                    logger.info('[VALIDATION REJECTED] Semantic echo (LLM judge)', {
+                      ensembleScore: echoResult.score.toFixed(2),
+                      novelty: echoResult.novelty.toFixed(2),
+                      message: msg,
+                      salvageCommitments,
+                    });
+                    ui.action('[space] Validation rejected (LLM echo judge)', `ensemble=${echoResult.score.toFixed(2)}, novelty=${echoResult.novelty.toFixed(2)}`);
+                  }
+                } catch (err) {
+                  //NOTE(self): LLM judge failure is non-fatal — ensemble already passed it
+                  logger.warn('[echo-judge] Failed during validation', { error: String(err) });
+                }
+              }
+            }
+          }
+
+          //NOTE(self): Role message budget (#6) — hard cap on messages per role per conversation turn
+          //NOTE(self): Addresses LLM non-compliance: model occasionally ignores role guidance (~2%)
+          //NOTE(self): Budget enforced at validation layer: actor=3, reviewer=2, observer=1
+          //NOTE(self): Discussion mode doubles budgets — more back-and-forth allowed
+          //NOTE(self): Messages with commitments bypass budget — action is always more valuable than silence
+          if (decision.shouldSpeak && commitments.length === 0 && peerAgentNames.size > 0) {
+            const budgetMultiplier = conversationMode === 'discussion' ? DISCUSSION_ROLE_BUDGET_MULTIPLIER : 1;
+            const budget = (myRole === 'observer' ? ROLE_MESSAGE_BUDGET_OBSERVER
+              : myRole === 'reviewer' ? ROLE_MESSAGE_BUDGET_REVIEWER
+              : ROLE_MESSAGE_BUDGET_ACTOR) * budgetMultiplier;
+            if (this.spaceOwnMessageCount >= budget) {
+              decision.shouldSpeak = false;
+              logger.info('[VALIDATION REJECTED] Role message budget exceeded', {
+                role: myRole,
+                messageCount: this.spaceOwnMessageCount,
+                budget,
+                conversationMode,
+                message: msg,
+              });
+              ui.action('[space] Validation rejected (budget)', `${myRole}: ${this.spaceOwnMessageCount}/${budget} messages`);
+            }
+          }
+
+          //NOTE(self): Rules #7-12 only apply in action mode — they enforce action-ownership discipline.
+          //NOTE(self): In discussion mode, agents should respond conversationally without these restrictions.
+          if (conversationMode === 'action') {
+          //NOTE(self): Deference check (#7) — reject messages that defer action to others
+          if (decision.shouldSpeak) {
+            const deferencePattern = /\b(if \w+ opens|if \w+ creates|if \w+ does|if \w+ drafts|if \w+ wants|if \w+ is up|if folks want|once \w+ opens|once \w+ creates|once \w+ does|once \w+ decides|once .+ is up|I'll wait for|happy to review once|when \w+ does|when \w+ opens|when \w+ creates)\b/i;
+            if (deferencePattern.test(msg)) {
+              decision.shouldSpeak = false;
+              if (commitments.length > 0) salvageCommitments = true;
+              logger.info('[VALIDATION REJECTED] Deference', { message: msg, salvageCommitments });
+              ui.action('[space] Validation rejected (deference)', msg);
+            }
+          }
+
+          //NOTE(self): Repo amnesia (#8) — reject messages asking for repo when one is detected
+          //NOTE(self): Expanded patterns: catches "drop the repo", "can you share", "what's the repo", "where should I file" etc.
+          if (decision.shouldSpeak && conversationRepo) {
+            const repoAmnesiaPattern = /\b(which repo|what repo|drop the repo|share the repo|where .+ filed|which repository|what repository|what's the repo|where was it|where should (I|we)|where do (I|we|you)|can you (drop|share|post|give).*(repo|link|url)|the (repo|repository) (you|we) want)\b/i;
+            if (repoAmnesiaPattern.test(msg)) {
+              decision.shouldSpeak = false;
+              if (commitments.length > 0) salvageCommitments = true;
+              logger.info('[VALIDATION REJECTED] Repo amnesia', { message: msg, detectedRepo: conversationRepo, salvageCommitments });
+              ui.action('[space] Validation rejected (repo amnesia)', msg);
+            }
+          }
+
+          //NOTE(self): Meta-discussion (#9) — reject messages that discuss what should go in an issue/plan
+          //NOTE(self): instead of actually creating one via commitments
+          if (decision.shouldSpeak && commitments.length === 0) {
+            const metaDiscussionPattern = /\b(issue should (contain|cover|include|have)|should (include|cover|have|contain)|acceptance criteria|checklist (for|that|with)|I'd structure|I'd organize|I'd frame|I'd scope|I'd define|the issue (would|could|should)|items (for|in) the|the plan (would|could|should))\b/i;
+            if (metaDiscussionPattern.test(msg)) {
+              decision.shouldSpeak = false;
+              logger.info('[VALIDATION REJECTED] Meta-discussion', { message: msg });
+              ui.action('[space] Validation rejected (meta-discussion)', msg);
+            }
+          }
+
+          //NOTE(self): Scope inflation (#10) — reject messages that pile on additional ideas to someone else's commitment
+          if (decision.shouldSpeak && commitments.length === 0) {
+            const scopeInflationPattern = /\b(I'd also add|one more thing|I'd add|one thing I'd|the extra (thing|piece|bit)|I'd insist on|I want to add|to add to that|to supplement|I'd tack on|I'd append)\b/i;
+            if (scopeInflationPattern.test(msg)) {
+              decision.shouldSpeak = false;
+              logger.info('[VALIDATION REJECTED] Scope inflation', { message: msg });
+              ui.action('[space] Validation rejected (scope inflation)', msg);
+            }
+          }
+
+          //NOTE(self): Non-owner action enforcement (#11) — when a host action request is pending and this agent
+          //NOTE(self): is NOT the action owner, reject any message with promise/action language
+          //NOTE(self): This prevents multiple agents from all saying "I'll do it"
+          if (decision.shouldSpeak && lastHostActionMsg && !this.spaceHostRequestFulfilled && !isActionOwner) {
+            const actionLanguage = /\b(I'll|I will|I would|I'd|Let me|I'm going to|I am going to|I'm opening|I'm creating|opening|creating|drafting|filing|submitting|I can|I'm happy to|I'd be happy to|I'd like to|I want to|we'll|we will|we can|we're going to|we are going to|about to|going to (open|create|draft|file|submit|write|build|make|post))\b/i;
+            if (actionLanguage.test(msg)) {
+              decision.shouldSpeak = false;
+              if (commitments.length > 0) salvageCommitments = false; //NOTE(self): Don't salvage — another agent owns this
+              logger.info('[VALIDATION REJECTED] Non-owner action', { message: msg, actionOwner: actionOwnerName });
+              ui.action('[space] Validation rejected (not action owner)', `${actionOwnerName} owns this action`);
+            }
+          }
+
+          //NOTE(self): Non-owner discussion block (#12) — when host has an unfulfilled action request and
+          //NOTE(self): agent is NOT the action owner, block ALL messages (not just action language) unless
+          //NOTE(self): the message carries commitments for a different/complementary action
+          if (decision.shouldSpeak && lastHostActionMsg && !this.spaceHostRequestFulfilled && !isActionOwner && commitments.length === 0) {
+            decision.shouldSpeak = false;
+            logger.info('[VALIDATION REJECTED] Non-owner discussion during pending action', { message: msg, actionOwner: actionOwnerName });
+            ui.action('[space] Validation rejected (non-owner discussion)', `${actionOwnerName} should be acting`);
+          }
+          } //NOTE(self): End of action-mode-only rules (#7-12)
+
+          //NOTE(self): Saturation enforcement (#13) — dynamic threshold scales with connected agent count
+          //NOTE(self): Discussion mode gets DISCUSSION_SATURATION_BONUS extra messages before saturation
+          //NOTE(self): Only allow messages that carry commitments through — the conversation is overloaded
+          if (decision.shouldSpeak && agentMessagesSinceHost >= saturationThreshold && commitments.length === 0) {
+            decision.shouldSpeak = false;
+            logger.info('[VALIDATION REJECTED] Conversation saturated', { agentMessagesSinceHost, threshold: saturationThreshold, conversationMode, message: msg });
+            ui.action('[space] Validation rejected (saturated)', `${agentMessagesSinceHost}/${saturationThreshold} agent msgs since host`);
+          }
+
+          //NOTE(self): Observer enforcement (#14) — when role is observer and threshold+ peer messages since host,
+          //NOTE(self): reject all discussion-only messages. Observers should stay silent unless they have
+          //NOTE(self): a genuinely novel action (commitment). Reduces conversation noise ~30%.
+          //NOTE(self): Discussion mode uses higher threshold (DISCUSSION_OBSERVER_THRESHOLD vs 3 in action)
+          {
+          const observerThreshold = conversationMode === 'discussion' ? DISCUSSION_OBSERVER_THRESHOLD : 3;
+          if (decision.shouldSpeak && myRole === 'observer' && agentMessagesSinceHost >= observerThreshold && commitments.length === 0) {
+            decision.shouldSpeak = false;
+            logger.info('[VALIDATION REJECTED] Observer silence enforced', { agentMessagesSinceHost, observerThreshold, conversationMode, message: msg });
+            ui.action('[space] Validation rejected (observer)', `observer role — ${agentMessagesSinceHost} msgs since host`);
+          }
+          }
+        }
+
+        //NOTE(self): Salvage commitments from rejected messages
+        //NOTE(self): When validation rejects the MESSAGE (too long, has lists, echo) but the LLM included
+        //NOTE(self): valid commitments, we still enqueue those commitments and send a short replacement message.
+        //NOTE(self): The agent's WORK shouldn't be lost just because its PROSE was invalid.
+        if (salvageCommitments && !decision.shouldSpeak && decision.commitments && decision.commitments.length > 0) {
+          //NOTE(self): Social-only agents cannot salvage GitHub-type commitments (SCENARIOS.md #5)
+          if (this.config.socialOnly) {
+            const githubTypes = new Set(['create_issue', 'create_plan', 'comment_issue']);
+            decision.commitments = decision.commitments.filter(c => !githubTypes.has(c.type));
+            if (decision.commitments.length === 0) {
+              logger.info('[SALVAGE] All commitments filtered out for social-only agent');
+            }
+          }
+
+          if (decision.commitments.length > 0) {
+            logger.info('[SALVAGE] Message rejected but commitments preserved', {
+              commitmentCount: decision.commitments.length,
+              types: decision.commitments.map(c => c.type),
+            });
+            ui.info('[space] Salvaging commitments from rejected message', `${decision.commitments.length} commitments`);
+
+            //NOTE(self): Replace the rejected message with a short action-only message
+            decision.shouldSpeak = true;
+            const commitType = (decision.commitments[0].type || 'action').replace(/_/g, ' ');
+            decision.message = `On it — ${commitType} incoming.`;
+          }
+        }
+
+        //NOTE(self): Action-owner retry — when validation rejects the action owner's response,
+        //NOTE(self): retry with a focused commitment-only prompt before falling through to forced action
+        //NOTE(self): Social-only agents skip retry — they cannot create GitHub commitments (SCENARIOS.md #5)
+        if (!decision.shouldSpeak && isActionOwner && lastHostActionMsg &&
+            !this.spaceHostRequestFulfilled && hasNewMessages && !this.config.socialOnly) {
+          this.spaceActionOwnerRejectionCount++;
+
+          if (this.spaceActionOwnerRejectionCount <= 2) {
+            const originalRequest = this.spaceHostRequestContent || lastHostActionMsg.content;
+            const retryPrompt = `HOST REQUEST: "${originalRequest}"
+REPO: ${conversationRepo || 'not detected'}
+You are the action owner. Return ONLY a JSON commitment. No discussion.
+{"shouldSpeak": true, "message": "Creating that now.", "commitments": [{"type": "create_issue", "repo": "${conversationRepo || ''}", "title": "brief title", "description": "full issue body in markdown"}]}`;
+
+            try {
+              const retryResponse = await chatWithTools({
+                system: 'You are an autonomous agent. You MUST call the space_decision tool with a commitment to fulfill the host request.',
+                messages: [{ role: 'user', content: retryPrompt }],
+                tools: [SPACE_DECISION_TOOL],
+                toolChoice: 'required',
+              });
+
+              //NOTE(self): Extract from tool call (preferred) or fall back to text parsing
+              let retryDecision: Record<string, unknown> | null = null;
+              if (retryResponse.toolCalls.length > 0 && retryResponse.toolCalls[0].name === 'space_decision') {
+                retryDecision = retryResponse.toolCalls[0].input as Record<string, unknown>;
+              } else {
+                const retryText = retryResponse.text?.trim() || '';
+                const retryMatch = retryText.match(/\{[\s\S]*\}/);
+                if (retryMatch) retryDecision = JSON.parse(retryMatch[0]);
+              }
+              if (retryDecision && Array.isArray(retryDecision.commitments) && retryDecision.commitments.length > 0) {
+                decision.shouldSpeak = true;
+                decision.message = (retryDecision.message as string) || 'Creating that now.';
+                decision.commitments = retryDecision.commitments as typeof decision.commitments;
+                ui.info('[space] Action-owner retry succeeded', `${retryDecision.commitments.length} commitments`);
+              }
+            } catch {
+              //NOTE(self): Retry failed — fall through to forced action path
+              logger.info('[space] Action-owner retry failed', { rejection: this.spaceActionOwnerRejectionCount });
+            }
+          }
+        }
+
+        //NOTE(self): Forced action path — when host has been waiting 3+ cycles and this agent is the action owner
+        //NOTE(self): but the LLM STILL didn't produce a valid response, construct a commitment directly
+        //NOTE(self): from conversation context. This is the last resort — the LLM failed, we act anyway.
+        //NOTE(self): Social-only agents skip forced action entirely (SCENARIOS.md #5)
+        if (!decision.shouldSpeak && isActionOwner && lastHostActionMsg && !this.spaceHostRequestFulfilled &&
+            !this.config.socialOnly &&
+            (this.spaceHostRequestCycles >= 2 || this.spaceActionOwnerRejectionCount >= 3) && conversationRepo) {
+          const [forceOwner, forceRepoName] = conversationRepo.split('/');
+          if (forceOwner && forceRepoName) {
+            //NOTE(self): Use stored original request — follow-ups may have replaced lastHostActionMsg
+            const originalRequest = this.spaceHostRequestContent || lastHostActionMsg.content;
+            logger.info('[FORCED ACTION] Action owner generating commitment after CRITICAL escalation', {
+              cycles: this.spaceHostRequestCycles,
+              rejections: this.spaceActionOwnerRejectionCount,
+              repo: conversationRepo,
+              hostRequest: originalRequest.slice(0, 200),
+            });
+            ui.info('[space] Forced action mode', `Host waiting ${this.spaceHostRequestCycles} cycles (${this.spaceActionOwnerRejectionCount} rejections) — creating commitment directly`);
+
+            //NOTE(self): Construct a commitment from the host request + full conversation context
+            //NOTE(self): Use full history — truncating to last 10 loses earlier discussion that shaped the request
+            const recentContext = this.spaceConversationHistory
+              .map(m => `${m.name}: ${m.content}`)
+              .join('\n');
+
+            //NOTE(self): Post-creation enrichment — use a focused LLM call to produce a well-structured issue body
+            //NOTE(self): instead of raw context dump. Falls back to context dump if LLM fails.
+            let enrichedBody = `## ${originalRequest.slice(0, 120)}\n\n*This issue was created from an agent space conversation where the host requested action.*\n\n### Context\n\n${recentContext}`;
+            try {
+              const enrichmentResponse = await chatWithTools({
+                system: 'You are a technical writer. Given a conversation context and a request, produce a well-structured GitHub issue body in markdown. Include: a clear description, acceptance criteria as a checklist, and any relevant context. Be concise and actionable. Return ONLY the markdown body, no wrapping.',
+                messages: [{ role: 'user', content: `Request: "${originalRequest}"\n\nConversation:\n${recentContext}\n\nRepo: ${conversationRepo}\n\nWrite the issue body:` }],
+                tools: [],
+              });
+              const enrichedText = enrichmentResponse.text?.trim();
+              if (enrichedText && enrichedText.length > 50) {
+                enrichedBody = enrichedText;
+                ui.info('[space] Forced action enriched', 'LLM produced structured issue body');
+              }
+            } catch {
+              //NOTE(self): Enrichment failed — use raw context dump as fallback
+              logger.info('[space] Forced action enrichment failed, using raw context');
+            }
+
+            decision.shouldSpeak = true;
+            decision.message = 'Creating that now.';
+            decision.commitments = [{
+              type: 'create_issue',
+              repo: conversationRepo,
+              title: originalRequest.slice(0, 120),
+              description: enrichedBody,
+            }];
+          }
         }
 
         if (decision.shouldSpeak && decision.message) {
@@ -5794,29 +7012,149 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           //NOTE(self): Re-check after async delay — client may have been nulled during shutdown
           if (!this.spaceClient?.isActive()) return;
 
+          //NOTE(self): Send claim before message if we have valid commitments — lets peers stand down early
+          //NOTE(self): Commitments are already validated at parse time, but guard against undefined type
+          if (decision.commitments && decision.commitments.length > 0 && this.spaceClient) {
+            for (const c of decision.commitments) {
+              if (!c.type) continue;
+              const target = `${c.repo || conversationRepo || 'unknown'}#${(c.title || c.description || '').slice(0, 50)}`;
+              this.spaceClient.sendClaim(c.type, target);
+            }
+          }
+
           this.spaceClient.sendChat(decision.message);
           ui.action('[space] Spoke', decision.message);
           logger.info('Space participation', { reason: decision.reason, message: decision.message });
 
-          //NOTE(self): Extract commitments from space message (non-fatal — space chat works even if extraction fails)
+          //NOTE(self): Track own message in conversation history
+          this.appendToSpaceHistory(agentName, decision.message, new Date().toISOString());
+          this.spaceOwnMessageCount++;
+
+          //NOTE(self): Update running summary of points made — 10 word summary of what was said
+          //NOTE(self): This helps all subsequent checks avoid semantic echoing
+          const pointSummary = decision.message
+            .replace(/[^\w\s]/g, '')
+            .split(/\s+/)
+            .slice(0, 10)
+            .join(' ');
+          this.spacePointsMade.push(`${agentName}: ${pointSummary}`);
+          //NOTE(self): Keep the summary reasonable — last 15 points
+          if (this.spacePointsMade.length > 15) {
+            this.spacePointsMade = this.spacePointsMade.slice(-15);
+          }
+
+          //NOTE(self): Handle commitments from space message (non-fatal — space chat works even if extraction fails)
           try {
-            const spaceReply: ReplyForExtraction = {
-              text: decision.message,
-              threadUri: `space://${this.appConfig.agent.name}/${Date.now()}`,
-            };
-            const extracted = await extractCommitments([spaceReply]);
-            for (const commitment of extracted) {
-              enqueueCommitment({
-                description: commitment.description,
-                type: commitment.type,
-                sourceThreadUri: spaceReply.threadUri,
-                sourceReplyText: decision.message,
-                params: commitment.params,
-                source: 'space',
-              });
-            }
-            if (extracted.length > 0) {
-              ui.info('[space] Commitments extracted', extracted.map(c => `${c.type}: ${c.description}`).join(', '));
+            //NOTE(self): Use conversation-scoped threadUri for cross-agent dedup
+            //NOTE(self): Hash the latest host message from FULL history (not current batch which may be empty)
+            //NOTE(self): so all agents responding to the same prompt share a threadUri across cycles
+            const lastHostMsgFull = hostConversationMessages.length > 0
+              ? hostConversationMessages[hostConversationMessages.length - 1]
+              : null;
+            const conversationKey = lastHostMsgFull ? `${lastHostMsgFull.name}:${lastHostMsgFull.content}` : `${Date.now()}`;
+            const conversationHash = Buffer.from(conversationKey).toString('base64url').slice(0, 16);
+            const conversationThreadUri = `space://conversation/${conversationHash}`;
+
+            //NOTE(self): Derive owner/repo from already-detected conversationRepo (detected before LLM call)
+            const [conversationOwner, conversationRepoName] = conversationRepo?.split('/') ?? [undefined, undefined];
+
+            //NOTE(self): Prefer structured commitments from the JSON decision
+            //NOTE(self): Commitments are already validated at parse time (malformed/empty filtered out)
+            if (decision.commitments && decision.commitments.length > 0) {
+              let enqueuedCount = 0;
+
+              //NOTE(self): Build conversation context window for commitment enrichment
+              //NOTE(self): When LLM provides a thin description (or none), we enrich with conversation context
+              //NOTE(self): so the resulting GitHub issue/plan has rich, actionable content
+              const contextWindow = this.spaceConversationHistory
+                .slice(-20)
+                .map(m => `${m.name}: ${m.content}`)
+                .join('\n');
+
+              for (const c of decision.commitments) {
+                const repo = c.repo || conversationRepo;
+                const [owner, repoName] = repo?.split('/') ?? [undefined, undefined];
+
+                //NOTE(self): Enrichment — if description is thin (<80 chars) for GitHub commitments,
+                //NOTE(self): use an LLM call to synthesize a well-structured issue body from context
+                //NOTE(self): This is the root cause of thin issue bodies in the fulfillment pipeline
+                let enrichedDescription = c.description;
+                const isGitHubType = c.type === 'create_issue' || c.type === 'create_plan';
+                const isThin = !enrichedDescription || enrichedDescription.length < 80;
+
+                if (isGitHubType && isThin && contextWindow.length > 0) {
+                  try {
+                    const enrichResponse = await chatWithTools({
+                      system: 'You are a technical writer. Given a conversation and a title, produce a well-structured GitHub issue body in markdown. Include: a clear description, acceptance criteria as a checklist, and relevant context. Be concise and actionable. Return ONLY the markdown body.',
+                      messages: [{ role: 'user', content: `Title: "${c.title || c.description || c.content}"\n\nConversation:\n${contextWindow}\n\nRepo: ${repo || 'unknown'}\n\nWrite the issue body:` }],
+                      tools: [],
+                    });
+                    const enrichedText = enrichResponse.text?.trim();
+                    if (enrichedText && enrichedText.length > 50) {
+                      enrichedDescription = enrichedText;
+                      logger.info('[space] Enriched thin commitment description', {
+                        type: c.type, title: (c.title || '').slice(0, 60),
+                        originalLength: c.description?.length || 0,
+                        enrichedLength: enrichedDescription.length,
+                      });
+                    }
+                  } catch {
+                    //NOTE(self): Enrichment failed — use original description (don't block enqueue)
+                    logger.info('[space] Commitment enrichment failed, using original', { type: c.type });
+                  }
+                }
+
+                enqueueCommitment({
+                  description: c.title || enrichedDescription || c.content || 'Structured commitment',
+                  type: c.type as import('@modules/commitment-queue.js').CommitmentType,
+                  sourceThreadUri: conversationThreadUri,
+                  sourceReplyText: decision.message,
+                  params: {
+                    title: c.title,
+                    description: enrichedDescription,
+                    content: c.content,
+                    repo: repoName,
+                    owner,
+                    repoName,
+                  },
+                  source: 'space',
+                });
+                enqueuedCount++;
+              }
+              ui.info('[space] Structured commitments', decision.commitments.map(c => `${c.type}: ${c.title || c.description || c.content}`).join(', '));
+              //NOTE(self): Only mark fulfilled if at least one commitment was actually enqueued
+              if (enqueuedCount > 0) {
+                this.spaceHostRequestFulfilled = true;
+              }
+            } else {
+              //NOTE(self): Fall back to NLP extraction if no structured commitments (Bug 3 fix — include conversation context)
+              const conversationContext = hostMessages.length > 0
+                ? hostMessages.map(m => `${m.name}: ${m.content}`).join('\n')
+                : undefined;
+
+              const spaceReply: ReplyForExtraction = {
+                text: decision.message,
+                threadUri: conversationThreadUri,
+                workspaceOwner: conversationOwner,
+                workspaceRepo: conversationRepoName,
+                conversationContext,
+              };
+              const extracted = await extractCommitments([spaceReply]);
+              for (const commitment of extracted) {
+                enqueueCommitment({
+                  description: commitment.description,
+                  type: commitment.type,
+                  sourceThreadUri: conversationThreadUri,
+                  sourceReplyText: decision.message,
+                  params: commitment.params,
+                  source: 'space',
+                });
+              }
+              if (extracted.length > 0) {
+                ui.info('[space] Commitments extracted', extracted.map(c => `${c.type}: ${c.description}`).join(', '));
+                //NOTE(self): Mark host request as fulfilled now that a commitment is enqueued
+                this.spaceHostRequestFulfilled = true;
+              }
             }
           } catch (extractError) {
             logger.warn('Space commitment extraction failed (non-fatal)', { error: String(extractError) });
@@ -5828,18 +7166,21 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           //NOTE(self): Track participation for periodic reflection
           this.spaceParticipationCount++;
           if (this.spaceParticipationCount % spaceConfig.reflectionEveryN === 0) {
-            const recentSummary = messages.slice(-5).map(m => `${m.name}: ${m.content}`).join(' | ');
+            const recentSummary = this.spaceConversationHistory.slice(-5).map(m => `${m.name}: ${m.content}`).join(' | ');
             recordExperience('connection_formed', `Participated in agent space conversation. Recent: ${recentSummary}`);
             recordSignificantEvent('space_participation');
           }
         } else {
           logger.info('Space participation declined', { reason: decision.reason });
+          ui.info('[space] Declined', decision.reason || 'no reason given');
         }
-      } catch {
-        logger.info('Space participation: failed to parse LLM response');
+      } catch (parseErr) {
+        logger.info('Space participation: failed to parse LLM response', { error: String(parseErr) });
+        ui.info('[space] Decision', 'Failed to parse LLM response');
       }
     } catch (error) {
       logger.info('Space participation check failed', { error: String(error) });
+      ui.info('[space] Check failed', String(error));
     }
   }
 

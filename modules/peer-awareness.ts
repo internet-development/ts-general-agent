@@ -36,6 +36,155 @@ export interface DiscoveredPeer {
   lastVerifiedAt?: string;
 }
 
+//NOTE(self): Relationship memory — tracks collaboration history per peer
+//NOTE(self): Enables "as we discussed last time..." continuity across conversations
+export interface PeerRelationship {
+  peerName: string;
+  spaceConversations: number;     // How many space conversations shared
+  issuesCoCreated: number;         // Issues created from same conversation
+  prsReviewed: number;             // PRs reviewed for each other
+  productiveDisagreements: number; // Times we disagreed constructively
+  agreements: number;              // Times we aligned
+  lastInteraction: string;         // ISO timestamp
+  memorableExchanges: string[];    // 1-sentence summaries of notable exchanges (max 5)
+  complementaryStrengths: string[];// What this peer brings that we don't (max 3)
+}
+
+const PEER_RELATIONSHIPS_PATH = '.memory/peer_relationships.json';
+
+let relationshipState: Record<string, PeerRelationship> | null = null;
+
+function loadRelationships(): Record<string, PeerRelationship> {
+  if (relationshipState !== null) return relationshipState;
+  try {
+    if (existsSync(PEER_RELATIONSHIPS_PATH)) {
+      const data = JSON.parse(readFileSync(PEER_RELATIONSHIPS_PATH, 'utf-8'));
+      relationshipState = data.relationships || {};
+    } else {
+      relationshipState = {};
+    }
+  } catch {
+    relationshipState = {};
+  }
+  return relationshipState!;
+}
+
+function saveRelationships(): void {
+  if (!relationshipState) return;
+  try {
+    const dir = dirname(PEER_RELATIONSHIPS_PATH);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const tmpPath = PEER_RELATIONSHIPS_PATH + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify(stampVersion({ relationships: relationshipState }), null, 2));
+    renameSync(tmpPath, PEER_RELATIONSHIPS_PATH);
+  } catch (err) {
+    logger.error('Failed to save peer relationships', { error: String(err) });
+  }
+}
+
+//NOTE(self): Record a space conversation interaction with a peer
+export function recordSpaceInteraction(peerName: string): void {
+  const rels = loadRelationships();
+  const key = peerName.toLowerCase();
+  if (!rels[key]) {
+    rels[key] = {
+      peerName,
+      spaceConversations: 0,
+      issuesCoCreated: 0,
+      prsReviewed: 0,
+      productiveDisagreements: 0,
+      agreements: 0,
+      lastInteraction: new Date().toISOString(),
+      memorableExchanges: [],
+      complementaryStrengths: [],
+    };
+  }
+  rels[key].spaceConversations++;
+  rels[key].lastInteraction = new Date().toISOString();
+  saveRelationships();
+}
+
+//NOTE(self): Record a co-creation event (both agents contributed to same issue/plan)
+export function recordCoCreation(peerName: string): void {
+  const rels = loadRelationships();
+  const key = peerName.toLowerCase();
+  if (rels[key]) {
+    rels[key].issuesCoCreated++;
+    rels[key].lastInteraction = new Date().toISOString();
+    saveRelationships();
+  }
+}
+
+//NOTE(self): Record a PR review interaction
+export function recordPRReview(peerName: string): void {
+  const rels = loadRelationships();
+  const key = peerName.toLowerCase();
+  if (rels[key]) {
+    rels[key].prsReviewed++;
+    rels[key].lastInteraction = new Date().toISOString();
+    saveRelationships();
+  }
+}
+
+//NOTE(self): Record a memorable exchange with a peer
+export function recordMemorableExchange(peerName: string, summary: string): void {
+  const rels = loadRelationships();
+  const key = peerName.toLowerCase();
+  if (rels[key]) {
+    rels[key].memorableExchanges.push(summary);
+    //NOTE(self): Keep only last 5 — sliding window of most recent memorable moments
+    if (rels[key].memorableExchanges.length > 5) {
+      rels[key].memorableExchanges = rels[key].memorableExchanges.slice(-5);
+    }
+    rels[key].lastInteraction = new Date().toISOString();
+    saveRelationships();
+  }
+}
+
+//NOTE(self): Record a complementary strength observed in a peer
+export function recordComplementaryStrength(peerName: string, strength: string): void {
+  const rels = loadRelationships();
+  const key = peerName.toLowerCase();
+  if (rels[key] && !rels[key].complementaryStrengths.includes(strength)) {
+    rels[key].complementaryStrengths.push(strength);
+    if (rels[key].complementaryStrengths.length > 3) {
+      rels[key].complementaryStrengths = rels[key].complementaryStrengths.slice(-3);
+    }
+    saveRelationships();
+  }
+}
+
+//NOTE(self): Get relationship context for a peer — formatted for LLM prompt injection
+export function getPeerRelationshipContext(peerName: string): string | null {
+  const rels = loadRelationships();
+  const key = peerName.toLowerCase();
+  const rel = rels[key];
+  if (!rel || rel.spaceConversations === 0) return null;
+
+  const parts: string[] = [];
+  parts.push(`${rel.spaceConversations} conversations`);
+  if (rel.issuesCoCreated > 0) parts.push(`${rel.issuesCoCreated} issues co-created`);
+  if (rel.prsReviewed > 0) parts.push(`${rel.prsReviewed} PRs reviewed`);
+  if (rel.memorableExchanges.length > 0) {
+    parts.push(`Notable: "${rel.memorableExchanges[rel.memorableExchanges.length - 1]}"`);
+  }
+  if (rel.complementaryStrengths.length > 0) {
+    parts.push(`Strengths: ${rel.complementaryStrengths.join(', ')}`);
+  }
+  return parts.join(' · ');
+}
+
+//NOTE(self): Get all relationship contexts for connected peers — used in space prompt
+export function getAllPeerRelationshipContexts(): Map<string, string> {
+  const rels = loadRelationships();
+  const result = new Map<string, string>();
+  for (const [key, rel] of Object.entries(rels)) {
+    const ctx = getPeerRelationshipContext(rel.peerName);
+    if (ctx) result.set(rel.peerName, ctx);
+  }
+  return result;
+}
+
 interface PeerRegistryState {
   peers: Record<string, DiscoveredPeer>;
 }

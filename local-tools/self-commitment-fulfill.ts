@@ -4,6 +4,7 @@
 
 import { logger } from '@modules/logger.js';
 import type { Commitment } from '@modules/commitment-queue.js';
+import { isRepoCooledDown } from '@modules/commitment-queue.js';
 import { createMemo } from '@local-tools/self-github-create-issue.js';
 import { createPlan, type PlanDefinition } from '@local-tools/self-plan-create.js';
 import { commentOnIssue } from '@local-tools/self-github-comment-issue.js';
@@ -19,9 +20,17 @@ export interface FulfillmentResult {
 }
 
 //NOTE(self): Resolve owner/repo from commitment params or fall back to existing workspace
+//NOTE(self): Defense-in-depth — handles "owner/repo" format in params.repo, prefers params.repoName
 async function resolveRepo(params: Record<string, unknown>): Promise<{ owner: string; repo: string } | null> {
-  const owner = params.owner as string | undefined;
-  const repo = params.repo as string | undefined;
+  let owner = params.owner as string | undefined;
+  let repo = (params.repoName as string | undefined) || (params.repo as string | undefined);
+
+  //NOTE(self): If repo contains a slash, it's "owner/repo" format — split it
+  if (repo && repo.includes('/')) {
+    const parts = repo.split('/');
+    owner = owner || parts[0];
+    repo = parts[1];
+  }
 
   if (owner && repo) {
     return { owner, repo };
@@ -52,13 +61,18 @@ async function fulfillCreateIssue(commitment: Commitment): Promise<FulfillmentRe
       : (commitment.params.title as string) || commitment.description;
 
     //NOTE(self): Build a meaningful issue body from the commitment context
-    //NOTE(self): The description field contains what the LLM said it would do (e.g., "Write up findings on API design")
-    //NOTE(self): The sourceReplyText is what the SOUL actually said in the Bluesky reply or space message
+    //NOTE(self): params.description contains the RICH issue body content written by the agent
+    //NOTE(self): commitment.description may just be the title if c.title was set during enqueue
+    //NOTE(self): Always prefer params.description (full content) over commitment.description (may be title-only)
+    const richDescription = commitment.params.description as string | undefined;
+    const richContent = commitment.params.content as string | undefined;
+    const issueBody = richDescription || richContent || commitment.description;
+
     const sourceLabel = commitment.source === 'space'
       ? '*Created from agent space conversation.*'
       : '*Created from Bluesky thread commitment.*';
     const body = [
-      commitment.description,
+      issueBody,
       '',
       '---',
       '',
@@ -196,6 +210,19 @@ export async function fulfillCommitment(commitment: Commitment): Promise<Fulfill
   logger.info('Fulfilling commitment', { id: commitment.id, type: commitment.type });
 
   try {
+    //NOTE(self): Check repo cooldown before dispatching — skip if repo has too many recent failures
+    if (commitment.type === 'create_issue' || commitment.type === 'create_plan' || commitment.type === 'comment_issue') {
+      const owner = commitment.params?.owner as string | undefined;
+      const repo = (commitment.params?.repoName as string | undefined) || (commitment.params?.repo as string | undefined);
+      if (owner && repo) {
+        const repoName = repo.includes('/') ? repo.split('/')[1] : repo;
+        if (isRepoCooledDown(owner, repoName)) {
+          logger.warn('Commitment skipped — repo is cooled down', { owner, repo: repoName, type: commitment.type });
+          return { success: false, error: `Repo ${owner}/${repoName} is cooled down due to repeated failures` };
+        }
+      }
+    }
+
     switch (commitment.type) {
       case 'create_issue':
         return await fulfillCreateIssue(commitment);
