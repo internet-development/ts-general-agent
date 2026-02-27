@@ -6160,7 +6160,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           addressedNote = `\n**You were specifically addressed by the host.** Prioritize responding.`;
         } else {
           addressedToMe = false;
-          addressedNote = `\n**The host addressed ${serverAddressed.join(', ')} specifically.** Stay silent unless you have a genuinely different perspective.`;
+          addressedNote = `\n**The host addressed ${serverAddressed.join(', ')} specifically.** Let them respond first. You can still contribute if you have something to add.`;
         }
       } else {
         //NOTE(self): Client-side fallback — check if host message mentions any agent name
@@ -6170,7 +6170,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
         );
         if (mentionedAgents.length > 0 && !mentionedAgents.includes(agentName)) {
           addressedToMe = false;
-          addressedNote = `\n**The host appears to be addressing ${mentionedAgents.join(', ')}.** Stay silent unless you have a genuinely different perspective.`;
+          addressedNote = `\n**The host appears to be addressing ${mentionedAgents.join(', ')}.** Let them respond first. You can still contribute if you have something to add.`;
         } else if (mentionedAgents.includes(agentName)) {
           addressedNote = `\n**You were specifically addressed by the host.** Prioritize responding.`;
         }
@@ -6479,19 +6479,17 @@ Engage with your peers by name. Build on what they said. Ask them questions. Go 
       conversationModeNote = `**Conversation mode: ACTION**
 The host requested concrete action. Follow the action-owner protocol:
 - If you are the action owner: commit immediately with a non-empty commitments array. Write the FULL issue body in the description field.
-- If you are NOT the action owner: set shouldSpeak: false unless you have a genuinely different complementary action (like commenting on the owner's issue).
-**No length limits** on the space. But be direct — act, don't discuss.`;
+- If you are NOT the action owner: do NOT promise to create the artifact yourself. But you CAN contribute — share your perspective on the topic, offer context the action owner might use, or comment on the artifact once created.
+**No length limits** on the space.`;
     }
 
     const commitmentContext = `${conversationModeNote}\n\n**Your pending commitments:**\n${pendingStr}\n**Recently fulfilled:**\n${completedStr}${peerCommitmentsSection}${echoChainSection}${saturationWarning}${peerIdentitiesStr}${workspaceStateStr}${pointsSummary}${pinnedStr}${addressedNote}${roleNote}`;
 
     try {
-      //NOTE(self): @mention short-circuit — if the host addressed a different agent, skip LLM entirely
-      //NOTE(self): This prevents wasted LLM calls when the host is directing a specific agent
-      if (!addressedToMe && hasNewMessages && !isActionOwner) {
-        logger.info('[space] Skipping LLM — host addressed another agent', { addressed: addressedNote.slice(0, 80) });
-        return;
-      }
+      //NOTE(self): @mention routing is handled via addressedNote in the LLM prompt — the LLM sees
+      //NOTE(self): "The host addressed X specifically" and decides whether to speak or stay silent.
+      //NOTE(self): No hard short-circuit — all agents get a chance to contribute even when the host
+      //NOTE(self): addresses one by name. The space is a conversation, not a command-response channel.
 
       //NOTE(self): Only call LLM when there are new messages to respond to
       //NOTE(self): When no new messages but host request is pending, skip LLM and go straight to forced action
@@ -6656,10 +6654,13 @@ The host requested concrete action. Follow the action-owner protocol:
             }
           }
 
-          //NOTE(self): List detection — reject messages with numbered items or bullet-like patterns
+          //NOTE(self): List detection — reject messages with STRUCTURAL lists (standalone numbered/bulleted items)
+          //NOTE(self): Inline comma-separated examples inside prose are NOT lists
+          //NOTE(self): "(spacing rhythm, typography scale, contrast)" is prose; "1. Do this 2. Do that" is a list
           if (decision.shouldSpeak) {
-            const listPattern = /(\(\d+\)|\d+[\.\)]\s|^[-•*]\s|;\s*\(\d|:\s*\(\d)/m;
-            if (listPattern.test(msg)) {
+            const listPattern = /^[-•*]\s/m;  //NOTE(self): Only catch lines STARTING with bullets
+            const numberedListPattern = /^\s*\d+[\.\)]\s/m;  //NOTE(self): Lines starting with "1. " or "1) "
+            if (listPattern.test(msg) || numberedListPattern.test(msg)) {
               decision.shouldSpeak = false;
               if (commitments.length > 0) salvageCommitments = true;
               logger.info('[VALIDATION REJECTED] Contains list', { message: msg, salvageCommitments });
@@ -6667,9 +6668,13 @@ The host requested concrete action. Follow the action-owner protocol:
             }
           }
 
-          //NOTE(self): Empty promise check — promise language without commitments
+          //NOTE(self): Empty promise check — DIRECT promise language without commitments
+          //NOTE(self): Only catch first-person declarations of intent to act: "I'll open", "I'm going to create"
+          //NOTE(self): Do NOT catch: questions ("can we treat it as...?"), conditionals ("we could try"),
+          //NOTE(self): observations ("I can see why"), or second-person references ("you can")
+          //NOTE(self): The key insight: "I'll" is always a promise, but "can we" is a question
           if (decision.shouldSpeak && commitments.length === 0) {
-            const promisePattern = /\b(I'll|I will|Let me|I can|I'm going to|I am going to|I'm opening|opening|creating|I'd like to|I want to|I should|I could|I'll happily|I can happily|I'd be happy to|I'm happy to|drafting|filing|submitting|writing up|documenting|posting|we'll|we will|we can|we're going to|about to (open|create|draft|file|submit|write|build))\b/i;
+            const promisePattern = /\b(I'll|I will|Let me|I'm going to|I am going to|I'm opening|I'm creating|I'd like to create|I want to create|I want to open|I should create|I should open|I'll happily|I'd be happy to create|I'm happy to create|about to (open|create|draft|file|submit|write|build))\b/i;
             if (promisePattern.test(msg)) {
               decision.shouldSpeak = false;
               logger.info('[VALIDATION REJECTED] Empty promise', { message: msg });
@@ -6829,10 +6834,11 @@ The host requested concrete action. Follow the action-owner protocol:
           }
 
           //NOTE(self): Non-owner action enforcement (#11) — when a host action request is pending and this agent
-          //NOTE(self): is NOT the action owner, reject any message with promise/action language
-          //NOTE(self): This prevents multiple agents from all saying "I'll do it"
+          //NOTE(self): is NOT the action owner, reject messages with direct first-person action declarations.
+          //NOTE(self): Narrowed to actual promises ("I'll create", "Let me open") — not opinions ("I'd argue",
+          //NOTE(self): "I can see why") which are valid discussion contributions from non-owners.
           if (decision.shouldSpeak && lastHostActionMsg && !this.spaceHostRequestFulfilled && !isActionOwner) {
-            const actionLanguage = /\b(I'll|I will|I would|I'd|Let me|I'm going to|I am going to|I'm opening|I'm creating|opening|creating|drafting|filing|submitting|I can|I'm happy to|I'd be happy to|I'd like to|I want to|we'll|we will|we can|we're going to|we are going to|about to|going to (open|create|draft|file|submit|write|build|make|post))\b/i;
+            const actionLanguage = /\b(I'll|I will|Let me|I'm going to|I am going to|I'm opening|I'm creating|I'm drafting|I'm filing|I'm submitting|about to (open|create|draft|file|submit|write|build|make|post))\b/i;
             if (actionLanguage.test(msg)) {
               decision.shouldSpeak = false;
               if (commitments.length > 0) salvageCommitments = false; //NOTE(self): Don't salvage — another agent owns this
@@ -6841,15 +6847,12 @@ The host requested concrete action. Follow the action-owner protocol:
             }
           }
 
-          //NOTE(self): Non-owner discussion block (#12) — when host has an unfulfilled action request and
-          //NOTE(self): agent is NOT the action owner, block ALL messages (not just action language) unless
-          //NOTE(self): the message carries commitments for a different/complementary action
-          if (decision.shouldSpeak && lastHostActionMsg && !this.spaceHostRequestFulfilled && !isActionOwner && commitments.length === 0) {
-            decision.shouldSpeak = false;
-            logger.info('[VALIDATION REJECTED] Non-owner discussion during pending action', { message: msg, actionOwner: actionOwnerName });
-            ui.action('[space] Validation rejected (non-owner discussion)', `${actionOwnerName} should be acting`);
-          }
-          } //NOTE(self): End of action-mode-only rules (#7-12)
+          //NOTE(self): Non-owner discussion block removed — Rule #11 already prevents non-owners
+          //NOTE(self): from making action promises. Blocking ALL non-owner speech killed conversations:
+          //NOTE(self): when the action owner's messages were rejected by validators, no other agent
+          //NOTE(self): could speak either, causing total silence. Non-owners should still be able to
+          //NOTE(self): discuss, offer perspectives, and support the action owner's work.
+          } //NOTE(self): End of action-mode-only rules (#7-11)
 
           //NOTE(self): Saturation enforcement (#13) — dynamic threshold scales with connected agent count
           //NOTE(self): Discussion mode gets DISCUSSION_SATURATION_BONUS extra messages before saturation

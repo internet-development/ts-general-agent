@@ -271,24 +271,23 @@ After the LLM returns a response, hard validation catches patterns the prompt co
 | # | Check | Threshold | Log Signature |
 |---|-------|-----------|---------------|
 | 1 | Length | Effectively uncapped for local space (50K chars, 1000 sentences) | `[VALIDATION REJECTED] Too long` |
-| 2 | Lists | `(1)`, `1.`, bullets, numbered items | `[VALIDATION REJECTED] Contains list` |
-| 3 | Empty promise | Promise language without `commitments` array | `[VALIDATION REJECTED] Empty promise` |
+| 2 | Lists | Lines starting with bullet markers (`- `, `* `) or numbered items (`1. `, `1) `) | `[VALIDATION REJECTED] Contains list` |
+| 3 | Empty promise | Direct first-person action declarations (I'll, I will, Let me, I'm going to, I'm creating, about to create) without `commitments` array | `[VALIDATION REJECTED] Empty promise` |
 | 4 | Echo | Starts with "I agree", "Building on", "Exactly", etc. | `[VALIDATION REJECTED] Echo` |
 | 5 | Deference | "if X opens", "once X creates", "I'll wait for" (action mode only) | `[VALIDATION REJECTED] Deference` |
 | 6 | Repo amnesia | Asks "which repo?" when one was detected (action mode only) | `[VALIDATION REJECTED] Repo amnesia` |
 | 7 | Meta-discussion | Describes what should go in an issue without a commitment (action mode only) | `[VALIDATION REJECTED] Meta-discussion` |
 | 8 | Scope inflation | "I'd also add", piling on to another's commitment (action mode only) | `[VALIDATION REJECTED] Scope inflation` |
-| 9 | Non-owner action | Agent is NOT action owner but uses promise language during pending request (action mode only) | `[VALIDATION REJECTED] Non-owner action` |
-| 10 | Non-owner discussion | Agent is NOT action owner and host has unfulfilled action request (action mode only) | `[VALIDATION REJECTED] Non-owner discussion during pending action` |
-| 11 | Saturation | Dynamic threshold (`4 + connectedAgentCount + discussion bonus`) — discussion gets +10 bonus | `[VALIDATION REJECTED] Conversation saturated` |
-| 12 | Observer enforcement | Role is `observer` AND threshold peer messages since host (8 in discussion, 3 in action) | `[VALIDATION REJECTED] Observer silence enforced` |
-| 13 | Semantic echo (ensemble) | Multi-strategy: stemmed LCS Dice (0.4) + TF-IDF cosine (0.6) ≥ 0.52, OR concept novelty < 0.15 | `[VALIDATION REJECTED] Semantic echo (ensemble)` |
-| 14 | Semantic echo (LLM-as-judge) | Borderline ensemble scores (0.35–0.52) with novelty < 0.40 checked by fast LLM call | `[VALIDATION REJECTED] Semantic echo (LLM judge)` |
-| 15 | Role message budget | Messages sent exceeds role budget (actor=4, reviewer=3, observer=2; discussion mode 4x) | `[VALIDATION REJECTED] Role message budget exceeded` |
+| 9 | Non-owner action | Agent is NOT action owner but uses direct action declarations (I'll, I will, Let me, I'm going to, I'm creating, about to create) during pending request (action mode only) | `[VALIDATION REJECTED] Non-owner action` |
+| 10 | Saturation | Dynamic threshold (`4 + connectedAgentCount + discussion bonus`) — discussion gets +10 bonus | `[VALIDATION REJECTED] Conversation saturated` |
+| 11 | Observer enforcement | Role is `observer` AND threshold peer messages since host (8 in discussion, 3 in action) | `[VALIDATION REJECTED] Observer silence enforced` |
+| 12 | Semantic echo (ensemble) | Multi-strategy: stemmed LCS Dice (0.4) + TF-IDF cosine (0.6) ≥ 0.52, OR concept novelty < 0.15 | `[VALIDATION REJECTED] Semantic echo (ensemble)` |
+| 13 | Semantic echo (LLM-as-judge) | Borderline ensemble scores (0.35–0.52) with novelty < 0.40 checked by fast LLM call | `[VALIDATION REJECTED] Semantic echo (LLM judge)` |
+| 14 | Role message budget | Messages sent exceeds role budget (actor=4, reviewer=3, observer=2; discussion mode 4x) | `[VALIDATION REJECTED] Role message budget exceeded` |
 
-**Semantic echo detection (checks #13–14)** uses a three-strategy ensemble (stemmed LCS Dice, TF-IDF cosine, concept novelty) plus an LLM-as-judge for borderline cases. The ensemble catches ~97% of semantic echoes. The LLM-as-judge (`modules/echo-judge.ts`) covers the ~3% of synonym-level echoes that surface-token algorithms miss. See `common/strings.ts` and `modules/echo-judge.ts` for details.
+**Semantic echo detection (checks #12–13)** uses a three-strategy ensemble (stemmed LCS Dice, TF-IDF cosine, concept novelty) plus an LLM-as-judge for borderline cases. The ensemble catches ~97% of semantic echoes. The LLM-as-judge (`modules/echo-judge.ts`) covers the ~3% of synonym-level echoes that surface-token algorithms miss. See `common/strings.ts` and `modules/echo-judge.ts` for details.
 
-**Role message budget (check #15)** hard-caps per-role messages per conversation turn. Messages with commitments bypass the budget — action is always more valuable than silence.
+**Role message budget (check #14)** hard-caps per-role messages per conversation turn. Messages with commitments bypass the budget — action is always more valuable than silence.
 
 ### Commitment Salvage
 
