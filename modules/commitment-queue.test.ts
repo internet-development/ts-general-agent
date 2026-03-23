@@ -37,13 +37,16 @@ import {
 } from '@modules/commitment-queue.js';
 
 // Helpers
-const QUEUE_FILE = '.memory/pending_commitments.jsonl';
-const REPO_COOLDOWN_FILE = '.memory/repo_cooldown.json';
+const MEMORY_DIR = process.env.MEMORY_DIR || '.memory';
+const QUEUE_FILE = path.join(MEMORY_DIR, 'pending_commitments.jsonl');
+const REPO_COOLDOWN_FILE = path.join(MEMORY_DIR, 'repo_cooldown.json');
+const AUDIT_LOG_FILE = path.join(MEMORY_DIR, 'logs', 'commitment-queue.log');
 
 function cleanupFiles() {
   try { fs.unlinkSync(QUEUE_FILE); } catch {}
   try { fs.unlinkSync(QUEUE_FILE + '.version'); } catch {}
   try { fs.unlinkSync(REPO_COOLDOWN_FILE); } catch {}
+  try { fs.unlinkSync(AUDIT_LOG_FILE); } catch {}
 }
 
 function makeCommitmentParams(overrides: Partial<{
@@ -68,8 +71,12 @@ describe('commitment-queue', () => {
   beforeEach(() => {
     cleanupFiles();
     _resetQueueCacheForTesting();
-    if (!fs.existsSync('.memory')) {
-      fs.mkdirSync('.memory', { recursive: true });
+    if (!fs.existsSync(MEMORY_DIR)) {
+      fs.mkdirSync(MEMORY_DIR, { recursive: true });
+    }
+    const logsDir = path.join(MEMORY_DIR, 'logs');
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
     }
     // Write empty queue file to ensure clean state
     fs.writeFileSync(QUEUE_FILE, '');
@@ -268,15 +275,18 @@ describe('commitment-queue', () => {
       const c = enqueueCommitment(makeCommitmentParams())!;
 
       // Read the queue file, modify the timestamp, and write it back
+      _resetQueueCacheForTesting();
       const content = fs.readFileSync(QUEUE_FILE, 'utf8').trim();
       const commitment = JSON.parse(content);
       commitment.createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(); // 25h ago
       fs.writeFileSync(QUEUE_FILE, JSON.stringify(commitment) + '\n');
+      _resetQueueCacheForTesting();
 
-      // Force cache reload by calling abandonStaleCommitments
-      // The module caches, so this may or may not pick up the change
-      // depending on internal state
       abandonStaleCommitments();
+
+      // Should now be abandoned — no longer pending
+      const pending = getPendingCommitments();
+      expect(pending.length).toBe(0);
     });
   });
 
@@ -362,7 +372,7 @@ describe('commitment-queue', () => {
         cooldownUntil: new Date(Date.now() + 60_000).toISOString(),
         reason: 'test',
       }];
-      if (!fs.existsSync('.memory')) fs.mkdirSync('.memory', { recursive: true });
+      if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
       fs.writeFileSync(REPO_COOLDOWN_FILE, JSON.stringify(cooldown));
 
       expect(isRepoCooledDown('test-org', 'test-repo')).toBe(true);
@@ -375,7 +385,7 @@ describe('commitment-queue', () => {
         cooldownUntil: new Date(Date.now() - 60_000).toISOString(), // expired
         reason: 'test',
       }];
-      if (!fs.existsSync('.memory')) fs.mkdirSync('.memory', { recursive: true });
+      if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
       fs.writeFileSync(REPO_COOLDOWN_FILE, JSON.stringify(cooldown));
 
       expect(isRepoCooledDown('test-org', 'test-repo')).toBe(false);

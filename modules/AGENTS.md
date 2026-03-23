@@ -70,6 +70,26 @@ LLM generates tool call → tools.ts (definition lookup) → executor.ts (dispat
   └── Module calls (state updates)
 ```
 
+## Key Modules
+
+- **scheduler.ts** — Master 13-loop coordinator with reentrancy guards
+- **llm-gateway.ts** — AI SDK wrapper with exponential backoff and retry logic
+- **outbound-queue.ts** — Central gatekeeper for all Bluesky posts (mutex + two-layer dedup)
+- **engagement.ts** — Relationship tracking, notification prioritization, posting state
+- **bluesky-engagement.ts** — Bluesky conversation state (reply counts, thread depth, disengagement)
+- **github-engagement.ts** — GitHub notification engagement tracking
+- **commitment-queue.ts** — Promise tracking with retry, stale abandonment, and repo cooldowns
+- **peer-awareness.ts** — Peer identity discovery, linking, and relationship memory
+- **expression.ts** — Scheduled posting with prompt source selection
+- **echo-judge.ts** — LLM-based semantic similarity fallback for borderline echo cases
+- **pacing.ts** — Rate limiting and cooldown enforcement across services
+- **post-log.ts** — Persistent logging of shared design posts for attribution context
+- **github-comment-cleanup.ts** — Deduplication of GitHub comments to prevent repeated claim comments
+- **github-workspace-discovery.ts** — Workspace polling, merge conflict recovery, stuck task detection
+- **ritual-state.ts** — Daily ritual tracking (initiation dates, thread URIs, run history)
+- **voice-phrases.ts** — Auto-generated from SELF.md Voice section during reflection
+- **sandbox.ts** — File operation constraints for safe disk access
+
 ## Error Handling
 
 Modules should not crash the agent. Always return valid default state on load failure. See existing modules for the pattern.

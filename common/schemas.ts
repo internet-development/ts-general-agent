@@ -25,6 +25,9 @@ const COMMITMENT_FIELD_ALIASES: Record<string, string> = {
   text: 'content',
   message: 'content',
   post: 'content',
+  issueNumber: 'issue_number',
+  issue: 'issue_number',
+  number: 'issue_number',
 };
 
 //NOTE(self): Normalize a raw LLM commitment object before Zod validation
@@ -51,6 +54,7 @@ export const CommitmentSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   content: z.string().optional(),
+  issue_number: z.number().optional(),
 }).refine(
   c => !!(c.title || c.description || c.content),
   { message: 'At least one content field (title, description, or content) required' }
@@ -118,6 +122,7 @@ export const SPACE_DECISION_TOOL = {
             title: { type: 'string', description: 'Title for the issue or plan' },
             description: { type: 'string', description: 'Body/description content' },
             content: { type: 'string', description: 'Text content for bluesky posts' },
+            issue_number: { type: 'number', description: 'Issue number to comment on (required for comment_issue)' },
           },
           required: ['type'],
         },

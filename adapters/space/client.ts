@@ -49,6 +49,8 @@ export class SpaceClient {
   private connected = false;
 
   //NOTE(self): Buffer of incoming chat messages since last check
+  //NOTE(self): Capped at 500 to prevent unbounded growth if consumer stalls
+  private static readonly MESSAGE_BUFFER_MAX = 500;
   private messageBuffer: Array<{ name: string; content: string; timestamp: string; addressed?: string[] }> = [];
 
   //NOTE(self): Track which agents are currently typing (auto-clear after 10s)
@@ -272,7 +274,16 @@ export class SpaceClient {
   }
 
   //NOTE(self): Get workspace states — collaborative progress per workspace
+  //NOTE(self): Evicts stale entries (>24h) on access to prevent unbounded memory growth
+  private static readonly WORKSPACE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+
   getWorkspaceStates(): Map<string, WorkspaceStateMessage> {
+    const cutoff = Date.now() - SpaceClient.WORKSPACE_STATE_TTL_MS;
+    for (const [key, state] of this.workspaceStates) {
+      if (new Date(state.timestamp).getTime() < cutoff) {
+        this.workspaceStates.delete(key);
+      }
+    }
     return new Map(this.workspaceStates);
   }
 
@@ -334,8 +345,9 @@ export class SpaceClient {
       try {
         const msg = JSON.parse(data.toString()) as SpaceMessage;
         this.handleMessage(msg);
-      } catch {
-        // Ignore malformed messages
+      } catch (err) {
+        //NOTE(self): Log malformed messages for debugging instead of silently dropping
+        console.error(`[space-client] Malformed message: ${String(err)}`);
       }
     });
 
@@ -362,6 +374,10 @@ export class SpaceClient {
             timestamp: msg.timestamp,
             addressed: msg.addressed,
           });
+          //NOTE(self): Cap buffer to prevent unbounded growth if consumer stalls
+          if (this.messageBuffer.length > SpaceClient.MESSAGE_BUFFER_MAX) {
+            this.messageBuffer = this.messageBuffer.slice(-SpaceClient.MESSAGE_BUFFER_MAX);
+          }
           //NOTE(self): Clear typing state — they finished composing
           this.clearTypingAgent(msg.name);
         }
@@ -386,9 +402,10 @@ export class SpaceClient {
         //NOTE(self): Clear typing state — agent is gone
         this.clearTypingAgent(msg.name);
         this.connectedAgentNames.delete(msg.name);
-        //NOTE(self): Clean up identity, capabilities, and claims for departed agent
+        //NOTE(self): Clean up identity, capabilities, reflections, and claims for departed agent
         this.peerIdentities.delete(msg.name);
         this.peerCapabilities.delete(msg.name);
+        this.peerReflections.delete(msg.name);
         this.callbacks.onLeave?.(msg.name);
         break;
 

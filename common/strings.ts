@@ -7,8 +7,7 @@ import { graphemeLen } from '@atproto/common-web';
 export const PORTABLE_MAX_GRAPHEMES = 300;
 
 export function isEmpty(text: any): boolean {
-  // NOTE(jimmylee):
-  // If a number gets passed in, it isn't considered empty for zero.
+  //NOTE(self): If a number gets passed in, it isn't considered empty for zero.
   if (text === 0) {
     return false;
   }

@@ -8,7 +8,30 @@ import * as path from 'path';
 import { logger } from '@modules/logger.js';
 import { resetJsonlIfVersionMismatch, stampJsonlVersion } from '@common/memory-version.js';
 
-const POST_LOG_PATH = '.memory/post_log.jsonl';
+//NOTE(self): MEMORY_DIR env var allows tests to redirect to a temp directory
+const MEMORY_DIR = process.env.MEMORY_DIR || '.memory';
+const POST_LOG_PATH = path.join(MEMORY_DIR, 'post_log.jsonl');
+
+//NOTE(self): Log rotation — prevent unbounded disk growth during continuous operation
+const POST_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10MB
+const POST_LOG_MAX_ROTATIONS = 3;
+
+function maybeRotatePostLog(): void {
+  try {
+    if (!fs.existsSync(POST_LOG_PATH)) return;
+    const stats = fs.statSync(POST_LOG_PATH);
+    if (stats.size < POST_LOG_MAX_BYTES) return;
+    for (let i = POST_LOG_MAX_ROTATIONS; i >= 1; i--) {
+      const from = i === 1 ? POST_LOG_PATH : `${POST_LOG_PATH}.${i - 1}`;
+      const to = `${POST_LOG_PATH}.${i}`;
+      if (fs.existsSync(from)) {
+        fs.renameSync(from, to);
+      }
+    }
+  } catch {
+    //NOTE(self): Non-fatal — next append creates a fresh file
+  }
+}
 
 //NOTE(self): A single logged post entry - everything I need to remember about what I shared
 export interface PostLogEntry {
@@ -102,6 +125,7 @@ export function logPost(entry: PostLogEntry): boolean {
     const line = JSON.stringify(entry) + '\n';
     fs.appendFileSync(POST_LOG_PATH, line, 'utf8');
     stampJsonlVersion(POST_LOG_PATH);
+    maybeRotatePostLog();
     logger.info('Logged post to post_log.jsonl', {
       bsky_url: entry.bluesky.bsky_url,
       source_type: entry.source.type,

@@ -76,13 +76,14 @@ export async function blueskyFetch(url: string | URL | Request, options?: Reques
     return response;
   }
 
-  // Handle 429 Too Many Requests
+  //NOTE(self): Handle 429 Too Many Requests — honor retry-after up to 5 minutes
+  //NOTE(self): With 10 agents sharing API surface, long retry windows are expected
   if (response.status === 429) {
     const retryAfter = response.headers.get('retry-after');
     const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : 60;
 
-    if (retrySeconds <= 30) {
-      logger.warn('Bluesky 429, short retry', { retrySeconds });
+    if (retrySeconds <= 300) {
+      logger.warn('Bluesky 429, waiting for retry-after', { retrySeconds });
       await sleep(retrySeconds * 1000);
       lastRequestTime = Date.now();
       const retryResponse = await fetch(url, options);
@@ -90,17 +91,17 @@ export async function blueskyFetch(url: string | URL | Request, options?: Reques
       return retryResponse;
     }
 
-    logger.warn('Bluesky 429, retry-after too long, returning as-is', { retrySeconds });
+    logger.warn('Bluesky 429, retry-after exceeds 5m ceiling, returning as-is', { retrySeconds });
     return response;
   }
 
-  // Handle 403 with exhausted rate limit
+  //NOTE(self): Handle 403 with exhausted rate limit — same 5m retry ceiling
   if (response.status === 403 && rateLimitRemaining === 0) {
     const retryAfter = response.headers.get('retry-after');
     const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : 60;
 
-    if (retrySeconds <= 30) {
-      logger.warn('Bluesky 403 rate limit exhausted, short retry', { retrySeconds });
+    if (retrySeconds <= 300) {
+      logger.warn('Bluesky 403 rate limit exhausted, waiting for retry-after', { retrySeconds });
       await sleep(retrySeconds * 1000);
       lastRequestTime = Date.now();
       const retryResponse = await fetch(url, options);
@@ -108,7 +109,7 @@ export async function blueskyFetch(url: string | URL | Request, options?: Reques
       return retryResponse;
     }
 
-    logger.warn('Bluesky 403 rate limit exhausted, returning as-is', { retrySeconds });
+    logger.warn('Bluesky 403 rate limit exhausted, retry-after exceeds 5m ceiling', { retrySeconds });
     return response;
   }
 

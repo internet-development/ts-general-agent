@@ -761,6 +761,36 @@ interface RelationshipSummary {
   }>;
 }
 
+//NOTE(self): Prune stale relationships — removes entries with no interaction in maxAgeMs
+//NOTE(self): Prevents unbounded growth of relationships.json over weeks of continuous operation
+//NOTE(self): Keeps positive/recurring relationships longer (90 days) vs unknown (60 days)
+export function pruneStaleRelationships(maxAgeMs: number = 60 * 24 * 60 * 60 * 1000): number {
+  const state = loadState();
+  const now = Date.now();
+  const extendedMaxAgeMs = 90 * 24 * 60 * 60 * 1000;
+  let pruned = 0;
+
+  for (const [handle, relationship] of Object.entries(state.relationships)) {
+    const lastInteraction = new Date(relationship.lastInteraction).getTime();
+    const age = now - lastInteraction;
+
+    const isValuable = relationship.sentiment === 'positive' || relationship.interactions.length >= 5;
+    const threshold = isValuable ? extendedMaxAgeMs : maxAgeMs;
+
+    if (age > threshold) {
+      delete state.relationships[handle];
+      pruned++;
+    }
+  }
+
+  if (pruned > 0) {
+    saveState(state);
+    logger.info('Pruned stale relationships', { count: pruned, remaining: Object.keys(state.relationships).length });
+  }
+
+  return pruned;
+}
+
 export function getRelationshipSummary(): RelationshipSummary {
   const state = loadState();
   const relationships = Object.values(state.relationships);

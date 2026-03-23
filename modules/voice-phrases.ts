@@ -3,7 +3,7 @@
 //NOTE(self): Phrases are derived from ## Voice in SELF.md during reflection cycles.
 //NOTE(self): Falls back to hardcoded defaults if the JSON is missing or corrupted.
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { getConfig } from '@modules/config.js';
 import { readSelf } from '@modules/memory.js';
@@ -51,14 +51,28 @@ const DEFAULT_PHRASES: VoicePhrases = {
   },
 };
 
-//NOTE(self): Lazy-cached phrases
+//NOTE(self): Lazy-cached phrases with file mtime check for hot reload
 let _cached: VoicePhrases | null = null;
+let _cachedMtimeMs: number = 0;
 
 //NOTE(self): Load voice phrases from disk, falling back to defaults
+//NOTE(self): Re-reads from disk if file was modified since last cache (enables hot reload)
 export function loadVoicePhrases(): VoicePhrases {
-  if (_cached) return _cached;
-
   const phrasesPath = join(getConfig().paths.root, 'voice-phrases.json');
+  if (_cached) {
+    //NOTE(self): Check if file was modified since we cached it
+    try {
+      if (existsSync(phrasesPath)) {
+        const mtimeMs = statSync(phrasesPath).mtimeMs;
+        if (mtimeMs > _cachedMtimeMs) {
+          _cached = null; //NOTE(self): Invalidate cache — file changed
+        }
+      }
+    } catch {
+      //NOTE(self): stat failure — keep using cached version
+    }
+    if (_cached) return _cached;
+  }
 
   if (!existsSync(phrasesPath)) {
     _cached = DEFAULT_PHRASES;
@@ -66,6 +80,7 @@ export function loadVoicePhrases(): VoicePhrases {
   }
 
   try {
+    _cachedMtimeMs = statSync(phrasesPath).mtimeMs;
     const raw = readFileSync(phrasesPath, 'utf-8');
     const parsed = JSON.parse(raw) as VoicePhrases;
 

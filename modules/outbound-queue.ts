@@ -18,8 +18,10 @@ import { deletePost } from '@adapters/atproto/delete-post.js';
 import { isLowValueClosing } from '@modules/engagement.js';
 import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
 
-const AUDIT_LOG_FILE = '.memory/logs/outbound-queue.log';
-const DEDUP_STATE_FILE = '.memory/outbound_dedup.json';
+//NOTE(self): MEMORY_DIR env var allows tests to redirect to a temp directory
+const MEMORY_DIR = process.env.MEMORY_DIR || '.memory';
+const AUDIT_LOG_FILE = path.join(MEMORY_DIR, 'logs', 'outbound-queue.log');
+const DEDUP_STATE_FILE = path.join(MEMORY_DIR, 'outbound_dedup.json');
 
 export type OutboundDestination = 'post' | 'reply' | 'post_with_image';
 
@@ -67,8 +69,9 @@ function saveDedupState(entries: RecentEntry[]): void {
 class OutboundQueue {
   private recentPosts: RecentEntry[];
   //NOTE(self): Content-based dedup set — populated from the agent's own feed on startup
-  //NOTE(self): Does NOT expire — persists for the entire session, catches cross-restart duplicates
-  //NOTE(self): New posts are added here too so they're protected for the full session
+  //NOTE(self): Capped at FEED_TEXTS_MAX_SIZE to prevent unbounded memory growth over weeks
+  //NOTE(self): New posts are added here too so they're protected for the current session
+  private static readonly FEED_TEXTS_MAX_SIZE = 5_000;
   private feedTexts: Set<string> = new Set();
   //NOTE(self): Promise-based mutex — only one message processes at a time
   private mutexPromise: Promise<void> = Promise.resolve();
@@ -178,8 +181,18 @@ class OutboundQueue {
     }
     saveDedupState(this.recentPosts);
 
-    //NOTE(self): Layer 2: Feed content set — survives for the entire session
+    //NOTE(self): Layer 2: Feed content set — capped to prevent unbounded growth
     this.feedTexts.add(normalized);
+    if (this.feedTexts.size > OutboundQueue.FEED_TEXTS_MAX_SIZE) {
+      //NOTE(self): Evict oldest entries — Set iterates in insertion order
+      const excess = this.feedTexts.size - OutboundQueue.FEED_TEXTS_MAX_SIZE;
+      let removed = 0;
+      for (const entry of this.feedTexts) {
+        if (removed >= excess) break;
+        this.feedTexts.delete(entry);
+        removed++;
+      }
+    }
   }
 
   //NOTE(self): Append JSONL audit entry (follows commitment-queue pattern)
@@ -197,6 +210,7 @@ class OutboundQueue {
         ...(reason ? { reason } : {}),
       }) + '\n';
       fs.appendFileSync(AUDIT_LOG_FILE, entry);
+      maybeRotateAuditLog();
     } catch (err) {
       logger.warn('Failed to write outbound queue audit log', { error: String(err) });
     }
@@ -339,6 +353,27 @@ export async function pruneThankYouChains(feed: AtprotoFeedItem[]): Promise<numb
   return deleted;
 }
 
+//NOTE(self): Rotate audit log at 10MB to prevent unbounded disk growth over weeks
+const AUDIT_LOG_MAX_BYTES = 10 * 1024 * 1024;
+const AUDIT_LOG_MAX_ROTATIONS = 3;
+
+function maybeRotateAuditLog(): void {
+  try {
+    if (!fs.existsSync(AUDIT_LOG_FILE)) return;
+    const stats = fs.statSync(AUDIT_LOG_FILE);
+    if (stats.size < AUDIT_LOG_MAX_BYTES) return;
+    for (let i = AUDIT_LOG_MAX_ROTATIONS; i >= 1; i--) {
+      const from = i === 1 ? AUDIT_LOG_FILE : `${AUDIT_LOG_FILE}.${i - 1}`;
+      const to = `${AUDIT_LOG_FILE}.${i}`;
+      if (fs.existsSync(from)) {
+        fs.renameSync(from, to);
+      }
+    }
+  } catch {
+    //NOTE(self): Non-fatal — next append will create a fresh file
+  }
+}
+
 //NOTE(self): Standalone audit logger for use outside the class (shared with pruneDuplicatePosts)
 function auditLog(action: string, destination: string, text: string, reason?: string): void {
   try {
@@ -354,6 +389,7 @@ function auditLog(action: string, destination: string, text: string, reason?: st
       ...(reason ? { reason } : {}),
     }) + '\n';
     fs.appendFileSync(AUDIT_LOG_FILE, entry);
+    maybeRotateAuditLog();
   } catch (err) {
     logger.warn('Failed to write outbound queue audit log', { error: String(err) });
   }

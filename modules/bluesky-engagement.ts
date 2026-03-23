@@ -465,8 +465,13 @@ export function cleanupOldConversations(maxAgeMs: number = 7 * 24 * 60 * 60 * 10
       delete state.conversations[uri];
       cleaned++;
     }
+    //NOTE(self): Delete stale conversations older than 30 days (prevents unbounded growth)
+    else if (conversation.state === 'stale' && age > 30 * 24 * 60 * 60 * 1000) {
+      delete state.conversations[uri];
+      cleaned++;
+    }
     //NOTE(self): Mark very old active conversations as stale
-    else if (age > maxAgeMs && conversation.state !== 'concluded') {
+    else if (age > maxAgeMs && conversation.state !== 'concluded' && conversation.state !== 'stale') {
       conversation.state = 'stale';
     }
   }

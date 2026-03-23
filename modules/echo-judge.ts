@@ -9,6 +9,8 @@ import { logger } from '@modules/logger.js';
 
 //NOTE(self): Cache to avoid re-judging the same candidate + peer set
 //NOTE(self): Key: hash of candidate + sorted peer messages. Cleared when conversation resets.
+//NOTE(self): Capped at 500 entries to prevent unbounded growth during long conversations
+const ECHO_JUDGE_CACHE_MAX = 500;
 const echoJudgeCache = new Map<string, boolean>();
 
 export function clearEchoJudgeCache(): void {
@@ -43,7 +45,7 @@ export async function isEchoByLLMJudge(
   if (peerMessages.length === 0) return false;
 
   //NOTE(self): Check cache first
-  const cacheKey = quickHash(candidate + '||' + peerMessages.sort().join('||'));
+  const cacheKey = quickHash(candidate + '||' + [...peerMessages].sort().join('||'));
   const cached = echoJudgeCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
@@ -66,7 +68,11 @@ export async function isEchoByLLMJudge(
     const answer = response.trim().toUpperCase();
     const isEcho = answer.startsWith('YES');
 
-    //NOTE(self): Cache the result
+    //NOTE(self): Cache the result — evict oldest if at capacity
+    if (echoJudgeCache.size >= ECHO_JUDGE_CACHE_MAX) {
+      const firstKey = echoJudgeCache.keys().next().value;
+      if (firstKey !== undefined) echoJudgeCache.delete(firstKey);
+    }
     echoJudgeCache.set(cacheKey, isEcho);
 
     logger.info('[echo-judge] LLM classification', {

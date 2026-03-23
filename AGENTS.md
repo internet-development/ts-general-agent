@@ -279,11 +279,11 @@ After the LLM returns a response, hard validation catches patterns the prompt co
 | 7 | Meta-discussion | Describes what should go in an issue without a commitment (action mode only) | `[VALIDATION REJECTED] Meta-discussion` |
 | 8 | Scope inflation | "I'd also add", piling on to another's commitment (action mode only) | `[VALIDATION REJECTED] Scope inflation` |
 | 9 | Non-owner action | Agent is NOT action owner but uses direct action declarations (I'll, I will, Let me, I'm going to, I'm creating, about to create) during pending request (action mode only) | `[VALIDATION REJECTED] Non-owner action` |
-| 10 | Saturation | Dynamic threshold (`4 + connectedAgentCount + discussion bonus`) — discussion gets +10 bonus | `[VALIDATION REJECTED] Conversation saturated` |
-| 11 | Observer enforcement | Role is `observer` AND threshold peer messages since host (8 in discussion, 3 in action) | `[VALIDATION REJECTED] Observer silence enforced` |
-| 12 | Semantic echo (ensemble) | Multi-strategy: stemmed LCS Dice (0.4) + TF-IDF cosine (0.6) ≥ 0.52, OR concept novelty < 0.15 | `[VALIDATION REJECTED] Semantic echo (ensemble)` |
+| 10 | Saturation | Dynamic threshold (`4 + connectedAgentCount + discussion bonus of 4`). Also: after 2+ own messages, agents get "conversation circling" warning | `[VALIDATION REJECTED] Conversation saturated` |
+| 11 | Observer enforcement | Role is `observer` AND threshold peer messages since host (5 in discussion, 3 in action) | `[VALIDATION REJECTED] Observer silence enforced` |
+| 12 | Semantic echo (ensemble) | Multi-strategy: stemmed LCS Dice (0.4) + TF-IDF cosine (0.6) ≥ 0.52, OR concept novelty < 0.25. Compares against ALL agent messages (peers + own) | `[VALIDATION REJECTED] Semantic echo (ensemble)` |
 | 13 | Semantic echo (LLM-as-judge) | Borderline ensemble scores (0.35–0.52) with novelty < 0.40 checked by fast LLM call | `[VALIDATION REJECTED] Semantic echo (LLM judge)` |
-| 14 | Role message budget | Messages sent exceeds role budget (actor=4, reviewer=3, observer=2; discussion mode 4x) | `[VALIDATION REJECTED] Role message budget exceeded` |
+| 14 | Role message budget | Messages sent exceeds role budget (actor=3, reviewer=2, observer=1; discussion mode 2x) | `[VALIDATION REJECTED] Role message budget exceeded` |
 
 **Semantic echo detection (checks #12–13)** uses a three-strategy ensemble (stemmed LCS Dice, TF-IDF cosine, concept novelty) plus an LLM-as-judge for borderline cases. The ensemble catches ~97% of semantic echoes. The LLM-as-judge (`modules/echo-judge.ts`) covers the ~3% of synonym-level echoes that surface-token algorithms miss. See `common/strings.ts` and `modules/echo-judge.ts` for details.
 
@@ -396,14 +396,14 @@ This prevents the round-robin agreement pattern where agents restate each other'
 | Space message length (discussion) | 50K chars (effectively uncapped) | `SPACE_DISCUSSION_MAX_CHARS/SENTENCES` | Space is local — agents write as much as the thought requires |
 | Commitment in-progress timeout | 10 minutes | `COMMITMENT_IN_PROGRESS_TIMEOUT_MS` | Prevents stale in-progress commitments from blocking |
 | Commitment extraction | 500 tokens max | `extractCommitments()` | Lightweight NLP extraction |
-| Space saturation | Dynamic threshold (4 + agent count + discussion bonus of 10) | Post-generation validation | Prevents echo loops while allowing rich discussion |
+| Space saturation | Dynamic threshold (4 + agent count + discussion bonus of 4) | Post-generation validation | Prevents echo loops while allowing rich discussion |
 
 ### API / Service Rate Limits (external — enforced by providers)
 
 | Service | Limit | How We Handle |
 |---------|-------|---------------|
-| Bluesky (AT Protocol) | 5,000 pts/hr (see rate headers) | `ATPROTO_MIN_SPACING_MS` (5s), budget tracking in `bluesky-rate-limit.ts` |
-| GitHub REST API | 5,000 req/hr (authenticated) | `GITHUB_MIN_SPACING_MS` (5s), budget tracking in `github-rate-limit.ts` |
+| Bluesky (AT Protocol) | 5,000 pts/hr (see rate headers) | `ATPROTO_MIN_SPACING_MS` (5s), budget tracking in `adapters/atproto/rate-limit.ts` |
+| GitHub REST API | 5,000 req/hr (authenticated) | `GITHUB_MIN_SPACING_MS` (5s), budget tracking in `adapters/github/rate-limit.ts` |
 | LLM Gateway (Vercel AI) | Model-dependent (see provider docs) | `LLM_MAX_RETRIES` (3), exponential backoff up to `LLM_MAX_BACKOFF_MS` (60s) |
 
 **IMPORTANT:** These are real external limits. When budget is low (`ATPROTO_LOW_BUDGET_THRESHOLD=20`, `GITHUB_LOW_BUDGET_THRESHOLD=100`), the agent logs warnings and paces itself. The LLM gateway does NOT have a hard token context window limit that we manage — the gateway handles that. We do NOT prematurely truncate prompts, SELF.md, or conversation history to "save tokens."

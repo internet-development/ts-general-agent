@@ -241,19 +241,26 @@ export function markConversationConcluded(
   updateConversationState(owner, repo, number, 'concluded', reason);
 }
 
-//NOTE(self): Clean up old concluded conversations (housekeeping)
+//NOTE(self): Clean up old conversations (housekeeping)
+//NOTE(self): Removes concluded/closed conversations after maxAgeMs (30 days)
+//NOTE(self): Also removes any conversation older than 60 days regardless of state (prevents unbounded growth)
 export function cleanupOldConversations(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): number {
   const state = loadState();
   const now = Date.now();
+  const absoluteMaxAgeMs = 60 * 24 * 60 * 60 * 1000; //NOTE(self): 60 days hard cap
   let cleaned = 0;
 
   for (const [key, conversation] of Object.entries(state.conversations)) {
-    if (conversation.state === 'concluded' || conversation.state === 'closed') {
-      const lastChecked = new Date(conversation.lastChecked).getTime();
-      if (now - lastChecked > maxAgeMs) {
-        delete state.conversations[key];
-        cleaned++;
-      }
+    const lastChecked = new Date(conversation.lastChecked).getTime();
+    const age = now - lastChecked;
+
+    if ((conversation.state === 'concluded' || conversation.state === 'closed') && age > maxAgeMs) {
+      delete state.conversations[key];
+      cleaned++;
+    } else if (age > absoluteMaxAgeMs) {
+      //NOTE(self): Hard cap — any conversation older than 60 days is removed regardless of state
+      delete state.conversations[key];
+      cleaned++;
     }
   }
 

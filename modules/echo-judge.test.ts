@@ -100,13 +100,12 @@ describe('echo-judge', () => {
     };
     const userContent = callArgs.messages[0].content;
 
-    // peerMessages.sort() mutates in-place before slice(0,10), so alphabetical order applies.
-    // After sort: "message 1","message 10","message 11",...,"message 15","message 2","message 3","message 4"
-    // These are the first 10 alphabetically. "message 5" through "message 9" are dropped.
+    // slice(0, 10) takes the first 10 in original order: "message 1" through "message 10"
+    // "message 11" through "message 15" are dropped
     expect(userContent).toContain('"message 1"');
-    expect(userContent).toContain('"message 4"');
-    expect(userContent).not.toContain('"message 5"');
-    expect(userContent).not.toContain('"message 9"');
+    expect(userContent).toContain('"message 10"');
+    expect(userContent).not.toContain('"message 11"');
+    expect(userContent).not.toContain('"message 15"');
     // Exactly 10 numbered entries
     const numberedLines = userContent.match(/^\d+\.\s"/gm);
     expect(numberedLines?.length).toBe(10);

@@ -1,5 +1,5 @@
 //NOTE(self): Scheduler Module
-//NOTE(self): Coordinates my twelve loops of being:
+//NOTE(self): Coordinates my thirteen loops of being:
 //NOTE(self): 0. Session Refresh (15m) - proactive Bluesky token refresh to prevent expiration
 //NOTE(self): 0b. Version Check (5m) - check remote package.json, shut down if version mismatch
 //NOTE(self): 1. Bluesky Awareness (45s) - watching for people who reach out (cheap, fast)
@@ -12,7 +12,7 @@
 //NOTE(self): 7. Heartbeat (5m) - show signs of life so owner knows agent is running
 //NOTE(self): 8. Engagement Check (15m) - check how expressions are being received
 //NOTE(self): 9. Ritual Check (30m) - daily social rituals initiated from SELF.md
-//NOTE(self): 10. Space Participation (60s) - converse with other agents in the local chatroom
+//NOTE(self): 10. Space Participation (5s) - converse with other agents in the local chatroom
 //NOTE(self): This architecture lets me be responsive AND expressive while conserving tokens.
 
 import crypto from 'node:crypto';
@@ -42,6 +42,7 @@ import {
   getReflectionState,
   recordReflectionComplete,
   getRelationshipSummary,
+  pruneStaleRelationships,
   shouldRespondTo,
   canPostOriginal,
   getSeenAt,
@@ -175,6 +176,7 @@ import {
   abandonStaleCommitments,
   checkAndApplyRepoCooldown,
   timeoutInProgressCommitments,
+  periodicQueueCleanup,
 } from '@modules/commitment-queue.js';
 import { extractCommitments, type ReplyForExtraction } from '@local-tools/self-commitment-extract.js';
 import { fulfillCommitment } from '@local-tools/self-commitment-fulfill.js';
@@ -456,10 +458,21 @@ export class AgentScheduler {
 
     ui.system('Scheduler starting', 'awareness + expression + reflection');
 
-    //NOTE(self): Ensure we have a valid session
-    const sessionValid = await ensureValidSession();
+    //NOTE(self): Ensure we have a valid session — retry with backoff if Bluesky is temporarily unavailable
+    //NOTE(self): Prevents all 10 agents from dying simultaneously during brief API outages at startup
+    const SESSION_RETRY_DELAYS = [10_000, 30_000, 60_000];
+    let sessionValid = false;
+    for (let attempt = 0; attempt <= SESSION_RETRY_DELAYS.length; attempt++) {
+      sessionValid = await ensureValidSession();
+      if (sessionValid) break;
+      if (attempt < SESSION_RETRY_DELAYS.length) {
+        const delay = SESSION_RETRY_DELAYS[attempt];
+        ui.warn('Session failed', `retrying in ${delay / 1000}s (attempt ${attempt + 1}/${SESSION_RETRY_DELAYS.length})`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
     if (!sessionValid) {
-      ui.error('Failed to establish session');
+      ui.error('Failed to establish session after retries');
       return;
     }
 
@@ -736,6 +749,17 @@ export class AgentScheduler {
       if (this.shutdownRequested) return;
       if (this.state.currentMode !== 'idle') return;
       if (this.runningLoops.has('awareness')) return;
+
+      //NOTE(self): Exponential backoff on consecutive errors — skip checks to avoid thundering herd
+      //NOTE(self): After 3+ consecutive failures, skip every 2nd check; after 5+, skip 3 of 4; etc.
+      if (this.state.consecutiveErrors > 2) {
+        const skipFactor = Math.min(this.state.consecutiveErrors - 1, 8);
+        if (Math.random() < 1 - 1 / skipFactor) {
+          logger.info('Awareness check skipped (backoff)', { consecutiveErrors: this.state.consecutiveErrors });
+          return;
+        }
+      }
+
       this.runningLoops.add('awareness');
       try {
         await this.awarenessCheck();
@@ -2508,13 +2532,13 @@ Revise and post again.`;
         ui.updateSpinner(`Reflecting on ${expCount} experience${expCount === 1 ? '' : 's'}`);
       }
 
-      //NOTE(self): Periodic housekeeping — prune old state to prevent unbounded growth
-      if (Math.random() < 0.1) {
-        pruneOldExperiences(30);
-        cleanupOldBlueskyConversations();
-        cleanupOldGitHubConversations();
-        cleanupResolvedFriction(30);
-      }
+      //NOTE(self): Deterministic housekeeping — prune old state every reflection to prevent unbounded growth
+      pruneOldExperiences(30);
+      cleanupOldBlueskyConversations();
+      cleanupOldGitHubConversations();
+      pruneStaleRelationships();
+      ensurePeerRegistryClean();
+      cleanupResolvedFriction(30);
 
       const systemPrompt = buildSystemPrompt(soul, fullSelf, 'AGENT-DEEP-REFLECTION');
 
@@ -5386,6 +5410,9 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
     //NOTE(self): Check and apply repo cooldowns based on failure patterns
     checkAndApplyRepoCooldown();
 
+    //NOTE(self): Periodic cleanup of old completed/abandoned commitments (runs at most once per hour)
+    periodicQueueCleanup();
+
     const pending = getPendingCommitments();
     if (pending.length === 0) return;
 
@@ -5437,7 +5464,7 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
           ui.stopSpinner(`Commitment fulfilled: ${commitment.type}`);
           logger.info('Commitment fulfilled', { id: commitment.id, type: commitment.type });
         } else {
-          markCommitmentFailed(commitment.id, result.error || 'Unknown error');
+          markCommitmentFailed(commitment.id, result.error || 'Unknown error', result.result);
           ui.stopSpinner('Commitment failed', false);
           logger.warn('Commitment fulfillment failed', { id: commitment.id, error: result.error });
 
@@ -6431,8 +6458,20 @@ Remember: quality over quantity. Only review if you can add genuine value.`;
       if (!isAgentMsg) break; //NOTE(self): Hit a host message — stop counting
       agentMessagesSinceHost++;
     }
+    //NOTE(self): Count own messages since last host message for conversation progression
+    let ownMessagesSinceHost = 0;
+    for (let i = this.spaceConversationHistory.length - 1; i >= 0; i--) {
+      const m = this.spaceConversationHistory[i];
+      const isAgentMsg2 = peerAgentNames.has(m.name) || m.name === agentName;
+      if (!isAgentMsg2) break;
+      if (m.name === agentName) ownMessagesSinceHost++;
+    }
+
     if (agentMessagesSinceHost >= saturationThreshold) {
-      saturationWarning = `\n**CONVERSATION SATURATED: ${agentMessagesSinceHost} agent messages since the host last spoke.** The host is waiting for ACTION, not more discussion. If you cannot commit to a concrete action, set shouldSpeak: false. Every additional discussion message makes the conversation WORSE.`;
+      saturationWarning = `\n**CONVERSATION SATURATED: ${agentMessagesSinceHost} agent messages since the host last spoke.** The host is waiting for something NEW, not more paraphrasing. If you cannot add a genuinely new idea or commit to a concrete action, set shouldSpeak: false.`;
+    } else if (ownMessagesSinceHost >= 2) {
+      //NOTE(self): After 2+ own messages, conversation has progressed enough — agent should conclude
+      saturationWarning = `\n**You have already spoken ${ownMessagesSinceHost} times since the host last spoke.** The conversation is circling. Either commit to a concrete action NOW, or set shouldSpeak: false. Do NOT restate ideas that have already been established. If you and your peers have converged on the same conclusion, the conversation is done — stop talking and start doing.`;
     } else if (agentMessagesSinceHost >= saturationWarningThreshold) {
       saturationWarning = `\n**Conversation note: ${agentMessagesSinceHost} agent messages since the host last spoke.** Only speak if you have something genuinely new (a concrete action or a different perspective). Do not agree, rephrase, or pile on.`;
     }
@@ -6473,8 +6512,9 @@ The host is asking for opinions, perspectives, or sharing information — NOT re
 Share your genuine perspective drawn from your identity, values, and interests.
 You do NOT need commitments to speak. Empty commitments array is perfectly valid.
 Be yourself — your unique perspective is what makes this conversation valuable.
-Engage with your peers by name. Build on what they said. Ask them questions. Go deep.
-**No length limits.** The space is local. Write as much as the thought requires.`;
+Engage with your peers by name. Build on what they said. Ask them questions.
+**No length limits.** The space is local. Write as much as the thought requires.
+**Conversation progression:** A good discussion has 2-3 rounds of exchange, then either produces an action or concludes. Do NOT restate ideas your peers have already expressed. If you agree with what's been said, say so in ONE sentence and either add something genuinely new or stay silent. If everyone has converged, the conversation is done — commit to action or stop talking.`;
     } else {
       conversationModeNote = `**Conversation mode: ACTION**
 The host requested concrete action. Follow the action-owner protocol:
@@ -6705,18 +6745,22 @@ The host requested concrete action. Follow the action-owner protocol:
           if (decision.shouldSpeak && commitments.length === 0) {
             const selfName = this.appConfig.agent.name;
             const recentHistory = this.spaceConversationHistory.slice(-20);
-            const peerMessages = recentHistory
-              .filter(m => m.name !== selfName)
+            //NOTE(self): Pairwise comparison uses ALL recent non-host messages (peers + own)
+            //NOTE(self): Previously only compared against peers — missed self-repetition entirely
+            const recentAgentMessages = recentHistory
+              .filter(m => peerAgentNames.has(m.name) || m.name === selfName)
               .slice(-10)
               .map(m => m.content);
-            const allPeerMessages = recentHistory
-              .filter(m => m.name !== selfName)
+            //NOTE(self): Concept pool includes ALL agent messages (peers + own) for novelty check
+            //NOTE(self): An agent repeating its own ideas is just as bad as echoing peers
+            const allAgentMessages = recentHistory
+              .filter(m => peerAgentNames.has(m.name) || m.name === selfName)
               .map(m => m.content);
-            if (peerMessages.length > 0) {
+            if (recentAgentMessages.length > 0) {
               const echoResult = findSemanticEchoEnsemble(
                 msg,
-                peerMessages,
-                allPeerMessages,
+                recentAgentMessages,
+                allAgentMessages,
                 ENSEMBLE_ECHO_THRESHOLD,
                 CONCEPT_NOVELTY_THRESHOLD
               );
@@ -6733,17 +6777,17 @@ The host requested concrete action. Follow the action-owner protocol:
                 });
                 ui.action('[space] Validation rejected (semantic echo)', `${echoResult.strategy} score=${echoResult.score.toFixed(2)}`);
               } else if (
-                //NOTE(self): LLM-as-judge for borderline ensemble scores (CONCERNS.md #1)
+                //NOTE(self): LLM-as-judge for borderline ensemble scores
                 //NOTE(self): Catches the ~3% synonym-level echoes the ensemble misses:
                 //NOTE(self): "prioritize speed" vs "focus on velocity" — zero surface tokens shared
                 //NOTE(self): Only called when score is in the danger zone AND novelty isn't extreme
                 //NOTE(self): Cost: ~100-150 tokens per check, ~100 checks/hour at peak
                 echoResult.score >= ECHO_JUDGE_BORDERLINE_LOW &&
                 echoResult.novelty < ECHO_JUDGE_NOVELTY_HIGH &&
-                peerMessages.length >= 2
+                recentAgentMessages.length >= 2
               ) {
                 try {
-                  const isLLMEcho = await isEchoByLLMJudge(msg, peerMessages);
+                  const isLLMEcho = await isEchoByLLMJudge(msg, recentAgentMessages);
                   if (isLLMEcho) {
                     decision.shouldSpeak = false;
                     if (commitments.length > 0) salvageCommitments = true;
@@ -7107,6 +7151,22 @@ You are the action owner. Return ONLY a JSON commitment. No discussion.
                   }
                 }
 
+                //NOTE(self): Extract issue number for comment_issue commitments
+                //NOTE(self): LLM provides it via issue_number field; fallback: parse "#N" from title/description
+                let issueNumber: number | undefined;
+                if (c.type === 'comment_issue') {
+                  const rawIssueNum = (c as Record<string, unknown>).issue_number;
+                  if (typeof rawIssueNum === 'number') {
+                    issueNumber = rawIssueNum;
+                  } else {
+                    //NOTE(self): Fallback — extract issue number from title/description text
+                    const issueNumMatch = (c.title || c.description || '').match(/#(\d+)/);
+                    if (issueNumMatch) {
+                      issueNumber = parseInt(issueNumMatch[1], 10);
+                    }
+                  }
+                }
+
                 enqueueCommitment({
                   description: c.title || enrichedDescription || c.content || 'Structured commitment',
                   type: c.type as import('@modules/commitment-queue.js').CommitmentType,
@@ -7119,6 +7179,7 @@ You are the action owner. Return ONLY a JSON commitment. No discussion.
                     repo: repoName,
                     owner,
                     repoName,
+                    ...(issueNumber !== undefined ? { issueNumber, body: enrichedDescription } : {}),
                   },
                   source: 'space',
                 });

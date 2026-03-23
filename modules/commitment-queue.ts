@@ -10,8 +10,10 @@ import { logger } from '@modules/logger.js';
 import { resetJsonlIfVersionMismatch, stampJsonlVersion } from '@common/memory-version.js';
 import { COMMITMENT_MAX_ATTEMPTS, COMMITMENT_STALE_THRESHOLD_MS, COMMITMENT_IN_PROGRESS_TIMEOUT_MS } from '@common/config.js';
 
-const QUEUE_FILE = '.memory/pending_commitments.jsonl';
-const QUEUE_LOG_FILE = '.memory/logs/commitment-queue.log';
+//NOTE(self): MEMORY_DIR env var allows tests to redirect to a temp directory
+const MEMORY_DIR = process.env.MEMORY_DIR || '.memory';
+const QUEUE_FILE = path.join(MEMORY_DIR, 'pending_commitments.jsonl');
+const QUEUE_LOG_FILE = path.join(MEMORY_DIR, 'logs', 'commitment-queue.log');
 const MAX_ATTEMPTS = COMMITMENT_MAX_ATTEMPTS;
 const STALE_THRESHOLD_MS = COMMITMENT_STALE_THRESHOLD_MS;
 
@@ -60,12 +62,34 @@ function ensureQueueDir(): void {
   }
 }
 
+//NOTE(self): Rotate audit log at 10MB to prevent unbounded disk growth over weeks
+const AUDIT_LOG_MAX_BYTES = 10 * 1024 * 1024;
+const AUDIT_LOG_MAX_ROTATIONS = 3;
+
+function maybeRotateAuditLog(): void {
+  try {
+    if (!fs.existsSync(QUEUE_LOG_FILE)) return;
+    const stats = fs.statSync(QUEUE_LOG_FILE);
+    if (stats.size < AUDIT_LOG_MAX_BYTES) return;
+    for (let i = AUDIT_LOG_MAX_ROTATIONS; i >= 1; i--) {
+      const from = i === 1 ? QUEUE_LOG_FILE : `${QUEUE_LOG_FILE}.${i - 1}`;
+      const to = `${QUEUE_LOG_FILE}.${i}`;
+      if (fs.existsSync(from)) {
+        fs.renameSync(from, to);
+      }
+    }
+  } catch {
+    //NOTE(self): Non-fatal — next append will create a fresh file
+  }
+}
+
 function auditLog(action: string, details: Record<string, unknown>): void {
   try {
     ensureQueueDir();
     const timestamp = new Date().toISOString();
     const entry = JSON.stringify({ timestamp, action, ...details }) + '\n';
     fs.appendFileSync(QUEUE_LOG_FILE, entry);
+    maybeRotateAuditLog();
   } catch (err) {
     logger.warn('Failed to write commitment audit log', { error: String(err) });
   }
@@ -231,7 +255,9 @@ export function markCommitmentCompleted(id: string, result: Record<string, unkno
 }
 
 //NOTE(self): Mark failed — auto-abandons at MAX_ATTEMPTS
-export function markCommitmentFailed(id: string, error: string): void {
+//NOTE(self): Optional partialResult preserves partial progress (e.g., 2 of 3 issues created)
+//NOTE(self): so that retries can skip already-completed sub-items
+export function markCommitmentFailed(id: string, error: string, partialResult?: Record<string, unknown>): void {
   const queue = loadQueue();
   const commitment = queue.find((c) => c.id === id);
   if (!commitment) return;
@@ -239,6 +265,9 @@ export function markCommitmentFailed(id: string, error: string): void {
   commitment.attemptCount++;
   commitment.lastAttemptAt = new Date().toISOString();
   commitment.error = error;
+  if (partialResult) {
+    commitment.result = partialResult;
+  }
 
   if (commitment.attemptCount >= MAX_ATTEMPTS) {
     commitment.status = 'abandoned';
@@ -333,7 +362,7 @@ export function getCommitmentOutcomePatterns(): { successes: number; failures: n
 
 //NOTE(self): Repo cooldown system — auto-cooldown repos that repeatedly fail
 //NOTE(self): If a repo shows >5 failures in 7 days, cooldown for 48h
-const REPO_COOLDOWN_FILE = '.memory/repo_cooldown.json';
+const REPO_COOLDOWN_FILE = path.join(MEMORY_DIR, 'repo_cooldown.json');
 const REPO_COOLDOWN_THRESHOLD = 5; // failures in window to trigger cooldown
 const REPO_COOLDOWN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const REPO_COOLDOWN_DURATION_MS = 48 * 60 * 60 * 1000; // 48 hours
@@ -420,6 +449,35 @@ export function checkAndApplyRepoCooldown(): void {
 
   if (updated) {
     saveRepoCooldowns(cleaned);
+  }
+}
+
+//NOTE(self): Periodic in-session cleanup of old completed/abandoned commitments
+//NOTE(self): Prevents unbounded growth of queue file and memory during long-running sessions
+//NOTE(self): Keeps entries from the last 48h for debugging, prunes anything older
+const CLEANUP_RETENTION_MS = 48 * 60 * 60 * 1000; // 48 hours
+let lastCleanupAt = 0;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // Run at most once per hour
+
+export function periodicQueueCleanup(): void {
+  const now = Date.now();
+  if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
+  lastCleanupAt = now;
+
+  const queue = loadQueue();
+  const cutoff = now - CLEANUP_RETENTION_MS;
+  const before = queue.length;
+
+  queueCache = queue.filter((c) => {
+    if (c.status === 'completed' || c.status === 'abandoned') {
+      return new Date(c.createdAt).getTime() > cutoff;
+    }
+    return true;
+  });
+
+  if (queueCache.length < before) {
+    saveQueue();
+    logger.info('Periodic queue cleanup', { removed: before - queueCache.length, remaining: queueCache.length });
   }
 }
 

@@ -4,11 +4,35 @@
 //NOTE(self): The prompts come from SELF.md - the richer my self-knowledge, the richer my expression.
 //NOTE(self): Schedule is in-memory but warmed from feed on startup — last post time derived from API.
 
+import * as fs from 'fs';
 import { extractFromSelf, randomFrom, type SelfExtract } from '@local-tools/self-extract.js';
 import { logger } from '@modules/logger.js';
 import { getSkillSection, getSkillSubsection } from '@modules/skills.js';
 import { getRandomDesignSource, getRandomBrowseUrl, type DesignSource } from '@common/design-catalog.js';
 import type { AtprotoFeedItem } from '@adapters/atproto/types.js';
+
+//NOTE(self): Persist lastExpression to disk as fallback for cold starts when feed is unreachable
+const EXPRESSION_SCHEDULE_PATH = '.memory/expression_schedule.json';
+
+function persistLastExpression(timestamp: string): void {
+  try {
+    const dir = '.memory';
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(EXPRESSION_SCHEDULE_PATH, JSON.stringify({ lastExpression: timestamp }));
+  } catch {
+    //NOTE(self): Non-fatal — feed warmup is primary, this is fallback
+  }
+}
+
+function loadPersistedLastExpression(): string | null {
+  try {
+    if (!fs.existsSync(EXPRESSION_SCHEDULE_PATH)) return null;
+    const data = JSON.parse(fs.readFileSync(EXPRESSION_SCHEDULE_PATH, 'utf-8'));
+    return data.lastExpression || null;
+  } catch {
+    return null;
+  }
+}
 
 //NOTE(self): Load prompt template from skill by category, with variable interpolation
 function getPromptTemplate(category: string, vars: Record<string, string>): string {
@@ -299,12 +323,20 @@ export function warmupExpressionScheduleFromFeed(feedItems: AtprotoFeedItem[], a
   if (ownTopLevel.length > 0) {
     const lastPost = ownTopLevel[0];
     expressionSchedule.lastExpression = lastPost.post.record.createdAt;
+    persistLastExpression(lastPost.post.record.createdAt);
     logger.info('Expression schedule warmed from feed', {
       lastExpression: lastPost.post.record.createdAt,
       text: lastPost.post.record.text?.slice(0, 60),
     });
   } else {
-    logger.info('No top-level posts found in feed — expression schedule starts fresh');
+    //NOTE(self): Feed unavailable — fall back to persisted timestamp to avoid double-posting
+    const persisted = loadPersistedLastExpression();
+    if (persisted) {
+      expressionSchedule.lastExpression = persisted;
+      logger.info('Expression schedule warmed from disk fallback', { lastExpression: persisted });
+    } else {
+      logger.info('No top-level posts found in feed — expression schedule starts fresh');
+    }
   }
 }
 
@@ -434,6 +466,7 @@ export function recordExpression(text: string, postUri: string): void {
   schedule.promptSource = null;
 
   saveExpressionSchedule(schedule);
+  persistLastExpression(now);
 }
 
 //NOTE(self): Update engagement data for an expression

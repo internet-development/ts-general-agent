@@ -13,7 +13,7 @@ Common provides foundational utilities that any layer can import without creatin
 1. **No external API calls** — common never imports adapters or calls external services
 2. **No business logic** — decisions about what to do belong in modules or local-tools
 3. **Stateless** — no module-level mutable state
-4. **Barrel export** — `index.ts` re-exports everything; consumers import from `@common/index.js`
+4. **Barrel export** — `index.ts` re-exports everything. Consumers may import from `@common/index.js` or directly from `@common/{name}.js`
 
 ## Key Utilities
 
@@ -23,6 +23,8 @@ Common provides foundational utilities that any layer can import without creatin
 - **`image-processor.ts`** — Image resizing for Bluesky upload limits.
 - **`exec.ts`** — Shell command execution wrapper.
 - **`design-catalog.ts`** — Design inspiration sources and browse URLs for expression.
+- **`schemas.ts`** — Zod validation schemas for space decisions, commitments, and structured output.
+- **`intent-cache.ts`** — Host message intent classification (structural pre-filter + LLM fallback for ambiguous cases).
 
 ## Adding to Common
 

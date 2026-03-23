@@ -10,6 +10,8 @@ import { ui } from '@modules/ui.js';
 
 //NOTE(self): Cache classifications per host message content to avoid redundant LLM calls.
 //NOTE(self): Each message is classified exactly once. Cache cleared when conversation resets.
+//NOTE(self): Capped at 200 entries to prevent unbounded growth in long sessions.
+const INTENT_CACHE_MAX = 200;
 const intentCache = new Map<string, HostIntent>();
 
 export function clearIntentCache(): void {
@@ -32,6 +34,11 @@ export async function classifyHostMessage(content: string): Promise<HostIntent> 
   // Layer 1: structural pre-filter
   const structural = classifyHostIntentStructural(content);
   if (structural.confidence === 'high') {
+    //NOTE(self): Evict oldest if at capacity
+    if (intentCache.size >= INTENT_CACHE_MAX) {
+      const firstKey = intentCache.keys().next().value;
+      if (firstKey !== undefined) intentCache.delete(firstKey);
+    }
     intentCache.set(content, structural.intent);
     logger.info('[intent] Structural classification', {
       intent: structural.intent,
@@ -76,6 +83,10 @@ Examples:
     else if (text.includes('FOLLOW_UP')) intent = 'follow_up';
     else if (text.includes('DISCUSSION')) intent = 'discussion';
 
+    if (intentCache.size >= INTENT_CACHE_MAX) {
+      const firstKey = intentCache.keys().next().value;
+      if (firstKey !== undefined) intentCache.delete(firstKey);
+    }
     intentCache.set(content, intent);
     logger.info('[intent] LLM classification (ambiguous case)', {
       intent,
@@ -91,6 +102,10 @@ Examples:
       message: content.slice(0, 100),
     });
     const fallback: HostIntent = 'discussion';
+    if (intentCache.size >= INTENT_CACHE_MAX) {
+      const firstKey = intentCache.keys().next().value;
+      if (firstKey !== undefined) intentCache.delete(firstKey);
+    }
     intentCache.set(content, fallback);
     return fallback;
   }

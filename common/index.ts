@@ -5,3 +5,4 @@ export * from '@common/image-processor.js';
 export * from '@common/design-catalog.js';
 export * from '@common/memory-version.js';
 export * from '@common/schemas.js';
+export * from '@common/intent-cache.js';

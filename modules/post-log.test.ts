@@ -30,7 +30,10 @@ import {
   type PostLogEntry,
 } from './post-log.js';
 
-const POST_LOG_PATH = '.memory/post_log.jsonl';
+import * as path from 'path';
+
+const MEMORY_DIR = process.env.MEMORY_DIR || '.memory';
+const POST_LOG_PATH = path.join(MEMORY_DIR, 'post_log.jsonl');
 
 function cleanupFile() {
   try { fs.unlinkSync(POST_LOG_PATH); } catch {}
@@ -66,8 +69,8 @@ function makeEntry(overrides: Partial<PostLogEntry> = {}): PostLogEntry {
 
 describe('post-log', () => {
   beforeEach(() => {
-    if (!fs.existsSync('.memory')) {
-      fs.mkdirSync('.memory', { recursive: true });
+    if (!fs.existsSync(MEMORY_DIR)) {
+      fs.mkdirSync(MEMORY_DIR, { recursive: true });
     }
     vi.clearAllMocks();
   });

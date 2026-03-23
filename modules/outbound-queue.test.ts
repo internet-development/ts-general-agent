@@ -38,15 +38,18 @@ vi.mock('@common/memory-version.js', () => ({
   stampJsonlVersion: vi.fn(),
 }));
 
-// ── Ensure .memory directory exists before the module-level singleton is constructed ──
-const DEDUP_STATE_FILE = '.memory/outbound_dedup.json';
-const AUDIT_LOG_FILE = '.memory/logs/outbound-queue.log';
+// ── Ensure memory directory exists before the module-level singleton is constructed ──
+import * as path from 'path';
+const MEMORY_DIR = process.env.MEMORY_DIR || '.memory';
+const DEDUP_STATE_FILE = path.join(MEMORY_DIR, 'outbound_dedup.json');
+const AUDIT_LOG_FILE = path.join(MEMORY_DIR, 'logs', 'outbound-queue.log');
 
-if (!fs.existsSync('.memory')) {
-  fs.mkdirSync('.memory', { recursive: true });
+if (!fs.existsSync(MEMORY_DIR)) {
+  fs.mkdirSync(MEMORY_DIR, { recursive: true });
 }
-if (!fs.existsSync('.memory/logs')) {
-  fs.mkdirSync('.memory/logs', { recursive: true });
+const logsDir = path.join(MEMORY_DIR, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
 }
 
 // ── Import module under test AFTER mocks and directory setup ─────────────────

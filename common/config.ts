@@ -124,15 +124,18 @@ export const SEMANTIC_ECHO_THRESHOLD = 0.6;
 export const ENSEMBLE_ECHO_THRESHOLD = 0.52;
 
 //NOTE(self): Concept novelty threshold — fraction of candidate's stemmed words that are new to the conversation
-//NOTE(self): Below 0.15 = less than 15% new content → the message is restating covered ground
-//NOTE(self): For a 10-word message: at least 2 genuinely new word-stems required to pass
-export const CONCEPT_NOVELTY_THRESHOLD = 0.15;
+//NOTE(self): Below 0.25 = less than 25% new content → the message is restating covered ground
+//NOTE(self): For a 10-word message: at least 3 genuinely new word-stems required to pass
+//NOTE(self): For a 50-word message: at least 13 genuinely new word-stems required
+//NOTE(self): Previous value (0.15) was too low for long messages — agents could restate core concepts
+//NOTE(self): and still pass with filler words (agent names, transitions, prepositions)
+export const CONCEPT_NOVELTY_THRESHOLD = 0.25;
 
 //NOTE(self): LLM-as-judge echo detection — borderline range for ensemble scores
 //NOTE(self): Below ECHO_JUDGE_LOW: clearly not an echo, skip LLM check
 //NOTE(self): Above ENSEMBLE_ECHO_THRESHOLD (0.52): clearly an echo, already caught by ensemble
 //NOTE(self): Between LOW and THRESHOLD: borderline — use LLM to classify synonym-level echoes
-//NOTE(self): This range catches the ~3% of echoes the ensemble misses (CONCERNS.md #1)
+//NOTE(self): This range catches the ~3% of echoes the ensemble misses
 export const ECHO_JUDGE_BORDERLINE_LOW = 0.35;
 //NOTE(self): Above this novelty but below max, the LLM judge adds value
 //NOTE(self): Very low novelty (<0.15) is already caught by concept novelty check
@@ -157,12 +160,12 @@ export const CONSENSUS_PROPAGATION_EXTENSION_MS = 5_000;
 
 // ─── Discussion Mode ────────────────────────────────────────────────────────
 
-//NOTE(self): Discussion mode thresholds — much more permissive to enable real back-and-forth
-//NOTE(self): In discussion, agents should freely exchange perspectives, build on each other, go deep
-//NOTE(self): The space is local — prioritize rich conversation over noise reduction
-export const DISCUSSION_SATURATION_BONUS = 10;           // Extra agent messages allowed before saturation
-export const DISCUSSION_OBSERVER_THRESHOLD = 8;           // Observer silence threshold (vs 3 in action)
-export const DISCUSSION_ROLE_BUDGET_MULTIPLIER = 4;       // Quadruple role budgets in discussion mode
+//NOTE(self): Discussion mode thresholds — more permissive than action, but not unlimited
+//NOTE(self): A healthy 3-agent discussion is ~8-10 messages total (2-3 rounds of exchange)
+//NOTE(self): After that, agents should commit to action or stay silent
+export const DISCUSSION_SATURATION_BONUS = 4;            // Extra agent messages allowed before saturation
+export const DISCUSSION_OBSERVER_THRESHOLD = 5;           // Observer silence threshold (vs 3 in action)
+export const DISCUSSION_ROLE_BUDGET_MULTIPLIER = 2;       // Double role budgets in discussion mode
 
 // ─── Space Message Validation (mode-dependent) ─────────────────────────────
 
@@ -182,8 +185,9 @@ export const COMMITMENT_IN_PROGRESS_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 //NOTE(self): Hard message budgets per role per conversation turn (between host messages)
 //NOTE(self): Enforced at validation layer — LLM guidance alone isn't sufficient (~2% non-compliance)
-//NOTE(self): Base budgets are moderate; discussion mode multiplies by DISCUSSION_ROLE_BUDGET_MULTIPLIER (4x)
-//NOTE(self): actor=4 (commit + follow-up + result + discussion), reviewer=3 (critique + follow-up + discussion), observer=2 (perspective + follow-up)
-export const ROLE_MESSAGE_BUDGET_ACTOR = 4;
-export const ROLE_MESSAGE_BUDGET_REVIEWER = 3;
-export const ROLE_MESSAGE_BUDGET_OBSERVER = 2;
+//NOTE(self): Base budgets are moderate; discussion mode multiplies by DISCUSSION_ROLE_BUDGET_MULTIPLIER (2x)
+//NOTE(self): actor=3 (perspective + response + commit), reviewer=2 (critique + response), observer=1 (perspective)
+//NOTE(self): In discussion: actor=6, reviewer=4, observer=2 — enough for 2 rounds of exchange
+export const ROLE_MESSAGE_BUDGET_ACTOR = 3;
+export const ROLE_MESSAGE_BUDGET_REVIEWER = 2;
+export const ROLE_MESSAGE_BUDGET_OBSERVER = 1;
